@@ -38,6 +38,20 @@ def test_manifest_invariants():
     assert sum(len(by_role(r)) for r in ("PRIOR", "GROUND_TRUTH", "ML_CORPUS")) == 17
 
 
+def test_priors_cover_all_districts_and_sample_correctly():
+    import random
+    from data.districts import canonical_code
+    from data.priors import crime_types, district_weights, sample_crime_type, sample_district
+    assert len(crime_types()) == 20
+    assert len(district_weights()) == 31
+    for code in district_weights():                    # every prior code is real
+        assert canonical_code(code) == code
+    rng = random.Random(1)
+    assert all(0.0 <= c.conviction_rate <= c.chargesheet_rate <= 1.0 for c in crime_types())
+    assert sample_crime_type(rng).crime_type          # non-empty draw
+    assert canonical_code(sample_district(rng))        # draws a real district
+
+
 def test_connection_modules_import_without_db():
     # get_engine is lazy, so importing must not require a running Postgres.
     import data.db  # noqa: F401

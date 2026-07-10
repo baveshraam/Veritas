@@ -1,0 +1,21 @@
+crime_type,weight,ipc_sections,chargesheet_rate,conviction_rate
+Theft,20.0,379|380,0.62,0.32
+Hurt,15.0,323|324|326,0.78,0.45
+House Burglary,9.0,454|457|380,0.55,0.30
+Cheating,8.0,420|406,0.66,0.28
+Criminal Breach of Trust,4.0,406|409,0.60,0.30
+Assault on Woman,6.0,354|354A,0.82,0.40
+Criminal Intimidation,5.0,506|504,0.70,0.35
+Motor Vehicle Theft,5.0,379,0.40,0.22
+Robbery,4.0,392|394,0.68,0.38
+Riot,3.0,143|147|148,0.75,0.42
+Cyber Crime,4.0,66|66C|66D|420,0.35,0.18
+Rash Driving,3.5,279|304A|337,0.85,0.55
+Extortion,2.0,384|385,0.64,0.34
+Kidnapping,2.0,363|365,0.72,0.40
+Attempt to Murder,1.5,307,0.80,0.48
+Murder,1.0,302,0.90,0.62
+Rape,1.2,376,0.86,0.44
+Dowry Death,0.8,304B|498A,0.88,0.46
+Dacoity,0.5,395|397,0.70,0.40
+Narcotics,3.0,20|21|22,0.80,0.60
