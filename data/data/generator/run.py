@@ -11,6 +11,7 @@ import random
 from ..db import init_db
 from ..graph import init_graph
 from .build import generate
+from .financial import make_financial
 from .graph_sync import sync_graph
 from .load import load_dataset
 
@@ -25,13 +26,16 @@ def main() -> None:
 
     if not args.no_init:
         init_db()
-    ds = generate(random.Random(args.seed), args.firs)
+    rng = random.Random(args.seed)
+    ds = generate(rng, args.firs)
+    fin = make_financial(rng, ds)
     load_dataset(ds)
     if not args.no_graph:
         init_graph()
-        sync_graph(ds)
+        sync_graph(ds, fin)
     print(f"loaded: officers={len(ds.officers)} persons={len(ds.persons)} "
-          f"firs={len(ds.firs)} records={len(ds.criminal_records)}")
+          f"firs={len(ds.firs)} records={len(ds.criminal_records)} "
+          f"accounts={len(fin.accounts)} txns={len(fin.transactions)}")
 
 
 if __name__ == "__main__":

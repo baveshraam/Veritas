@@ -11,9 +11,11 @@ this module's node/edge shapes.
 """
 from collections import defaultdict
 from itertools import combinations
+from typing import Optional
 
 from ..graph import get_driver
 from .build import Dataset
+from .financial import FinancialData
 
 
 def person_nodes(ds: Dataset) -> list[dict]:
@@ -78,6 +80,41 @@ def co_accused_edges(ds: Dataset) -> list[dict]:
             for (a, b), firs in shared.items()]
 
 
+def account_nodes(fin: FinancialData) -> list[dict]:
+    return [{"account_id": a.account_id, "bank": a.bank,
+             "account_type": a.account_type, "opened_date": a.opened_date}
+            for a in fin.accounts]
+
+
+def transaction_nodes(fin: FinancialData) -> list[dict]:
+    return [{"txn_id": t.txn_id, "amount": t.amount, "date": t.date,
+             "channel": t.channel, "flagged_suspicious": False,
+             "injected_pattern": t.injected_pattern}
+            for t in fin.transactions]
+
+
+def owns_account_edges(fin: FinancialData) -> list[dict]:
+    return [{"person_id": a.owner_person_id, "account_id": a.account_id} for a in fin.accounts]
+
+
+def transferred_to_edges(fin: FinancialData) -> list[dict]:
+    return [{"src": t.src_account_id, "dst": t.dst_account_id,
+             "amount": t.amount, "date": t.date} for t in fin.transactions]
+
+
+def involved_in_edges(fin: FinancialData) -> list[dict]:
+    rows = []
+    for t in fin.transactions:
+        rows.append({"account_id": t.src_account_id, "txn_id": t.txn_id})
+        rows.append({"account_id": t.dst_account_id, "txn_id": t.txn_id})
+    return rows
+
+
+def linked_to_edges(fin: FinancialData) -> list[dict]:
+    return [{"txn_id": t.txn_id, "fir_id": t.linked_fir_id}
+            for t in fin.transactions if t.linked_fir_id]
+
+
 _CYPHER = {
     "person": "UNWIND $rows AS r MERGE (p:Person {person_id: r.person_id}) SET p += r",
     "crimeevent": "UNWIND $rows AS r MERGE (c:CrimeEvent {fir_id: r.fir_id}) SET c += r",
@@ -99,21 +136,42 @@ _CYPHER = {
     "co_accused": (
         "UNWIND $rows AS r MATCH (a:Person {person_id: r.a}), (b:Person {person_id: r.b}) "
         "MERGE (a)-[e:CO_ACCUSED_WITH]->(b) SET e.strength = r.strength, e.fir_ids = r.fir_ids"),
+    "account": "UNWIND $rows AS r MERGE (a:Account {account_id: r.account_id}) SET a += r",
+    "transaction": "UNWIND $rows AS r MERGE (t:Transaction {txn_id: r.txn_id}) SET t += r",
+    "owns_account": (
+        "UNWIND $rows AS r MATCH (p:Person {person_id: r.person_id}), "
+        "(a:Account {account_id: r.account_id}) MERGE (p)-[:OWNS_ACCOUNT]->(a)"),
+    "transferred_to": (
+        "UNWIND $rows AS r MATCH (s:Account {account_id: r.src}), (d:Account {account_id: r.dst}) "
+        "CREATE (s)-[:TRANSFERRED_TO {amount: r.amount, date: r.date}]->(d)"),
+    "involved_in": (
+        "UNWIND $rows AS r MATCH (a:Account {account_id: r.account_id}), "
+        "(t:Transaction {txn_id: r.txn_id}) MERGE (a)-[:INVOLVED_IN]->(t)"),
+    "linked_to": (
+        "UNWIND $rows AS r MATCH (t:Transaction {txn_id: r.txn_id}), "
+        "(c:CrimeEvent {fir_id: r.fir_id}) MERGE (t)-[:LINKED_TO]->(c)"),
 }
 
 
-def sync_graph(ds: Dataset, wipe: bool = True) -> None:
+def sync_graph(ds: Dataset, fin: Optional[FinancialData] = None, wipe: bool = True) -> None:
     builders = [
-        ("person", person_nodes), ("crimeevent", crimeevent_nodes),
-        ("location", location_nodes), ("gang", gang_nodes),
-        ("accused_in", accused_in_edges), ("victim_in", victim_in_edges),
-        ("member_of", member_of_edges), ("occurred_at", occurred_at_edges),
-        ("co_accused", co_accused_edges),
+        ("person", lambda: person_nodes(ds)), ("crimeevent", lambda: crimeevent_nodes(ds)),
+        ("location", lambda: location_nodes(ds)), ("gang", lambda: gang_nodes(ds)),
+        ("accused_in", lambda: accused_in_edges(ds)), ("victim_in", lambda: victim_in_edges(ds)),
+        ("member_of", lambda: member_of_edges(ds)), ("occurred_at", lambda: occurred_at_edges(ds)),
+        ("co_accused", lambda: co_accused_edges(ds)),
     ]
+    if fin is not None:
+        builders += [
+            ("account", lambda: account_nodes(fin)), ("transaction", lambda: transaction_nodes(fin)),
+            ("owns_account", lambda: owns_account_edges(fin)),
+            ("transferred_to", lambda: transferred_to_edges(fin)),
+            ("involved_in", lambda: involved_in_edges(fin)), ("linked_to", lambda: linked_to_edges(fin)),
+        ]
     with get_driver().session() as s:
         if wipe:
             s.run("MATCH (n) DETACH DELETE n")
         for key, builder in builders:
-            rows = builder(ds)
+            rows = builder()
             if rows:
                 s.run(_CYPHER[key], rows=rows)
