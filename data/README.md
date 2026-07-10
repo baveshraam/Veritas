@@ -179,8 +179,12 @@ data/
   embeddings/          # vector store indexing job
   nlp/                 # AI4Bharat/Vakyansh wrappers (functions above)
   seed/                # real NCRB/Census/NSSO/KA-GIS reference datasets
-  connections.py       # data.db.get_session(), data.graph.get_driver(), vector client — the only way in
-  audit.py, sessions.py, transactions.py   # the write helpers above
+  data/                # the importable `data` package — the only way in:
+    config.py          #   env-driven DSNs (get_settings)
+    db.py              #   data.db.get_session(), init_db()
+    graph.py           #   data.graph.get_driver(), init_graph()
+    vectors.py         #   vector store client (pgvector)
+    audit.py, sessions.py, transactions.py   # the write helpers above
 ```
 
 ## Provides / Consumes

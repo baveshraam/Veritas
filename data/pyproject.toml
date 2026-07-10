@@ -1,0 +1,31 @@
+[project]
+name = "veritas-data"
+version = "0.1.0"
+description = "Veritas data foundation — schemas, connections, synthetic generator, NLP wrappers"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "psycopg[binary]>=3.2",
+    "geoalchemy2>=0.15",
+    "pgvector>=0.3",
+    "neo4j>=5.20",
+    "pydantic>=2.7",
+]
+
+[project.optional-dependencies]
+# Generator + ETL: pulled in only where the pipeline runs, not by API consumers.
+generator = [
+    "faker>=25.0",
+    "pandas>=2.2",
+    "geopandas>=1.0",
+    "shapely>=2.0",
+    "numpy>=1.26",
+]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["data*"]
