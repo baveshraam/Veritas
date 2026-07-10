@@ -15,7 +15,7 @@ def set_canonical_entity(person_id: str, canonical_id: str, confidence: float) -
     # SAME_AS edge (write_same_as_edge), not a person column.
     with get_session() as s:
         s.execute(text(
-            "UPDATE person SET canonical_entity_id = :cid::uuid WHERE person_id = :pid"
+            "UPDATE person SET canonical_entity_id = CAST(:cid AS uuid) WHERE person_id = :pid"
         ), {"cid": canonical_id, "pid": person_id})
     with get_driver().session() as g:
         g.run("MATCH (p:Person {person_id: $pid}) SET p.canonical_entity_id = $cid",

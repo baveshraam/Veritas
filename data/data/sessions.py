@@ -50,7 +50,7 @@ def upsert_session_focus(session_id: str, officer_id: str, focus: SessionFocus) 
         s.execute(text(
             "INSERT INTO session (session_id, officer_id, active_person, active_fir, "
             "  active_location, active_date_from, active_date_to, last_turn_at) "
-            "VALUES (:sid, :oid, :active_person::uuid, :active_fir::uuid, "
+            "VALUES (:sid, :oid, CAST(:active_person AS uuid), CAST(:active_fir AS uuid), "
             "  :active_location, :active_date_from, :active_date_to, NOW()) "
             "ON CONFLICT (session_id) DO UPDATE SET "
             "  active_person = EXCLUDED.active_person, active_fir = EXCLUDED.active_fir, "
@@ -68,8 +68,8 @@ def write_conversation_turn(session_id: str, turn_index: int, query: str, langua
         s.execute(text(
             "INSERT INTO conversation_turn (session_id, turn_index, query, language, "
             "  final_answer, citations, evidence_items, visualization, agent_trace) "
-            "VALUES (:sid, :idx, :q, :lang, :ans, :cit::jsonb, :ev::jsonb, "
-            "  :viz::jsonb, :trace::jsonb)"
+            "VALUES (:sid, :idx, :q, :lang, :ans, CAST(:cit AS jsonb), CAST(:ev AS jsonb), "
+            "  CAST(:viz AS jsonb), CAST(:trace AS jsonb))"
         ), {
             "sid": session_id, "idx": turn_index, "q": query, "lang": language,
             "ans": final_answer, "cit": json.dumps(citations),

@@ -22,6 +22,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-init", action="store_true", help="skip schema init (assume tables exist)")
     ap.add_argument("--no-graph", action="store_true", help="skip Neo4j sync (Postgres only)")
+    ap.add_argument("--no-embed", action="store_true", help="skip vector indexing")
     args = ap.parse_args()
 
     if not args.no_init:
@@ -33,6 +34,9 @@ def main() -> None:
     if not args.no_graph:
         init_graph()
         sync_graph(ds, fin)
+    if not args.no_embed:
+        from ..embeddings.index_job import run_all
+        print(f"indexed: {run_all()}")
     print(f"loaded: officers={len(ds.officers)} persons={len(ds.persons)} "
           f"firs={len(ds.firs)} records={len(ds.criminal_records)} "
           f"accounts={len(fin.accounts)} txns={len(fin.transactions)}")

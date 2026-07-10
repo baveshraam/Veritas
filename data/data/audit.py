@@ -16,7 +16,7 @@ def write_audit(officer_id: str, session_id: str, endpoint: str,
         s.execute(text(
             "INSERT INTO audit_log (officer_id, session_id, endpoint, "
             "  request_hash, response_hash, agent_trace) "
-            "VALUES (:oid, :sid, :ep, :reqh, :resph, :trace::jsonb)"
+            "VALUES (:oid, :sid, :ep, :reqh, :resph, CAST(:trace AS jsonb))"
         ), {
             "oid": officer_id, "sid": session_id, "ep": endpoint,
             "reqh": request_hash, "resph": response_hash,

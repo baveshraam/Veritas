@@ -15,12 +15,13 @@ dependencies = [
 [project.optional-dependencies]
 # Generator + ETL: pulled in only where the pipeline runs, not by API consumers.
 generator = [
-    "faker>=25.0",
     "pandas>=2.2",
     "geopandas>=1.0",
     "shapely>=2.0",
     "numpy>=1.26",
 ]
+# Self-hosted embeddings (ONNX, no torch) — FIR content never leaves the network.
+embeddings = ["fastembed>=0.3"]
 dev = ["pytest>=8.0"]
 
 [build-system]
