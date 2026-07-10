@@ -1,0 +1,26 @@
+# Node / Next.js (apps/web)
+node_modules/
+.next/
+out/
+.vercel/
+*.tsbuildinfo
+
+# Python (apps/api, packages/*, data/)
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code tooling (personal, not project-shared)
+.claude/
