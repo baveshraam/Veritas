@@ -43,11 +43,60 @@ def resolve_entities(candidate_person_ids: list[str]) -> list[MatchResult]: ...
     # agreement (name similarity post-IndicXlit, DOB, address proximity, phone) into
     # link / possible-link / non-link with explicit error-rate thresholds. Writes to the
     # `SAME_AS {confidence}` graph edge and `canonical_entity_id` column (schema in `data/`).
+    # CALLED ONLY from data/generator/ as a batch dedup pass over freshly generated person
+    # rows — NOT called live by packages/rag_agent. At query time "arrested under another
+    # name" is answered by reading the already-written SAME_AS edges, a normal graph read.
 
 def run_fairness_audit(model_name: str) -> AequitasReport: ...
     # Aequitas (Saleiro et al., 2018, Univ. of Chicago DSaPP) — disparate-impact and
     # FPR/FNR-parity across demographic/geographic subgroups. Run on score_risk and
     # predict_recidivism before every demo; report is a build artifact, not an afterthought.
+    # CALLED ONLY from a standalone script (e.g. `fairness/run_audit.py`), by hand or CI,
+    # before each demo — not part of any runtime request path, not called by rag_agent or apps/api.
+```
+
+## Result types (canonical — every field here is consumed by name across folder boundaries)
+
+None of these existed as concrete shapes before this audit; every function above returned an undefined type. Defined against what the actual consumer needs (chart libraries in `apps/web`, `EvidenceItem.content` in `packages/rag_agent`):
+
+```python
+class HotspotPolygon(BaseModel):
+    polygon: list[tuple[float, float]]   # GeoJSON-style [lng, lat] ring, for Deck.gl
+    intensity: float                      # KDE density at centroid, 0-1 normalized
+    crime_count: int
+
+class ForecastResult(BaseModel):
+    level: Literal["ps", "taluk", "district", "state"]
+    series: list[tuple[date, float, float, float]]   # (date, point_estimate, lower, upper) — ECharts confidence-band input
+    reconciled: bool   # true once MinT has run; false for a raw per-level Prophet output
+
+class RiskResult(BaseModel):
+    person_id: str; score: float                  # 0-1
+    top_factors: list[tuple[str, float]]            # SHAP feature -> contribution, for the "model suggests" explanation text
+
+class RecidivismResult(BaseModel):
+    person_id: str; probability_180d: float; calibrated: bool
+
+class AnomalyAlert(BaseModel):
+    alert_id: str; district_code: str; metric: str; observed: float; expected: float
+    severity: Literal["low", "medium", "high"]; detected_at: datetime
+
+class TransactionFlag(BaseModel):
+    txn_id: str; detector: Literal["rule_based_structuring", "gnn_subgraph"]
+    confidence: float; explanation: str   # attention-weight highlight or rule description
+    related_account_ids: list[str]         # feeds the Sankey view's node/link set
+
+class CausalEstimate(BaseModel):
+    factor: str; outcome: str; district_code: str
+    effect_size: float; confidence_interval: tuple[float, float]; confounders_adjusted: list[str]
+
+class MatchResult(BaseModel):
+    person_id_a: str; person_id_b: str
+    decision: Literal["link", "possible_link", "non_link"]; confidence: float
+
+class AequitasReport(BaseModel):
+    model_name: str; metrics_by_subgroup: dict[str, dict[str, float]]   # e.g. {"district=X": {"fpr": .., "fnr": ..}}
+    disparate_impact_flagged: bool; generated_at: datetime
 ```
 
 ## Responsible AI (non-negotiable, applies to every model above)
@@ -69,9 +118,12 @@ packages/ml_models/
 ```
 
 ## Provides / Consumes
-- **Provides to `packages/rag_agent`**: the functions listed above, nothing else.
-- **Consumes from `data/`**: feature data via `data/`'s connection helpers only — never opens its own DB connection, never redefines a schema.
-- **Writes to `data/`**: entity-resolution matches and AML flags go through `data/`'s write helpers.
+- **Provides to `packages/rag_agent`'s Prediction Agent**: `detect_hotspots`, `forecast_crime`, `score_risk`, `predict_recidivism`, `estimate_causal_effect`, `flag_transactions` — called live, per query.
+- **Provides to `apps/api`**: `check_anomalies`, called directly (not via `rag_agent`) to feed the `/alerts` WebSocket.
+- **Provides to `data/generator/`**: `resolve_entities`, called once per data-generation run (batch), not part of any live query path.
+- **Provides to whoever runs the pre-demo checklist**: `run_fairness_audit`, invoked out-of-band via a standalone script, not by any other folder's runtime code.
+- **Consumes from `data/`**: feature data via `data/`'s connection helpers only (never opens its own DB connection, never redefines a schema), plus `data.nlp.transliterate()` for name-variant generation inside `resolve_entities`.
+- **Writes to `data/`**: via the named write helpers in `data/README.md` (`set_canonical_entity`, `write_same_as_edge`, `flag_transaction`) — never raw SQL/Cypher from this package.
 
 ## Non-goals
 - No orchestration/routing logic, no NL understanding, no direct API/DB access outside `data/`'s helpers — this package is a pure model layer.

@@ -9,6 +9,7 @@
 - **v2**: Cut infra cosplay, kept reasoning/UX substance. Added financial-crime graph, session entity memory, Investigation Copilot, Command Console UI, requirement traceability matrix, responsible-AI section. Grounded in CrimeKGQA, COPLINK/CrimeNet Explorer, Palantir Gotham, LangGraph citation-grounding pattern.
 - **v3 (this pass)**: Reframed design philosophy to be effort-agnostic (best solution, not least effort). Upgraded graph reasoning with HippoRAG + Think-on-Graph. Upgraded evidence verification with a CRAG-style evaluator. Added MinT hierarchical forecast reconciliation. Added GNN-based AML detection alongside the rule-based structuring detector. Added Fellegi-Sunter probabilistic entity resolution (real fix for Indian-name/alias duplication). Added Aequitas as the named bias-audit methodology. Replaced the "dense command-console" UI direction with a futuristic glassmorphic/spatial design language per explicit direction.
 - **v3.1**: Scaffolded the repo into 5 parallel-work folders (`apps/web`, `apps/api`, `packages/rag_agent`, `packages/ml_models`, `data/`), each with its own README mapping to the layers below — see Repository Structure. Dropped the Open Questions/backlog section: this file tracks current architecture only, not todos.
+- **v3.2**: Cross-README integration audit. Closed real gaps found by treating the 5 READMEs as one system: added `officer`/`session`/`conversation_turn` tables (audit_log was hash-only and had no plaintext conversation store — broke PDF export and multi-turn resumption); added the missing `visualization` + full `evidence_items` fields to the chat response (the "context view swaps by query type" and citation-drawer features had no wire contract); defined all 9 previously-untyped `ml_models` return types; fixed `resolve_entities` (was documented as a live per-query call, corrected to the batch job it actually is, run from `data/`'s generator); wired the previously-orphaned `estimate_causal_effect` and Investigation Copilot (`generate_copilot_brief`) to actual callers; extracted `packages/policy` as the one deliberate shared module, since depth-capping/masking can't be enforced post-hoc alone. Full findings in the audit that produced this pass.
 
 ---
 
@@ -75,6 +76,11 @@ No Kafka/Flink/Iceberg/K8s/Keycloak/OPA/Kong/MLflow/Airflow in the build — the
 ## Layer 1: Data Foundation
 
 ```sql
+CREATE TABLE officer (
+    officer_id UUID PRIMARY KEY, badge_no VARCHAR(20) UNIQUE, name VARCHAR(200),
+    ps_code VARCHAR(10), district_code VARCHAR(5), role VARCHAR(20)
+);
+
 CREATE TABLE fir (
     fir_id UUID PRIMARY KEY, ps_code VARCHAR(10), district_code VARCHAR(5),
     fir_number VARCHAR(20), date_filed TIMESTAMPTZ, ipc_sections TEXT[],
@@ -109,6 +115,8 @@ CREATE TABLE district_socioeconomic (
 **Grounding**: crime records are synthetic (no real FIR data available to us) but IPC-section distributions are weighted by real published NCRB Karnataka statistics, joined to real district socioeconomic data and real KA-GIS district/taluk boundaries. Pitch: "synthetic crime layer on real socio-demographic ground truth." 10-50K FIR records is enough for every demo scenario.
 
 **Pipeline**: one Python job (re)builds Postgres, syncs Neo4j, re-embeds narratives. Functionally identical to a streaming pipeline here because there is no real-time source — not a shortcut, a correct read of the problem.
+
+**Session/conversation/audit schema** (`session`, `conversation_turn`, `audit_log` — full DDL in `data/README.md`): `apps/api` is stateless between requests, so multi-turn conversation, PDF export, and the tamper-evident trail each need their own table — `audit_log` stores only a SHA-256 hash (tamper-evidence), not plaintext, so it cannot double as the conversation store.
 
 ---
 
@@ -176,6 +184,7 @@ class InvestigationState(BaseModel):
     confidence_score: float; requires_escalation: bool
     agent_trace: List[AgentTraceEntry]   # rendered in UI, not just logged
 ```
+(Sketch only — the canonical, complete version, including `visualization`/voice fields and exactly what's session-persistent vs per-turn, lives in `packages/rag_agent/README.md`. Edit that one; this block is illustrative.)
 
 ### 3.2 Session Entity Memory
 ```python
@@ -201,6 +210,8 @@ Orchestrator · HippoRAG/ToG Retrieval Agent · SQL Agent (text-to-SQL) · Vecto
 - **XGBoost + SHAP** risk scoring; **LightGBM** recidivism (180-day re-offense, calibrated probabilities); **Isolation Forest** district-level spike anomaly alerts
 - **DoWhy** causal layer for socioeconomic claims — causal effect estimate with confounding adjustment, not bare correlation
 
+Return-type shapes for every model above (`RiskResult`, `ForecastResult`, `HotspotPolygon`, etc.) and exactly who calls each: `packages/ml_models/README.md`.
+
 ---
 
 ## Layer 5: Retrieval & Evidence Chain
@@ -214,7 +225,7 @@ class EvidenceItem(BaseModel):
     content: str; confidence: float; timestamp: datetime
 ```
 
-Citations render as `[1] FIR/BLR/2024/KGF/001234 — Filed 12 Mar 2024, Kolar PS, IPC 302`.
+Citations render as `[1] FIR/BLR/2024/KGF/001234 — Filed 12 Mar 2024, Kolar PS, IPC 302` (1-based index). Full `EvidenceItem`/`Citation`/`VisualizationPayload` shapes and the exact SSE wire contract: `packages/rag_agent/README.md` and `apps/api/README.md`.
 
 **Verification loop — CRAG-style evaluator**: a lightweight relevance/confidence evaluator scores each retrieval batch (per Corrective-RAG, Yan et al. 2024) and triggers one of: accept → widen query/retry → explicitly state "not found in available records." Never fabricates on empty evidence. This is the strongest "trustworthy for law enforcement" beat in a live demo — it's a named, published pattern, not an improvised safeguard.
 
@@ -242,7 +253,7 @@ Single **FastAPI** service — async, Pydantic v2, SSE/WebSocket for streaming c
 ## Layer 8: Security
 
 - **Auth**: JWT with `role` claim (`IO, SHO, DSP, SP, IG, SCRB_Analyst`)
-- **Policy**: versioned, unit-tested Python policy module evaluated in middleware (functionally what OPA/Rego expresses) — e.g. "IO sees only their PS's FIRs," "victim identity masked below DSP rank," "graph traversal depth capped by role"
+- **Policy**: versioned, unit-tested Python policy module (`packages/policy`, functionally what OPA/Rego expresses) — e.g. "IO sees only their PS's FIRs," "victim identity masked below DSP rank," "graph traversal depth capped by role." Enforced in two places, not one: `apps/api` middleware for structured responses (post-hoc masking is fine there); `packages/rag_agent`'s Cypher/SQL Agents at query-construction time for depth-capping and anything feeding a free-text answer (post-hoc is not fine there — you can't un-traverse a graph or reliably redact generated prose)
 - **Audit**: append-only Postgres table, SHA-256 response hash, full agent trace as JSONB, `RULE ... DO INSTEAD NOTHING` on UPDATE/DELETE for immutability
 
 ---
@@ -333,6 +344,8 @@ Monorepo, 5 folders, one per concurrent work track. Each folder has its own depe
 | `data/` | Data engineering — schemas, synthetic data pipeline, vector index, Kannada NLP/ASR/TTS | §1, §2 (schema), §6 |
 
 `apps/api` is still the one deployable service (Layer 7) — `packages/rag_agent` and `packages/ml_models` are Python packages it imports, not separately deployed microservices. The folder split is for parallel *development*, not a change to the runtime architecture.
+
+**One deliberate exception**: `packages/policy` is a 6th, small shared package (RBAC rule definitions) imported by both `apps/api` and `packages/rag_agent` — not a 6th track, and not owned by one person. RBAC is cross-cutting by nature: duplicating the rules risks drift, and it can't be enforced entirely post-hoc (see Layer 8), so it can't be cleanly isolated inside a single folder the way everything else is. Whoever touches auth/RBAC on either side edits it.
 
 ---
 
