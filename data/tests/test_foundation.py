@@ -19,6 +19,15 @@ def test_schema_splits_into_clean_statements():
         assert f"TABLE IF NOT EXISTS {table}" in joined
 
 
+def test_district_aliases_reconcile():
+    from data.districts import all_districts, canonical_code
+    assert len(all_districts()) == 31
+    # different dataset spellings collapse to one code
+    assert canonical_code("Bangalore Urban") == canonical_code("Bengaluru Urban") == "KA05"
+    assert canonical_code("Gulbarga") == canonical_code("Kalaburagi") == "KA16"
+    assert canonical_code("unknownville") is None
+
+
 def test_connection_modules_import_without_db():
     # get_engine is lazy, so importing must not require a running Postgres.
     import data.db  # noqa: F401
