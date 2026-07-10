@@ -1,0 +1,35 @@
+# Veritas local dev stack: Postgres(PostGIS+pgvector) + Neo4j(GDS).
+# `docker compose up -d`, then `python -m data.db` and `python -m data.graph`.
+services:
+  postgres:
+    build:
+      context: ./data/docker
+      dockerfile: Dockerfile.postgres
+    environment:
+      POSTGRES_USER: veritas
+      POSTGRES_PASSWORD: veritas
+      POSTGRES_DB: veritas
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U veritas"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    environment:
+      NEO4J_AUTH: neo4j/veritas-dev
+      NEO4J_PLUGINS: '["graph-data-science"]'   # GDS: PageRank/Louvain/Betweenness/Node Similarity
+    ports:
+      - "7474:7474"   # browser
+      - "7687:7687"   # bolt
+    volumes:
+      - neo4jdata:/data
+
+volumes:
+  pgdata:
+  neo4jdata:
