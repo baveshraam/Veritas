@@ -1,0 +1,16 @@
+[project]
+name = "veritas-policy"
+version = "0.1.0"
+description = "Veritas RBAC rules — shared by apps/api and packages/rag_agent"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["policy*"]
