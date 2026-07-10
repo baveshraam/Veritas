@@ -1,0 +1,5 @@
+# Raw external datasets — downloaded per data/data/manifest.py, never committed
+# (size + license). ETL reads them from here; only derived priors get committed.
+priors/
+ground_truth/
+corpus/

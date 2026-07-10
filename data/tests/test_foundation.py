@@ -28,6 +28,16 @@ def test_district_aliases_reconcile():
     assert canonical_code("unknownville") is None
 
 
+def test_manifest_invariants():
+    from data.manifest import DATASETS, by_role, get
+    ids = [d.id for d in DATASETS]
+    assert len(ids) == len(set(ids)) == 17            # unique, complete
+    paths = [d.local_path for d in DATASETS]
+    assert len(paths) == len(set(paths))              # no colliding staging dirs
+    assert get("D17").role == "GROUND_TRUTH"          # census fills a real table
+    assert sum(len(by_role(r)) for r in ("PRIOR", "GROUND_TRUTH", "ML_CORPUS")) == 17
+
+
 def test_connection_modules_import_without_db():
     # get_engine is lazy, so importing must not require a running Postgres.
     import data.db  # noqa: F401
