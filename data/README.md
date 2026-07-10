@@ -147,6 +147,12 @@ class Entity(BaseModel):                # ner_extract() return element
 ## Return shapes owned here (crossing into other folders)
 
 ```python
+class SessionFocus(BaseModel):          # data/data/models.py — used by the session write helpers.
+    active_person: Optional[str]        # Lives here (not rag_agent) because data can't import upward
+    active_fir: Optional[str]           # without a cycle, and it maps 1:1 to session.active_* columns.
+    active_location: Optional[str]      # rag_agent imports it: `from data import SessionFocus`.
+    active_date_range: Optional[tuple[date, date]]
+
 class ConversationTurn(BaseModel):      # get_conversation_history() return element; one row of conversation_turn
     turn_index: int
     query: str; language: Literal["en", "kn"]

@@ -7,7 +7,11 @@ Owns Layers 2 (reasoning half), 3, and 5 of root [`CLAUDE.md`](../../CLAUDE.md).
 ## Data contracts (canonical source — other folders mirror these, don't redefine them)
 
 ```python
-class SessionFocus(BaseModel):
+# SessionFocus is defined in and imported from `data` (from data import SessionFocus).
+# It maps 1:1 to the session table's active_* columns and data's write helpers
+# take/return it, so it lives in data to avoid a circular import (data must not
+# import rag_agent). state.py re-exports it for local use.
+class SessionFocus(BaseModel):         # canonical definition: data/data/models.py
     active_person: Optional[str]       # last-mentioned person_id (UUID as str) — the system-wide join key, NOT scrb_id
     active_fir: Optional[str]          # last-mentioned fir_id (UUID as str), NOT fir_number
     active_location: Optional[str]     # district or taluk name (matches session.active_location VARCHAR)
