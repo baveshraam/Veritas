@@ -9,7 +9,9 @@ import argparse
 import random
 
 from ..db import init_db
+from ..graph import init_graph
 from .build import generate
+from .graph_sync import sync_graph
 from .load import load_dataset
 
 
@@ -18,12 +20,16 @@ def main() -> None:
     ap.add_argument("--firs", type=int, default=10000, help="number of FIRs (10-50K typical)")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-init", action="store_true", help="skip schema init (assume tables exist)")
+    ap.add_argument("--no-graph", action="store_true", help="skip Neo4j sync (Postgres only)")
     args = ap.parse_args()
 
     if not args.no_init:
         init_db()
     ds = generate(random.Random(args.seed), args.firs)
     load_dataset(ds)
+    if not args.no_graph:
+        init_graph()
+        sync_graph(ds)
     print(f"loaded: officers={len(ds.officers)} persons={len(ds.persons)} "
           f"firs={len(ds.firs)} records={len(ds.criminal_records)}")
 
