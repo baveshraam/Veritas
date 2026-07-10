@@ -265,7 +265,7 @@ Single **FastAPI** service — async, Pydantic v2, SSE/WebSocket for streaming c
 **Layout — three floating panes, not hard-edged panels:**
 - **Left — Chat**: streaming SSE conversation, voice push-to-talk with a live waveform, EN/KN toggle. Frosted glass card floating over the background, soft shadow, rounded generously.
 - **Center — Context view**: swaps automatically by query type — map (Deck.gl/MapLibre, KDE heatmap + FIR points) for geospatial, force-directed network graph (Sigma.js/Cytoscape) for relationships, Sankey for financial trails, ECharts trend lines with confidence bands for forecasts. Each transition uses a soft cross-fade/morph, not a hard cut.
-- **Right — Case/evidence rail**: current FIR/person always visible; every citation chip (`[FIR-1234]`, `[Community 47]`) opens here as a floating glass drawer.
+- **Right — Case/evidence rail**: current FIR/person always visible; every citation chip renders as its 1-based `[index]` (e.g. `[1]`, `[2]`) and opens the matching evidence item here as a floating glass drawer.
 
 **Reasoning Trace panel** (expandable, off by default): renders the LangGraph agent trace in plain language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) → Evidence Evaluator: 3 corroborating records → Synthesis."* Makes explainability visible, not just logged. Likely the strongest 30-second differentiation moment.
 

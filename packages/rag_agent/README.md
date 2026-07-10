@@ -8,10 +8,10 @@ Owns Layers 2 (reasoning half), 3, and 5 of root [`CLAUDE.md`](../../CLAUDE.md).
 
 ```python
 class SessionFocus(BaseModel):
-    active_person: Optional[str]       # last-mentioned SCRB ID
-    active_fir: Optional[str]          # last-mentioned FIR
-    active_location: Optional[str]
-    active_date_range: Optional[tuple]
+    active_person: Optional[str]       # last-mentioned person_id (UUID as str) — the system-wide join key, NOT scrb_id
+    active_fir: Optional[str]          # last-mentioned fir_id (UUID as str), NOT fir_number
+    active_location: Optional[str]     # district or taluk name (matches session.active_location VARCHAR)
+    active_date_range: Optional[tuple[date, date]]   # (from, to); persisted as session.active_date_from / active_date_to
 
 class EvidenceItem(BaseModel):
     evidence_id: str
@@ -62,7 +62,7 @@ class CopilotBrief(BaseModel):
     draft_summary: str                # paste-ready case-diary paragraph
 ```
 
-`apps/api` calls `run_investigation(state: InvestigationState) -> InvestigationState` once per turn, and `generate_copilot_brief(fir_id: str) -> CopilotBrief` for the Investigation Copilot workspace. Both are the only two entrypoints `apps/api` calls into this package.
+`apps/api` calls `run_investigation(state: InvestigationState) -> InvestigationState` once per turn, and `generate_copilot_brief(fir_id: str, officer_role: str) -> CopilotBrief` for the Investigation Copilot workspace (`officer_role` is required so the brief can apply `packages/policy` — see below). Both are the only two entrypoints `apps/api` calls into this package.
 
 **What `apps/api` builds before calling `run_investigation`**: a *fresh* `InvestigationState` each turn — `session_id`/`officer_id`/`officer_role`/`original_query` (or `input_audio`)/`language` from the request, `active_entities` rehydrated via `data.get_session_focus(session_id)`, everything else empty/default. Prior turns' `evidence_items`, `*_query_results`, `citations` etc. are **not** carried forward — they're per-turn artifacts, not session state. (Full conversation history for re-display/PDF export lives in `data.conversation_turn`, written by `apps/api` after each turn — see `data/README.md`.)
 
@@ -91,11 +91,13 @@ Produced by the Evidence Synthesis Agent, based on which specialist agent(s) con
 
 ## Investigation Copilot
 
-`generate_copilot_brief(fir_id: str) -> CopilotBrief` — a separate entrypoint from `run_investigation`, called by `apps/api`'s `GET /copilot/{fir_id}`. Given an open FIR, generates:
+`generate_copilot_brief(fir_id: str, officer_role: str) -> CopilotBrief` — a separate entrypoint from `run_investigation`, called by `apps/api`'s `GET /copilot/{fir_id}`. Given an open FIR, generates:
 1. Chronological timeline (every linked event: arrest, bail, court date, in order).
 2. Top-5 MO-similar past cases, each with its recorded outcome (vector similarity over MO embeddings).
 3. Ranked investigative leads (e.g. "matches Community 47; 3 associates in adjoining districts").
 4. Draft case-summary paragraph the IO can paste into a diary entry.
+
+`generate_copilot_brief` enforces `packages/policy` the same way `run_investigation` does: its graph reads pass through `max_traversal_depth`/`can_view_fir` for the caller's `officer_role`, and any victim-identifying field is masked *before* it reaches `draft_summary` (generated prose can't be reliably redacted after the fact). `apps/api` passes the JWT-derived `officer_role` into this call — it is not a body parameter.
 
 ## Suggested structure
 ```
@@ -115,7 +117,7 @@ packages/rag_agent/
 ```
 
 ## Provides / Consumes
-- **Provides to `apps/api`**: `run_investigation(state) -> InvestigationState`, `generate_copilot_brief(fir_id) -> CopilotBrief`. These are the only two entrypoints.
+- **Provides to `apps/api`**: `run_investigation(state) -> InvestigationState`, `generate_copilot_brief(fir_id, officer_role) -> CopilotBrief`. These are the only two entrypoints.
 - **Consumes from `packages/ml_models`**: `score_risk`, `predict_recidivism`, `forecast_crime`, `detect_hotspots`, `flag_transactions`, `estimate_causal_effect` (exact signatures in that package's README) — via the Prediction Agent only. **Not** `resolve_entities` (batch, called from `data/generator/` instead) and **not** `check_anomalies` (called directly by `apps/api` for `/alerts`).
 - **Consumes from `data/`**: Postgres session (`data.db.get_session()`), Neo4j driver (`data.graph.get_driver()`), vector store client, `speech_to_text`/`text_to_speech`, and the session/conversation write helpers (`upsert_session_focus`, `get_session_focus`) — never opens its own connection.
 - **Consumes from `packages/policy`**: the same role→field/depth rules `apps/api` enforces on structured responses, applied here at query-construction time (see Non-goals).

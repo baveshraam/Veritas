@@ -53,6 +53,11 @@ CREATE TABLE district_socioeconomic (
 -- One row per chat session. Only the SessionFocus fields are rehydrated into a
 -- fresh InvestigationState on each turn — evidence_items/query_results are NOT
 -- carried forward, they're per-turn artifacts (see packages/rag_agent/README.md).
+-- Column ↔ SessionFocus mapping (get/upsert_session_focus do exactly this, nothing else):
+--   active_person  <-> SessionFocus.active_person  (person_id UUID, NOT scrb_id)
+--   active_fir     <-> SessionFocus.active_fir      (fir_id UUID, NOT fir_number)
+--   active_location<-> SessionFocus.active_location (district/taluk name)
+--   active_date_from, active_date_to <-> SessionFocus.active_date_range tuple (from, to)
 CREATE TABLE session (
     session_id UUID PRIMARY KEY, officer_id UUID REFERENCES officer(officer_id),
     active_person UUID, active_fir UUID, active_location VARCHAR(100),
@@ -131,6 +136,25 @@ def text_to_speech(text: str, lang: Literal["en", "kn"]) -> bytes: ...          
 ```
 
 All self-hosted — FIR/person data never leaves the network. `transliterate()` output feeds `packages/ml_models.resolve_entities()` (called from `generator/`, see above — not called live).
+
+```python
+class Entity(BaseModel):                # ner_extract() return element
+    text: str
+    label: Literal["PERSON", "LOCATION", "GANG", "VEHICLE", "IPC_SECTION"]
+    start: int; end: int                # char offsets into the input text
+```
+
+## Return shapes owned here (crossing into other folders)
+
+```python
+class ConversationTurn(BaseModel):      # get_conversation_history() return element; one row of conversation_turn
+    turn_index: int
+    query: str; language: Literal["en", "kn"]
+    final_answer: str
+    citations: list[dict]; evidence_items: list[dict]   # stored/returned as JSON — Citation/EvidenceItem shapes owned by packages/rag_agent
+    visualization: dict; agent_trace: list[dict]
+    created_at: datetime
+```
 
 ## Write helpers (the only sanctioned way any other folder mutates data)
 

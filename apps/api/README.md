@@ -8,10 +8,10 @@ Single FastAPI service (Layer 7 of root [`CLAUDE.md`](../../CLAUDE.md)) — asyn
 
 | Route | Method | Purpose |
 |---|---|---|
-| `/chat` | `POST`, SSE response | Body: `{session_id, officer_id, officer_role, language, query}` **or** `{..., audio: <base64>}` instead of `query`. Streams trace + final events (exact envelope below). |
+| `/chat` | `POST`, SSE response | Body: `{session_id, language, query}` **or** `{..., audio: <base64>}` instead of `query`, `+ respond_with_voice?: bool`. `officer_id`/`officer_role` come from the JWT only — never the body; if present in the body they are ignored. Streams trace + final events (exact envelope below). |
 | `/fir/{fir_id}` | `GET` | Full FIR record, policy-filtered by role. |
 | `/person/{person_id}` | `GET` | Person record; victim identity masked below DSP rank. |
-| `/copilot/{fir_id}` | `GET` | Investigation Copilot brief (timeline, similar cases, leads, draft summary). |
+| `/copilot/{fir_id}` | `GET` | Investigation Copilot brief (timeline, similar cases, leads, draft summary). Same policy rules as `/chat`: `packages/policy` is applied inside `generate_copilot_brief`'s graph reads and prose generation (masking generated `draft_summary` prose post-hoc is not reliable — see the `/chat` reasoning in Policy below). |
 | `/export/pdf` | `POST` | Body: `{session_id}`. Returns a PDF (Puppeteer render of the full conversation history + charts, KSP letterhead). |
 | `/alerts` | `WebSocket` | Pushes Isolation Forest anomaly alerts live. |
 
@@ -34,7 +34,7 @@ Field-level shapes (`Citation`, `EvidenceItem`, `VisualizationPayload`) are defi
 
 1. Verify JWT, extract `officer_id`/`officer_role`.
 2. If `audio` present: decode, pass as `input_audio` bytes; else pass `query` as `original_query`.
-3. `focus = data.get_session_focus(session_id)` — rehydrate **only** `SessionFocus`; every other `InvestigationState` field starts fresh this turn (evidence/results are per-turn, not session-level — see `packages/rag_agent/README.md`).
+3. `focus = data.get_session_focus(session_id) or SessionFocus()` — rehydrate **only** `SessionFocus`; on the first turn `get_session_focus` returns `None`, so substitute an all-`None` `SessionFocus()` (never pass `None` into `active_entities`, which is non-optional). Every other `InvestigationState` field starts fresh this turn (evidence/results are per-turn, not session-level — see `packages/rag_agent/README.md`).
 4. Call `run_investigation(state)`, streaming `agent_trace` entries out as `type: "trace"` as soon as each is appended.
 5. On completion: stream the `type: "final"` event (and `type: "audio"` if requested), then `data.write_conversation_turn(...)` and `data.write_audit(...)` — both, for their distinct purposes (see `data/README.md`).
 
@@ -64,7 +64,7 @@ apps/api/
 
 ## Provides / Consumes
 - **Provides to `apps/web`**: the endpoints above, matching the SSE envelope defined here and the `Citation`/`EvidenceItem`/`AgentTraceEntry`/`VisualizationPayload` shapes canonically defined in `packages/rag_agent/README.md` — treat those as an append-only contract (add fields freely, never rename/remove without telling the frontend).
-- **Consumes from `packages/rag_agent`**: `run_investigation(state) -> InvestigationState`, `generate_copilot_brief(fir_id) -> CopilotBrief`.
+- **Consumes from `packages/rag_agent`**: `run_investigation(state) -> InvestigationState`, `generate_copilot_brief(fir_id, officer_role) -> CopilotBrief` (`officer_role` from the JWT, never a query/body param).
 - **Consumes from `packages/ml_models`**: `check_anomalies` only, for `/alerts`; everything else goes through `rag_agent`.
 - **Consumes from `packages/policy`**: the RBAC rule definitions (owns/versions them; also the runtime dependency `packages/rag_agent` uses for query-time enforcement).
 - **Consumes from `data/`**: `get_session_focus`/`upsert_session_focus`, `write_conversation_turn`, `get_conversation_history` (for `/export/pdf`), `write_audit`, and the `officer` table lookup for policy-relevant fields (PS code, role).

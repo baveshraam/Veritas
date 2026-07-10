@@ -14,7 +14,7 @@ Futuristic minimalist glassmorphism, rendered in **dark glass**: frosted dark-ac
   - `"trend"` → Apache ECharts line + confidence band, from `visualization.data.series`.
   - `"none"` → keep whatever view was last showing (or an empty state on the first turn); plain-text answers don't force a view change.
   Each view transition is a soft cross-fade/morph, never a hard cut. Exact per-`kind` shapes are canonically defined in `packages/rag_agent/README.md`.
-- **Right — Case/evidence rail**: pinned current FIR/person; every citation chip (`[FIR-1234]`, `[Community 47]`) opens a floating glass drawer showing the matching `EvidenceItem` from the final SSE event's `evidence_items` array (matched by `citation.evidence_id`) — no separate fetch, the content ships with the answer.
+- **Right — Case/evidence rail**: pinned current FIR/person; each inline citation chip renders as `[Citation.index]` (1-based, e.g. `[1]` — never a source code like `[FIR-1234]`, which isn't a field). Clicking it opens a floating glass drawer showing the matching `EvidenceItem` (found by `citation.evidence_id`) from the final SSE event's `evidence_items` array, with `Citation.label` as the drawer header — no separate fetch, the content ships with the answer.
 - **Reasoning Trace panel** (collapsible, off by default): renders the `agent_trace` stream in plain language, e.g. *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) → Evidence Evaluator: 3 corroborating records → Synthesis."* This is the strongest 30-second differentiator in a live demo — make it visually clear, not an afterthought log dump.
 
 **Color language**: one consistent severity/threat palette (soft neon amber/rose on dark glass) reused identically across map markers, graph nodes, citation chips, and Sankey flow colors — the product should read as one instrument, not stitched-together widgets.
@@ -31,7 +31,8 @@ A separate route from the chat, backed by `GET /copilot/{fir_id}`: case file pan
 
 ```
 POST /chat
-  body: { session_id, officer_id, officer_role, language, query }  // or `audio` (base64) instead of `query`, + respond_with_voice?: bool
+  body: { session_id, language, query }  // or `audio` (base64) instead of `query`, + respond_with_voice?: bool
+  // officer_id/officer_role are NOT sent — the API derives them from the JWT. Send the JWT in the Authorization header.
   response: SSE stream of
     { type: "trace",  step, detail, duration_ms, confidence }                       # render into Reasoning Trace panel, live
     { type: "final",  final_answer, citations, evidence_items, visualization }      # citations open the evidence rail; evidence_items are its content; visualization drives the center pane
