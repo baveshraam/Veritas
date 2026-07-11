@@ -1,18 +1,25 @@
 """ASR/TTS wrappers — self-hosted, so FIR audio never leaves the network.
 
-Both are lazy: the model loads on first call and is cached. The backends are real
-(faster-whisper for English ASR, and the AI4Bharat/Vakyansh stacks for Kannada),
-but their weights are multi-GB and are provisioned out-of-band, not vendored.
+Lazy: the model loads on first call and is cached.
 
-MISSING EXTERNAL MODELS (voice is an enhancement path; text chat is unaffected):
-  - Kannada ASR : Vakyansh          -> VERITAS_VAKYANSH_MODEL
-  - English ASR : faster-whisper    -> VERITAS_WHISPER_MODEL (default "base.en",
-                  auto-downloaded by faster-whisper if the package is installed)
-  - Kannada TTS : AI4Bharat IndicTTS-> VERITAS_INDICTTS_MODEL
-  - English TTS : Kokoro-TTS        -> VERITAS_KOKORO_MODEL
+**ASR works today, in both languages.** faster-whisper is pip-installable and pulls its
+own weights, and Whisper's multilingual checkpoints cover Kannada — so voice input needs
+no out-of-band provisioning at all:
 
-Callers get a clear VoiceUnavailable rather than a silent empty result, so the API
-can degrade to text instead of pretending it transcribed something.
+  - English ASR : faster-whisper `base.en`  -> VERITAS_WHISPER_MODEL
+  - Kannada ASR : Vakyansh IF provisioned (VERITAS_VAKYANSH_MODEL — it is the better
+                  Kannada model), otherwise faster-whisper multilingual `small` with
+                  language="kn" -> VERITAS_WHISPER_KN_MODEL.
+
+The same principle as translation: use the specialist when it is present, but never let
+the feature *depend* on weights we cannot pull ourselves.
+
+STILL GATED — TTS only (voice OUTPUT; input and text chat are unaffected):
+  - Kannada TTS : AI4Bharat IndicTTS -> VERITAS_INDICTTS_MODEL
+  - English TTS : Kokoro-TTS         -> VERITAS_KOKORO_MODEL
+
+Callers get a clear VoiceUnavailable rather than a silent empty result, so the API can
+degrade to text instead of pretending it spoke.
 """
 import io
 import os
@@ -26,7 +33,12 @@ class VoiceUnavailable(RuntimeError):
 
 def speech_to_text(audio: bytes, lang: Literal["en", "kn"]) -> str:
     if lang == "kn":
-        return _vakyansh_transcribe(audio)
+        # Vakyansh is the better Kannada ASR, but its weights are provisioned
+        # out-of-band. Whisper multilingual covers Kannada and installs itself, so
+        # Kannada voice input works either way rather than being dark by default.
+        if os.getenv("VERITAS_VAKYANSH_MODEL"):
+            return _vakyansh_transcribe(audio)
+        return _whisper_transcribe(audio, lang="kn")
     return _whisper_transcribe(audio)
 
 
@@ -38,22 +50,25 @@ def text_to_speech(text: str, lang: Literal["en", "kn"]) -> bytes:
 
 # --- English ASR: faster-whisper (CTranslate2, CPU-viable) -------------------
 
-def _whisper_transcribe(audio: bytes) -> str:
-    model = _load_whisper()
-    segments, _ = model.transcribe(io.BytesIO(audio), language="en")
+def _whisper_transcribe(audio: bytes, lang: str = "en") -> str:
+    # English uses the English-only checkpoint (faster, more accurate on English);
+    # Kannada needs a multilingual one, so they are separate models.
+    name = (os.getenv("VERITAS_WHISPER_KN_MODEL", "small") if lang == "kn"
+            else os.getenv("VERITAS_WHISPER_MODEL", "base.en"))
+    model = _load_whisper(name)
+    segments, _ = model.transcribe(io.BytesIO(audio), language=lang)
     return " ".join(s.text.strip() for s in segments).strip()
 
 
-@lru_cache(maxsize=1)
-def _load_whisper():
+@lru_cache(maxsize=2)          # one English checkpoint, one multilingual
+def _load_whisper(name: str):
     try:
         from faster_whisper import WhisperModel
     except ImportError as e:
         raise VoiceUnavailable(
-            "English ASR needs faster-whisper: pip install 'veritas-data[voice]'"
+            "ASR needs faster-whisper: pip install 'veritas-data[voice]'"
         ) from e
-    return WhisperModel(os.getenv("VERITAS_WHISPER_MODEL", "base.en"),
-                        device="cpu", compute_type="int8")
+    return WhisperModel(name, device="cpu", compute_type="int8")
 
 
 # --- Kannada ASR / TTS, English TTS: weights provisioned out-of-band ---------

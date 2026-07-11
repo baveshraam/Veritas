@@ -22,6 +22,14 @@ generator = [
 ]
 # Self-hosted embeddings (ONNX, no torch) — FIR content never leaves the network.
 embeddings = ["fastembed>=0.3"]
+
+# Layer 6, both self-hosted. Heavy (torch), so they are opt-in: an API consumer that
+# only serves English text chat should not pull 2GB of translation weights.
+#   translation: EN<->KN. NLLB-200 by default; IndicTrans2 when its gated weights land.
+#   voice:       ASR. faster-whisper pulls its own checkpoints, incl. multilingual (kn).
+translation = ["torch>=2.2", "transformers>=4.40", "sentencepiece>=0.2"]
+voice = ["faster-whisper>=1.0"]
+
 dev = ["pytest>=8.0"]
 
 [build-system]

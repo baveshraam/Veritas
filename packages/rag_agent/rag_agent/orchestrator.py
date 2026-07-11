@@ -48,6 +48,31 @@ def node_voice_in(state: InvestigationState) -> InvestigationState:
     return state
 
 
+def node_translate_in(state: InvestigationState) -> InvestigationState:
+    """Kannada query -> English, BEFORE anything reads it.
+
+    Everything downstream is English/Latin-script: the intent classifier's keywords,
+    the IPC-section and number-plate regexes, and the district/name gazetteers. Feeding
+    Kannada script straight into them matches nothing, so the turn would classify as
+    the default intent, extract no entities, retrieve no evidence, and the CRAG
+    evaluator would (correctly, but uselessly) refuse to answer. The answer is
+    translated back on the way out in node_synthesize.
+    """
+    query = state.original_query or ""
+    if not query or translation_agent.detect_language(query) != "kn":
+        return state
+
+    t0 = time.perf_counter()
+    state.language = "kn"          # reply in the language the officer asked in
+    english, note = translation_agent.to_english(query)
+    if english != query:
+        state.original_query = english
+        _trace(state, "Translation Agent (kn->en)", f"Query understood as: {english}", t0)
+    else:
+        _trace(state, "Translation Agent (kn->en)", note or "translation unavailable", t0)
+    return state
+
+
 def node_orchestrate(state: InvestigationState) -> InvestigationState:
     t0 = time.perf_counter()
     query = state.original_query or ""
@@ -390,6 +415,7 @@ def build_graph():
 
     g = StateGraph(InvestigationState)
     g.add_node("voice_in", node_voice_in)
+    g.add_node("translate_in", node_translate_in)
     g.add_node("orchestrate", node_orchestrate)
     g.add_node("retrieve", node_retrieve)
     g.add_node("evaluate", node_evaluate)
@@ -397,7 +423,8 @@ def build_graph():
     g.add_node("voice_out", node_voice_out)
 
     g.set_entry_point("voice_in")
-    g.add_edge("voice_in", "orchestrate")
+    g.add_edge("voice_in", "translate_in")   # ASR may itself return Kannada text
+    g.add_edge("translate_in", "orchestrate")
     g.add_edge("orchestrate", "retrieve")
     g.add_edge("retrieve", "evaluate")
     g.add_conditional_edges("evaluate", _after_evaluate,
