@@ -1,0 +1,23 @@
+[project]
+name = "veritas-rag-agent"
+version = "0.1.0"
+description = "Veritas investigation engine — LangGraph, HippoRAG, ToG, evidence chain"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "langgraph>=0.2",
+    "google-genai>=1.0",
+    "veritas-data",
+    "veritas-policy",
+    "veritas-ml-models",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["rag_agent*"]

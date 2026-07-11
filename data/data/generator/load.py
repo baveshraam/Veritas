@@ -54,9 +54,15 @@ def _insert_sql(table: str, cols: list[str], geom_col: str | None = None) -> str
 def load_dataset(ds: Dataset, wipe: bool = True) -> None:
     with get_session() as s:
         if wipe:
-            # only the generated record layer — leaves district_socioeconomic
-            # (real data) and the session/audit tables untouched.
+            # The generated record layer, plus document_embedding — which is DERIVED
+            # from it. Leaving embeddings behind across a rebuild leaves rows whose
+            # source_id points at a FIR that no longer exists, so retrieval happily
+            # cites a deleted record. In a system whose whole claim is that every
+            # answer traces to a real record, a dangling citation is the worst
+            # possible bug. index_job repopulates it immediately after the load.
+            # district_socioeconomic (real data) and session/audit are untouched.
             s.execute(text("TRUNCATE criminal_record, fir, person, officer CASCADE"))
+            s.execute(text("TRUNCATE document_embedding"))
         s.execute(text(_insert_sql("officer", _OFFICER_COLS)), officer_rows(ds))
         s.execute(text(_insert_sql("person", _PERSON_COLS, "address_geom")), person_rows(ds))
         s.execute(text(_insert_sql("fir", _FIR_COLS, "location_geom")), fir_rows(ds))
