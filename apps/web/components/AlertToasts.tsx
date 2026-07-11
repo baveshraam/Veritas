@@ -4,6 +4,7 @@ import { WS_BASE } from "@/lib/api";
 import type { AnomalyAlert } from "@/lib/types";
 
 const TTL_MS = 12_000;
+const MAX_VISIBLE = 3;   // a stack taller than this is wallpaper, not an alert
 
 /** Live district-anomaly alerts (Isolation Forest spikes) — decision-support only,
  * never an automated trigger, so this is a toast to read, not an action to take. */
@@ -24,7 +25,7 @@ export default function AlertToasts() {
       ws.onmessage = (e) => {
         try {
           const a = JSON.parse(e.data) as AnomalyAlert;
-          setAlerts((all) => [...all, a]);
+          setAlerts((all) => [...all, a].slice(-MAX_VISIBLE));
           setTimeout(() => setAlerts((all) => all.filter((x) => x.alert_id !== a.alert_id)), TTL_MS);
         } catch {
           /* ignore malformed frames */

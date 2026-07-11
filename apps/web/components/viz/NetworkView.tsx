@@ -25,7 +25,7 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
       draggable: true,
       force: { repulsion: 190, edgeLength: [45, 130], gravity: 0.08 },
       label: {
-        show: true, position: "right", color: "#e8edfb", fontSize: 11,
+        show: true, position: "right", color: "#16203a", fontSize: 11,
         formatter: (p: any) => (p.data.value > max * 0.4 ? p.data.name : ""),
       },
       emphasis: { focus: "adjacency", label: { show: true } },

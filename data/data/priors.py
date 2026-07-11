@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .districts import canonical_code
 
-_DERIVED = Path(__file__).resolve().parent.parent / "seed" / "derived"
+_DERIVED = Path(__file__).resolve().parent / "seed" / "derived"
 
 
 @dataclass(frozen=True)

@@ -5,11 +5,19 @@ persistence orchestration. It hosts packages/rag_agent and packages/ml_models as
 imports; it contains no reasoning, retrieval, or ML logic of its own.
 """
 import os
+from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import alerts, auth_routes, chat, copilot, export, records
+# Secrets (GEMINI_API_KEY) live in a gitignored `.env` at the repo root — nothing
+# else loads it, so without this line a local uvicorn runs in deterministic mode
+# with a perfectly good key sitting on disk. override=False: an exported shell
+# variable still wins.
+load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
+
+from .routers import alerts, auth_routes, chat, copilot, export, records  # noqa: E402
 
 app = FastAPI(
     title="Veritas — KSP Crime Intelligence Platform",

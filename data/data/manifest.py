@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Literal
 
 Role = Literal["PRIOR", "GROUND_TRUTH", "ML_CORPUS"]
-SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
+SEED_DIR = Path(__file__).resolve().parent / "seed"
 
 
 @dataclass(frozen=True)

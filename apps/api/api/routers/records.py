@@ -16,6 +16,66 @@ from ..auth.jwt_auth import Officer, current_officer
 router = APIRouter()
 
 
+@router.get("/cases")
+async def list_cases(
+    q: str | None = None,
+    crime_type: str | None = None,
+    case_status: str | None = None,
+    limit: int = 60,
+    officer: Officer = Depends(current_officer),
+):
+    """The case index the console opens on.
+
+    A conversational console that shows an empty box is unusable: an officer cannot
+    ask about records they have never seen. This is the browsable inventory the chat
+    is *about* — same policy scope, so what you can list is exactly what you can ask.
+    """
+    where, params = ["1=1"], {}
+    if crime_type:
+        where.append("crime_type = :ct")
+        params["ct"] = crime_type
+    if case_status:
+        where.append("case_status = :cs")
+        params["cs"] = case_status
+    if q:
+        where.append("(fir_number ILIKE :q OR crime_type ILIKE :q OR district ILIKE :q "
+                     "OR modus_operandi ILIKE :q)")
+        params["q"] = f"%{q}%"
+
+    with get_session() as s:
+        rows = s.execute(text(
+            "SELECT fir_id, fir_number, ps_code, district, taluk, crime_type, "
+            "       ipc_sections, date_filed, case_status, modus_operandi "
+            f"FROM fir WHERE {' AND '.join(where)} "
+            "ORDER BY date_filed DESC"), params).mappings().all()
+        facet_rows = s.execute(text(
+            "SELECT ps_code, crime_type, case_status FROM fir")).mappings().all()
+
+    # ponytail: policy filtering in Python, not a WHERE clause — can_view_fir stays the
+    # single definition of who sees what. Scale ceiling ~10^4 FIRs; push into SQL beyond.
+    def visible(r) -> bool:
+        return can_view_fir(officer.role, officer.ps_code, r["ps_code"])
+
+    cases = [dict(r) for r in rows if visible(r)]
+    mine = [r for r in facet_rows if visible(r)]
+
+    def facet(field: str) -> list[dict]:
+        counts: dict[str, int] = {}
+        for r in mine:
+            if r[field]:
+                counts[r[field]] = counts.get(r[field], 0) + 1
+        return [{"name": k, "count": v}
+                for k, v in sorted(counts.items(), key=lambda kv: -kv[1])]
+
+    return {
+        "cases": cases[:limit],
+        "matched": len(cases),
+        "total": len(mine),
+        "crime_types": facet("crime_type"),
+        "statuses": facet("case_status"),
+    }
+
+
 @router.get("/fir/{fir_id}")
 async def get_fir(fir_id: str, officer: Officer = Depends(current_officer)):
     with get_session() as s:

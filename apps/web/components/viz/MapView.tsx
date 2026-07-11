@@ -27,7 +27,7 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
       style: style ?? {
         version: 8,
         sources: {},
-        layers: [{ id: "bg", type: "background", paint: { "background-color": "#0a0f1c" } }],
+        layers: [{ id: "bg", type: "background", paint: { "background-color": "#e7ecf5" } }],
       },
       center: [76.6, 14.5],
       zoom: 5.6,

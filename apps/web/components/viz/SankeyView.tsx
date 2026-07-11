@@ -29,7 +29,7 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
       itemStyle: { borderWidth: 0 },
       data: (data.nodes ?? []).map((n) => ({
         name: n.name,
-        itemStyle: { color: rgba("#7cc4ff", 0.75) },
+        itemStyle: { color: rgba("#2f6fed", 0.6) },
       })),
       links: links.map((l) => ({
         ...l,

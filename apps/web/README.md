@@ -1,6 +1,6 @@
 # Frontend — Command Console (`apps/web/`)
 
-**What this is**: the entire officer-facing UI. A Next.js app deployed on Vercel (project `veritas`). Talks to `apps/api` only — no direct DB, graph, or model access from here. Implements Layer 9 of root [`CLAUDE.md`](../../CLAUDE.md).
+**What this is**: the entire officer-facing UI. A Next.js app served locally (`npm run dev`). Talks to `apps/api` only — no direct DB, graph, or model access from here. Implements Layer 9 of root [`CLAUDE.md`](../../CLAUDE.md).
 
 ## Visual language
 Futuristic minimalist glassmorphism, rendered in **dark glass**: frosted dark-acrylic panels with subtle blur, soft elevation shadows, floating components (not hard-edged panels), over a restrained gradient-mesh background. Generous spacing, light depth layering, smooth natural-easing microinteractions. Modern, crisp, highly legible typography. Soft neon/pastel accents (amber/rose) used sparingly and only for severity signaling — never decoratively. Calm, premium, spatial — next-gen Apple-style with a subtle sci-fi undertone. Dark glass specifically (not light-glass-on-white) because this is dense command-console work: map/graph data needs contrast that a light theme washes out.

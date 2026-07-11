@@ -1,5 +1,7 @@
 "use client";
 import dynamic from "next/dynamic";
+import { useEffect, useState } from "react";
+import CaseExplorer from "./CaseExplorer";
 import type { Visualization } from "@/lib/types";
 
 // Charts and MapLibre touch window/canvas — keep them out of the server bundle.
@@ -13,34 +15,57 @@ const TITLES: Record<string, string> = {
   network: "Criminal network",
   sankey: "Financial flow",
   trend: "Forecast",
-  none: "Context",
+  none: "Case index",
 };
 
 /** The centre pane swaps by query type. The cross-fade is deliberate: a hard cut
- *  between a map and a graph is disorienting when both describe the same subject. */
-export default function ContextView({ viz }: { viz: Visualization }) {
-  const kind = viz?.kind ?? "none";
+ *  between a map and a graph is disorienting when both describe the same subject.
+ *
+ *  With no answer on screen yet it shows the case index rather than a placeholder —
+ *  see CaseExplorer for why an empty console is an unusable one. */
+export default function ContextView({
+  viz, onAsk, onCopilot,
+}: {
+  viz: Visualization;
+  onAsk: (q: string) => void;
+  onCopilot: (firId: string) => void;
+}) {
+  const vizKind = viz?.kind ?? "none";
+
+  // A new answer pulls the pane back to its visualization; the officer can always
+  // return to the index, but a fresh result should never be hidden behind it.
+  const [showIndex, setShowIndex] = useState(true);
+  useEffect(() => setShowIndex(vizKind === "none"), [vizKind, viz?.data]);
+
+  const kind = showIndex ? "none" : vizKind;
 
   return (
     <div className="pane glass" style={{ minWidth: 0 }}>
       <div className="pane-head">
         <span className="pane-title">{TITLES[kind] ?? "Context"}</span>
-        {kind !== "none" && (
-          <span className="chip chip-low">
-            <span className="dot-live" /> live
-          </span>
-        )}
+        <div className="tabs">
+          {vizKind !== "none" && (
+            <>
+              <button
+                className={`tab ${showIndex ? "on" : ""}`}
+                onClick={() => setShowIndex(true)}
+              >
+                Case index
+              </button>
+              <button
+                className={`tab ${!showIndex ? "on" : ""}`}
+                onClick={() => setShowIndex(false)}
+              >
+                {TITLES[vizKind]}
+              </button>
+            </>
+          )}
+        </div>
       </div>
       <div className="pane-body" style={{ padding: kind === "none" ? 16 : 10 }}>
         <div className="viz">
           {kind === "none" ? (
-            <div className="viz-empty">
-              <div style={{ fontSize: 26, opacity: 0.35 }}>◍</div>
-              <div style={{ maxWidth: 300, lineHeight: 1.6 }}>
-                Ask about a network, a money trail, hotspots or a forecast and the
-                matching view opens here.
-              </div>
-            </div>
+            <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} />
           ) : (
             <div className="viz-fade" key={kind + JSON.stringify(viz.data).length}>
               {kind === "network" && <NetworkView data={viz.data} />}

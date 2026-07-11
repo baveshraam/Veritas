@@ -95,7 +95,11 @@ export default function Console() {
         officer={officer}
       />
 
-      <ContextView viz={viz} />
+      <ContextView
+        viz={viz}
+        onAsk={(query) => send({ query })}
+        onCopilot={setCopilotFir}
+      />
 
       <div className="pane glass rail">
         <div className="pane-head">

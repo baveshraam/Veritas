@@ -38,3 +38,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["data*"]
+
+# seed/ (reference CSVs + committed Census derivations) ships inside the package —
+# without this, an installed copy of veritas-data (Vercel, a wheel, anywhere but
+# this repo checkout) has the code but not the data it reads at import time.
+[tool.setuptools.package-data]
+data = ["seed/**/*"]

@@ -1,4 +1,6 @@
-import type { CopilotBrief, EvidenceItem, FinalEvent, Officer, TraceEntry } from "./types";
+import type {
+  CaseIndex, CopilotBrief, EvidenceItem, FinalEvent, Officer, TraceEntry,
+} from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export const WS_BASE = BASE.replace(/^http/, "ws");
@@ -104,6 +106,17 @@ export async function streamChat(
       else if (evt.type === "error") throw new Error(evt.message ?? "Investigation failed");
     }
   }
+}
+
+export async function listCases(
+  filter: { q?: string; crime_type?: string; case_status?: string },
+): Promise<CaseIndex> {
+  const qs = new URLSearchParams(
+    Object.entries(filter).filter(([, v]) => v) as [string, string][],
+  );
+  const r = await fetch(`${BASE}/cases?${qs}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error("Cannot load the case index");
+  return r.json();
 }
 
 export async function getCopilotBrief(firId: string): Promise<CopilotBrief> {

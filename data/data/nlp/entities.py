@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from ..districts import all_districts
 from ..priors import crime_types
 
-_NAMES_CSV = Path(__file__).resolve().parent.parent.parent / "seed" / "derived" / "ka_names.csv"
+_NAMES_CSV = Path(__file__).resolve().parent.parent / "seed" / "derived" / "ka_names.csv"
 
 # Karnataka plate format: KA 05 MJ 1234
 _PLATE = re.compile(r"\b(KA[\s-]?\d{2}[\s-]?[A-Z]{1,2}[\s-]?\d{3,4})\b", re.I)

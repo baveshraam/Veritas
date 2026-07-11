@@ -23,7 +23,7 @@ export default function TrendView({ data }: { data: { series: Point[] } }) {
       formatter: (ps: any[]) => {
         const i = ps[0].dataIndex;
         return `<b>${dates[i]}</b><br/>forecast ${point[i].toFixed(1)}` +
-               `<br/><span style="color:#93a0c2">range ${s[i][2].toFixed(1)} – ${s[i][3].toFixed(1)}</span>`;
+               `<br/><span style="color:#4c5a7a">range ${s[i][2].toFixed(1)} – ${s[i][3].toFixed(1)}</span>`;
       },
     },
     xAxis: {

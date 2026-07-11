@@ -338,7 +338,7 @@ Predictive policing has a documented history of laundering historical policing b
 
 ## Repository Structure
 
-Repo: `github.com/baveshraam/Veritas` (Vercel project `veritas` — deploy target for `apps/web`).
+Repo: `github.com/baveshraam/Veritas`. Runs locally: docker-compose for the databases, uvicorn for `apps/api`, `next dev` for `apps/web` — there is no cloud deploy target.
 
 Monorepo, 5 folders, one per concurrent work track. Each folder has its own dependency manifest and its own `README.md` with the full spec for that folder — cross-folder coordination happens through documented contracts (schemas, typed function signatures), never through shared files, so parallel pushes don't collide.
 

@@ -18,7 +18,7 @@ import random
 from functools import lru_cache
 from pathlib import Path
 
-_CSV = Path(__file__).resolve().parent.parent.parent / "seed" / "derived" / "district_centroids.csv"
+_CSV = Path(__file__).resolve().parent.parent / "seed" / "derived" / "district_centroids.csv"
 
 _N_ATTRACTORS = 4          # activity centres per district
 _ATTRACTOR_SPREAD = 0.14   # ~15 km — how far centres sit from the district centroid

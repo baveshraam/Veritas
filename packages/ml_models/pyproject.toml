@@ -19,6 +19,9 @@ causal = ["dowhy>=0.11", "pandas>=2.2"]
 fairness = ["aequitas>=1.0", "pandas>=2.2"]
 dev = ["pytest>=8.0"]
 
+[tool.uv.sources]
+veritas-data = { path = "../../data", editable = true }
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"

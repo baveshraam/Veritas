@@ -27,7 +27,7 @@ function useVoiceRecorder(onDone: (base64: string) => void) {
       for (let i = 0; i < bars; i++) {
         const v = Math.abs(data[i * step] - 128) / 128;
         const h = Math.max(2, v * canvas.height);
-        ctx.fillStyle = "#7cc4ff";
+        ctx.fillStyle = "#2f6fed";
         ctx.globalAlpha = 0.55 + v * 0.45;
         ctx.fillRect(i * (canvas.width / bars), (canvas.height - h) / 2, canvas.width / bars - 2, h);
       }
@@ -161,13 +161,23 @@ export default function ChatPane({
 
       <div className="pane-body">
         {!turns.length && (
-          <div className="viz-empty" style={{ height: "auto", paddingTop: 40 }}>
-            <div style={{ fontSize: 26, opacity: 0.35 }}>⌕</div>
-            <div style={{ maxWidth: 285, lineHeight: 1.65 }}>
-              Ask about a person, a network, a money trail, hotspots or a forecast.
-              Every answer traces to a record — and where the records don&apos;t
-              support one, it will say so rather than guess.
-            </div>
+          <div className="intro">
+            <p>
+              <strong>The case index is open beside you.</strong> Search it, then press{" "}
+              <em>Ask about this case</em> on any card — or type a question here.
+            </p>
+            <p className="dim">What this console can answer:</p>
+            <ul>
+              <li>Who is accused in a case, and do they have priors?</li>
+              <li>Who does this person offend with — and who runs that network?</li>
+              <li>Where is theft concentrated in this district right now?</li>
+              <li>Where did the money in this case go?</li>
+              <li>How many cases should this station expect next month?</li>
+            </ul>
+            <p className="dim">
+              Every answer cites the FIR it came from. Where the records don&apos;t
+              support one, it says so instead of guessing.
+            </p>
           </div>
         )}
 

@@ -5,14 +5,14 @@
  * of four charts that happen to sit on the same page — a "high" looks like a high
  * everywhere. */
 export const SEV = {
-  low: "#5fd3a6",
-  med: "#f5c26b",
-  high: "#f6799a",
+  low: "#0f9d76",
+  med: "#c07d10",
+  high: "#d64466",
 } as const;
 
-export const ACCENT = "#7cc4ff";
-export const GRID = "rgba(148,178,255,0.10)";
-export const TEXT_DIM = "#93a0c2";
+export const ACCENT = "#2f6fed";
+export const GRID = "rgba(23,42,82,0.10)";
+export const TEXT_DIM = "#4c5a7a";
 
 /** Map a 0-1 intensity onto the shared ramp. */
 export function ramp(t: number): string {
@@ -37,9 +37,9 @@ export const CHART_BASE = {
   backgroundColor: "transparent",
   textStyle: { color: TEXT_DIM, fontFamily: "ui-sans-serif, Inter, system-ui" },
   tooltip: {
-    backgroundColor: "rgba(16,22,38,0.94)",
-    borderColor: "rgba(148,178,255,0.22)",
-    textStyle: { color: "#e8edfb", fontSize: 12 },
+    backgroundColor: "rgba(255,255,255,0.94)",
+    borderColor: "rgba(23,42,82,0.16)",
+    textStyle: { color: "#16203a", fontSize: 12 },
     extraCssText: "backdrop-filter: blur(10px); border-radius: 10px;",
   },
 } as const;

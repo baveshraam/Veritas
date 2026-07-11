@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import NamedTuple, Optional
 
-_CSV = Path(__file__).resolve().parent.parent / "seed" / "karnataka_districts.csv"
+_CSV = Path(__file__).resolve().parent / "seed" / "karnataka_districts.csv"
 
 
 class District(NamedTuple):

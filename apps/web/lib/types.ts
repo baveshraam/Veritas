@@ -55,6 +55,29 @@ export type CopilotBrief = {
   draft_summary: string;
 };
 
+export type CaseRow = {
+  fir_id: string;
+  fir_number: string;
+  ps_code: string;
+  district: string;
+  taluk: string;
+  crime_type: string;
+  ipc_sections: string[];
+  date_filed: string;
+  case_status: string;
+  modus_operandi: string | null;
+};
+
+export type Facet = { name: string; count: number };
+
+export type CaseIndex = {
+  cases: CaseRow[];
+  matched: number;      // rows matching the current filter
+  total: number;        // rows this officer can see at all
+  crime_types: Facet[];
+  statuses: Facet[];
+};
+
 export type AnomalyAlert = {
   alert_id: string;
   district_code: string;

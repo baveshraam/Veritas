@@ -8,8 +8,10 @@ dependencies = [
     "uvicorn[standard]>=0.30",
     "pydantic>=2.7",
     "pyjwt>=2.9",
+    "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
-    "veritas-data",
+    "sse-starlette>=2.1",
+    "veritas-data[embeddings]",
     "veritas-policy",
     "veritas-rag-agent",
     "veritas-ml-models",
@@ -17,6 +19,14 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "httpx>=0.27"]
+
+# Local monorepo packages, not published to PyPI — resolve by path (also lets
+# `uv`/Vercel's builder lock this project without a package registry lookup).
+[tool.uv.sources]
+veritas-data = { path = "../../data", editable = true }
+veritas-policy = { path = "../../packages/policy", editable = true }
+veritas-rag-agent = { path = "../../packages/rag_agent", editable = true }
+veritas-ml-models = { path = "../../packages/ml_models", editable = true }
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -10,7 +10,7 @@ import random
 from functools import lru_cache
 from pathlib import Path
 
-_CSV = Path(__file__).resolve().parent.parent.parent / "seed" / "derived" / "ka_names.csv"
+_CSV = Path(__file__).resolve().parent.parent / "seed" / "derived" / "ka_names.csv"
 
 
 @lru_cache(maxsize=1)

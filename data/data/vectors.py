@@ -4,6 +4,7 @@ Embeddings are computed locally via fastembed (ONNX bge-small-en-v1.5, 384-dim) 
 no FIR content leaves the network, per the architecture. packages/rag_agent's
 Vector Search Agent calls `hybrid_search`; the index job calls `upsert_embeddings`.
 """
+import os
 from functools import lru_cache
 from typing import Iterable
 
@@ -19,7 +20,11 @@ EMBED_DIM = 384
 def _embedder():
     # Lazy: importing/loading the ONNX model is ~130MB on first run, cached after.
     from fastembed import TextEmbedding
-    return TextEmbedding(model_name=EMBED_MODEL)
+    # Serverless filesystems (Vercel) are read-only outside /tmp; fastembed's
+    # default cache_dir needs an explicit writable override there.
+    cache_dir = os.getenv("VERITAS_FASTEMBED_CACHE")
+    kwargs = {"cache_dir": cache_dir} if cache_dir else {}
+    return TextEmbedding(model_name=EMBED_MODEL, **kwargs)
 
 
 def embed(texts: list[str]) -> list[list[float]]:

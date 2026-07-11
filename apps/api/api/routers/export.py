@@ -84,6 +84,16 @@ def _find_browser() -> str | None:
     ):
         if os.path.exists(path):
             return path
+    # Last resort: Playwright's bundled Chromium (a dev dependency of this repo).
+    # Same binary family, same CLI flags — so a machine with no system browser
+    # still exports a real PDF instead of downgrading to HTML.
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            if os.path.exists(p.chromium.executable_path):
+                return p.chromium.executable_path
+    except Exception:
+        pass
     return None
 
 

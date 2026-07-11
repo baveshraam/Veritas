@@ -41,7 +41,7 @@ from sqlalchemy import text
 from .db import get_session
 from .districts import canonical_code
 
-SEED_DIR = Path(__file__).resolve().parent.parent / "seed"
+SEED_DIR = Path(__file__).resolve().parent / "seed"
 RAW_PATH = SEED_DIR / "ground_truth" / "census_2011" / "india-districts-census-2011.csv"
 DERIVED_PATH = SEED_DIR / "derived" / "district_socioeconomic.csv"
 

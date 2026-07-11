@@ -15,6 +15,11 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
+[tool.uv.sources]
+veritas-data = { path = "../../data", editable = true }
+veritas-policy = { path = "../../packages/policy", editable = true }
+veritas-ml-models = { path = "../../packages/ml_models", editable = true }
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
