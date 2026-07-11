@@ -180,16 +180,22 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
     firs: list[Fir] = []
     records: list[CriminalRecord] = []
     year_seq: dict[int, int] = {}
-    accused_pool = persons
 
-    for _ in range(n):
+    # Chronological order matters: accused are drawn by preferential attachment on
+    # their PRIOR offences, so the FIRs must be created oldest-first for a "prior"
+    # to actually precede the offence it predicts. Generating them in random order
+    # would make the repeat-offender structure — and the recidivism model trained on
+    # it — non-causal.
+    filed_dates = sorted(_rand_datetime(rng, days_back=rng.randint(1, 1095))
+                         for _ in range(n))
+    offence_count: dict[str, int] = {}
+
+    for filed in filed_dates:
         prior = sample_crime_type(rng)
         ps = rng.choice(active_ps)
         dc = ps.split("-")[0]
         district = _district_name(dc)
         io = rng.choice(by_ps[ps])
-
-        filed = _rand_datetime(rng, days_back=rng.randint(1, 1095))
         occ_from = filed - timedelta(hours=rng.randint(2, 240))   # crime precedes the report
         occ_to = min(occ_from + timedelta(hours=rng.randint(0, 12)), filed)
         yr = filed.year
@@ -208,8 +214,9 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
             narrative=_stub_narrative(prior.crime_type, district, filed))
         firs.append(fir)
 
-        for accused in _pick_accused(rng, accused_pool, complainant):
+        for accused in _pick_accused(rng, persons, complainant, offence_count):
             accused.criminal_history = True
+            offence_count[accused.person_id] = offence_count.get(accused.person_id, 0) + 1
             arrested = rng.random() < 0.7
             records.append(CriminalRecord(
                 record_id=_uid(rng), person_id=accused.person_id, fir_id=fir.fir_id,
@@ -220,15 +227,33 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
     return firs, records
 
 
-def _pick_accused(rng: random.Random, pool: list[Person], complainant: Person) -> list[Person]:
+RECIDIVISM_ALPHA = 4.0    # strength of preferential attachment to prior offenders
+
+
+def _pick_accused(rng: random.Random, pool: list[Person], complainant: Person,
+                  offence_count: dict[str, int]) -> list[Person]:
+    """Accused are drawn with preferential attachment on prior offences.
+
+    Uniform sampling — which is what this did first — means a prior record predicts
+    nothing about future offending, so there is no repeat-offender population, and
+    any recidivism model trained on it correctly learns that there is no signal
+    (it predicted the positive class exactly zero times). Real offending is heavily
+    skewed: a small habitual cohort accounts for a large share of cases. Weighting
+    by 1 + ALPHA * priors reproduces that skew.
+    """
     k = rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0]
+    weights = [1.0 + RECIDIVISM_ALPHA * offence_count.get(p.person_id, 0) for p in pool]
+
     chosen: list[Person] = []
-    while len(chosen) < k:
-        p = rng.choice(pool)
-        if p.person_id != complainant.person_id and p not in chosen:
-            if p.gang_affiliation is None and rng.random() < 0.15:
-                p.gang_affiliation = rng.choice(GANGS)
-            chosen.append(p)
+    guard = 0
+    while len(chosen) < k and guard < 50:
+        guard += 1
+        p = rng.choices(pool, weights=weights, k=1)[0]
+        if p.person_id == complainant.person_id or p in chosen:
+            continue
+        if p.gang_affiliation is None and rng.random() < 0.15:
+            p.gang_affiliation = rng.choice(GANGS)
+        chosen.append(p)
     return chosen
 
 
