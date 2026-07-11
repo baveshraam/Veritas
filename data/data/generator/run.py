@@ -34,6 +34,8 @@ def main() -> None:
     if not args.no_graph:
         init_graph()
         sync_graph(ds, fin)
+        from ..gds import run_all as run_gds
+        print(f"gds: {run_gds()}")   # pagerank/community/betweenness for HippoRAG + Louvain
     if not args.no_embed:
         from ..embeddings.index_job import run_all
         print(f"indexed: {run_all()}")
