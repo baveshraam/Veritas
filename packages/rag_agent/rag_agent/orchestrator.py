@@ -231,9 +231,15 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
 
     elif intent == "CAUSAL":
         dc = _district_code(state) or "KA05"
-        _, ev = prediction_agent.causal("unemployment", dc)
+        # The factor has to come from the question. Hardcoding one (this used to pass
+        # "unemployment", which the Census cannot measure per district) means every
+        # causal question gets the same answer — or, once the factor list changed,
+        # none at all.
+        factor = prediction_agent.factor_for(state.original_query or "")
+        _, ev = prediction_agent.causal(factor, dc)
         out += ev
-        _trace(state, "Prediction Agent (causal)", "DoWhy backdoor adjustment", t0)
+        _trace(state, "Prediction Agent (causal)",
+               f"DoWhy backdoor adjustment on {factor}", t0)
 
     # Vector search always contributes: narrative/MO semantics complement the graph
     t2 = time.perf_counter()

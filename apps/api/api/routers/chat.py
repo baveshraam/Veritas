@@ -15,6 +15,7 @@ ignored — see auth/jwt_auth.py.
 import asyncio
 import base64
 import json
+import logging
 from typing import Literal, Optional
 
 from data import SessionFocus, get_session_focus, write_conversation_turn
@@ -24,6 +25,8 @@ from rag_agent import InvestigationState, run_investigation
 from sse_starlette.sse import EventSourceResponse
 
 from ..audit import record
+
+log = logging.getLogger(__name__)
 from ..auth.jwt_auth import Officer, current_officer
 
 router = APIRouter()
@@ -67,11 +70,29 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
         queue: asyncio.Queue = asyncio.Queue()
 
         def work():
-            result = run_investigation(state)
-            loop.call_soon_threadsafe(queue.put_nowait, result)
+            # Hand the exception back rather than letting it die in the worker thread.
+            # If work() raises, put_nowait never runs, `await queue.get()` blocks
+            # forever, and the officer watches keep-alive pings until the connection
+            # times out — a silent hang is the worst way for an engine bug to surface.
+            try:
+                outcome = run_investigation(state)
+            except Exception as exc:              # noqa: BLE001 — reported, not swallowed
+                outcome = exc
+            loop.call_soon_threadsafe(queue.put_nowait, outcome)
 
         loop.run_in_executor(None, work)
-        result: InvestigationState = await queue.get()
+        outcome = await queue.get()
+
+        if isinstance(outcome, Exception):
+            log.exception("investigation failed", exc_info=outcome)
+            yield {"data": json.dumps({
+                "type": "error",
+                "message": "The investigation engine failed on this query. Nothing was "
+                           "answered — no partial or unsourced result is being shown.",
+                "detail": f"{type(outcome).__name__}: {outcome}",
+            })}
+            return
+        result: InvestigationState = outcome
 
         for entry in result.agent_trace:
             yield {"data": json.dumps({

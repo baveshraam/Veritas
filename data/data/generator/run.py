@@ -28,6 +28,14 @@ def main() -> None:
 
     if not args.no_init:
         init_db()
+
+    # Real ground truth (Census 2011) before anything synthetic. It is upserted, not
+    # truncated, so it survives dataset rebuilds — and the causal layer is dead
+    # without it, so a rebuild that silently skipped it would be worse than one that
+    # fails here.
+    from ..socioeconomic import load as load_socioeconomic
+    print(f"socioeconomic: {load_socioeconomic()} districts (Census 2011)")
+
     rng = random.Random(args.seed)
     ds = generate(rng, args.firs)
     fin = make_financial(rng, ds)

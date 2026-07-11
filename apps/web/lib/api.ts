@@ -90,6 +90,9 @@ export async function streamChat(
       }
       if (evt.type === "trace") onTrace(evt as TraceEntry);
       else if (evt.type === "final") onFinal(evt as FinalEvent);
+      // The engine failed. Surface it: an ignored error event leaves the console
+      // spinning on keep-alive pings with no answer and no explanation.
+      else if (evt.type === "error") throw new Error(evt.message ?? "Investigation failed");
     }
   }
 }

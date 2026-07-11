@@ -71,15 +71,20 @@ CREATE TABLE IF NOT EXISTS criminal_record (
 );
 
 -- Real data, not simulated: Census/data.gov.in/NSSO
+-- The one REAL table: Census of India 2011 Primary Census Abstract, joined in
+-- verbatim (data.socioeconomic). Every column is a ratio of two published Census
+-- counts. `unemployment` and `police_per_lakh` are absent by design -- neither is
+-- published at district level in India, and the causal layer must not adjust for,
+-- or estimate the effect of, a number we made up. See data/data/socioeconomic.py.
 CREATE TABLE IF NOT EXISTS district_socioeconomic (
-    district_code  VARCHAR(5) PRIMARY KEY,
-    year           INT,
-    literacy_rate  FLOAT,
-    unemployment   FLOAT,
-    poverty_index  FLOAT,
-    population     BIGINT,
-    urban_ratio    FLOAT,
-    police_per_lakh FLOAT
+    district_code        VARCHAR(5) PRIMARY KEY,
+    year                 INT,
+    population           BIGINT,
+    literacy_rate        FLOAT,   -- crude: literates / total population
+    urban_ratio          FLOAT,   -- urban households / all households
+    poverty_index        FLOAT,   -- households under Rs 45,000 PPP income / all
+    marginal_worker_rate FLOAT,   -- workers employed < 6 months / all workers
+    youth_ratio          FLOAT    -- population aged 0-29 / total population
 );
 
 -- ---------------------------------------------------------------------------

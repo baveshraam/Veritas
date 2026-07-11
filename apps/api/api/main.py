@@ -39,9 +39,11 @@ app.include_router(alerts.router, tags=["alerts"])
 @app.get("/health")
 async def health() -> dict:
     """Reports what is actually reachable, not just that the process is alive."""
-    from rag_agent.llm import available as llm_available
+    # llm_status() distinguishes "no key" from "key present but quota exhausted" —
+    # reporting a bare "gemini" for a 429'd key is how you debug the wrong thing.
+    from rag_agent.llm import status as llm_status
 
-    status = {"api": "ok", "llm": "gemini" if llm_available() else "deterministic"}
+    status = {"api": "ok", "llm": llm_status()}
     try:
         from data.db import get_session
         from sqlalchemy import text

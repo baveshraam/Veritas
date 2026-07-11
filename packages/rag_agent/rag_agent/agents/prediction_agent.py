@@ -105,8 +105,37 @@ def transactions(account_id: str):
     return flags, ev
 
 
+# Plain-language names, and the one caveat an officer must hear. India publishes
+# unemployment only at STATE level, so a question about unemployment is answered with
+# the district-level measure the Census *does* publish — underemployment — and the
+# answer says so rather than quietly substituting one for the other.
+FACTOR_LABELS = {
+    "literacy_rate": "the literacy rate",
+    "poverty_index": "the household poverty rate",
+    "marginal_worker_rate": (
+        "underemployment (the Census marginal-worker rate — India does not publish "
+        "unemployment below state level, so this is the closest real district measure)"
+    ),
+}
+
+
+def factor_for(query: str) -> str:
+    """Which socioeconomic factor a causal question is about.
+
+    Only the three the Census gives us per district are estimable; anything else
+    would need a number we do not have. Poverty is the default because it is the
+    factor these questions most often mean.
+    """
+    q = (query or "").lower()
+    if any(w in q for w in ("literacy", "literate", "education", "school")):
+        return "literacy_rate"
+    if any(w in q for w in ("unemploy", "employ", "job", "work", "labour", "labor", "wage")):
+        return "marginal_worker_rate"
+    return "poverty_index"
+
+
 def causal(factor: str, district_code: str):
-    """Returns ([], [evidence explaining the gap]) when Census data is absent —
+    """Returns (None, [evidence explaining the gap]) when Census data is absent —
     the Prediction Agent reports the gap rather than inventing an effect size."""
     ml = _ml()
     from ml_models.causal.effects import SocioeconomicDataUnavailable
@@ -122,16 +151,47 @@ def causal(factor: str, district_code: str):
                      f"No correlation is being reported in its place."),
             confidence=0.0,
         )]
-    ci = est.confidence_interval
+    lo, hi = est.confidence_interval
+    # A CI spanning zero means the data cannot distinguish the effect from none. Say
+    # that, rather than quoting a point estimate an officer would read as a finding.
+    significant = not (lo <= 0 <= hi)
+    label = FACTOR_LABELS.get(factor, factor)
+
+    # Significance is checked BEFORE refutation, and the order matters. Refuting an
+    # effect that is already indistinguishable from zero is meaningless — the placebo
+    # is being compared against noise — and reporting that as "failed refutation" would
+    # state something stronger and more alarming than the data supports. "Not
+    # established" is the honest verdict; "refuted" is a different claim entirely.
+    if not significant:
+        claim = (f"No significant causal effect of {label} on the crime rate is "
+                 f"detectable across {est.n_districts} districts: the estimate is "
+                 f"{est.effect_size:+.3f} but its 95% CI ({lo:+.3f} to {hi:+.3f}) "
+                 f"includes zero. The correct conclusion is 'not established' — not a "
+                 f"weak effect, and not a refuted one.")
+        confidence = 0.3
+    elif not est.refutation_passed:
+        claim = (f"An effect of {label} on the crime rate was estimated but FAILED "
+                 f"DoWhy's refutation checks ({est.refutation_detail}), so it must not "
+                 f"be treated as causal.")
+        confidence = 0.1
+    else:
+        claim = (f"Adjusted for {', '.join(est.confounders_adjusted)} across "
+                 f"{est.n_districts} districts, a unit increase in {label} causes a "
+                 f"{est.effect_size:+.3f} change in the crime rate per 100k "
+                 f"(95% CI {lo:+.3f} to {hi:+.3f}); the estimate survives placebo and "
+                 f"random-common-cause refutation.")
+        confidence = 0.6
+    if est.unmeasured_confounders:
+        claim += (f" Not adjusted for {', '.join(est.unmeasured_confounders)} — no "
+                  f"district-level data source exists for it, so residual confounding "
+                  f"cannot be ruled out.")
+
     ev = [EvidenceItem(
         evidence_id=f"causal:{factor}:{district_code}",
         source_type="ML_PREDICTION",
         source_id=district_code,
         source_query=f"DoWhy backdoor, adjusted for {est.confounders_adjusted}",
-        content=(f"Adjusted for {', '.join(est.confounders_adjusted)}, a unit change "
-                 f"in {factor} is associated with a causal effect of "
-                 f"{est.effect_size:+.3f} on the crime rate "
-                 f"(95% CI {ci[0]:+.3f} to {ci[1]:+.3f})."),
-        confidence=0.6,
+        content=claim,
+        confidence=confidence,
     )]
     return est, ev

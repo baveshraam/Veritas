@@ -47,23 +47,22 @@ Everything below runs today against the live stack:
 | Hotspots | KDE + DBSCAN over PostGIS |
 | Risk / recidivism | XGBoost+SHAP, calibrated LightGBM, temporal split |
 | Financial crime | Rule-based structuring detector + GraphSAGE GNN |
+| Causal inference | DoWhy on **real Census 2011** ground truth — identified, estimated, *and refuted* |
 | Fairness | Aequitas-style audit, 80% rule, gender + district subgroups |
 | RBAC | Enforced at query-construction time *and* on structured responses |
 | Audit | Append-only, SHA-256, DB-level immutability (UPDATE/DELETE no-op) |
+| LLM synthesis | Gemini (`gemini-flash-lite-latest`), degrading to deterministic templates on any failure |
+
+Implementation record — what's built, verified, and why: [`docs/implementation/`](./docs/implementation/).
 
 **Gated on things we don't have** — each fails loudly with the exact remedy rather
 than degrading silently:
 
-- **Causal estimates (DoWhy)** need the real Census/NSSO table (D17). We deliberately
-  do *not* synthesise socioeconomic ground truth: a fabricated causal claim about
-  unemployment and crime is worse than no claim.
 - **Kannada translation / voice** need the self-hosted AI4Bharat and Vakyansh weights.
   Record text is never sent to a cloud model, so there is no shortcut here.
-- **LLM synthesis** uses `GEMINI_API_KEY` when present. It is a *sensitive* Vercel
-  variable and cannot be read back locally, so the engine is built to run fully
-  without it: deterministic intent templates and extractive synthesis produce
-  grounded, cited answers on their own. The LLM makes answers fluent — it is never
-  what makes them true.
+- **District-level police strength** is not published in India (BPR&D/KSP report it
+  state-wide only). It is therefore an *unmeasured confounder*, named as such with
+  every causal estimate rather than adjusted for with an invented number.
 - **Micro-geography** — incidents cluster around synthetic activity centres until the
   WorldPop/OSM attractor layer lands. The hotspot *method* is production-grade; the
   synthetic geography under it is not yet.

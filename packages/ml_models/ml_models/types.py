@@ -57,6 +57,14 @@ class CausalEstimate(BaseModel):
     effect_size: float
     confidence_interval: tuple[float, float]
     confounders_adjusted: list[str]
+    # Confounders with no district-level data source, so the estimate cannot adjust
+    # for them. Reported with the number, never quietly dropped.
+    unmeasured_confounders: list[str] = []
+    n_districts: int = 0
+    # False => the effect did not survive DoWhy's placebo / random-common-cause
+    # refuters and must NOT be presented as causal. See causal.effects._refute.
+    refutation_passed: bool = False
+    refutation_detail: str = ""
 
 
 class MatchResult(BaseModel):

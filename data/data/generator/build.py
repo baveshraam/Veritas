@@ -12,7 +12,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from ..priors import CrimeTypePrior, sample_crime_type, sample_district
+from ..priors import CrimeTypePrior, district_weights, sample_crime_type, sample_district
 from .geo import sample_point
 from .names import sample_name
 
@@ -121,11 +121,17 @@ def _ps_codes_for(district_code: str, n: int) -> list[str]:
 
 
 def make_officers(rng: random.Random, districts: list[str]) -> list[Officer]:
-    """~3 stations per active district, a handful of officers each, roles skewed to IO/SHO."""
+    """Stations scale with the district's real crime weight; a handful of officers each.
+
+    Bengaluru Urban carries ~28% of Karnataka's recorded crime and Kodagu well under
+    1%, so giving every district the same number of stations would misstate both the
+    force distribution and the per-station caseload an IO sees under RBAC.
+    """
     officers: list[Officer] = []
+    weights = district_weights()
     seq = 1
     for dc in districts:
-        for ps in _ps_codes_for(dc, 3):
+        for ps in _ps_codes_for(dc, max(2, round(weights[dc] / 2))):
             for role in ("SHO", "IO", "IO", "IO", "DSP"):
                 officers.append(Officer(
                     officer_id=_uid(rng), badge_no=f"KAB{seq:05d}",
@@ -175,7 +181,16 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
     for o in officers:
         if o.role in ("IO", "SHO"):
             by_ps.setdefault(o.ps_code, []).append(o)
-    active_ps = list(by_ps)
+    # Stations grouped by district, so a FIR's district can be drawn from the real
+    # KSP/NCRB crime weights and only THEN assigned a station inside it. Picking a
+    # station uniformly instead (the previous behaviour) spread crime evenly across
+    # districts regardless of their weight, which flattened the district crime rate
+    # to noise — and every district-level model downstream (causal effects, the
+    # socioeconomic risk story, the Isolation Forest spike detector, the choropleth)
+    # reads that rate as its signal.
+    by_district: dict[str, list[str]] = {}
+    for ps in by_ps:
+        by_district.setdefault(ps.split("-")[0], []).append(ps)
 
     firs: list[Fir] = []
     records: list[CriminalRecord] = []
@@ -192,8 +207,8 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
 
     for filed in filed_dates:
         prior = sample_crime_type(rng)
-        ps = rng.choice(active_ps)
-        dc = ps.split("-")[0]
+        dc = sample_district(rng)
+        ps = rng.choice(by_district[dc])
         district = _district_name(dc)
         io = rng.choice(by_ps[ps])
         occ_from = filed - timedelta(hours=rng.randint(2, 240))   # crime precedes the report
@@ -313,8 +328,11 @@ def inject_duplicates(rng: random.Random, persons: list[Person],
 def generate(rng: random.Random, n_firs: int) -> Dataset:
     """Top-level: derive person/officer counts from FIR count, build a coherent set."""
     n_persons = max(20, int(n_firs * 0.7))
-    # only spin up stations in districts that will actually carry crime volume
-    districts = sorted({sample_district(rng) for _ in range(min(31, n_firs))})
+    # Every district has police stations. Sampling districts into a set here (the
+    # previous behaviour) silently dropped ~half of them — 16 of 31 — so a query
+    # about Raichur or Kalaburagi returned "no records" for a district that simply
+    # never got generated. Crime VOLUME is what the weights control, not existence.
+    districts = sorted(district_weights())
     officers = make_officers(rng, districts)
     persons = make_persons(rng, n_persons)
     # duplicates exist before FIRs are filed, so a FIR can name either record —

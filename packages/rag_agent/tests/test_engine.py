@@ -102,3 +102,42 @@ def test_citations_are_1_based_and_aligned_to_evidence():
     cites = build_citations(ev)
     assert [c.index for c in cites] == [1, 2, 3]
     assert [c.evidence_id for c in cites] == ["a", "b", "c"]
+
+
+# --- LLM degradation ----------------------------------------------------------
+# A present-but-rate-limited key is the common failure, not a missing one: Gemini's
+# free tier 429s exactly when a demo hammers it. Every provider error must collapse
+# into LLMUnavailable / {} so the deterministic paths take over, because the one
+# thing this engine may never do is fail a turn just because the LLM blinked.
+
+def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
+    from rag_agent import llm
+
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_degraded_reason", "")
+
+    class Boom(Exception):
+        pass
+
+    def explode(*_a, **_k):
+        raise Boom("429 RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(llm, "_client", explode)
+    assert llm.available() is True             # key is present, nothing known bad yet
+
+    with pytest.raises(llm.LLMUnavailable):    # NOT the raw provider error
+        llm.generate("hello")
+
+    assert llm.available() is False            # cooldown tripped
+    assert "degraded" in llm.status()
+    assert llm.generate_json("hello", {}) == {}   # returns {}, never raises
+
+
+def test_no_key_is_reported_honestly(monkeypatch):
+    from rag_agent import llm
+
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    assert llm.available() is False
+    assert "no GEMINI_API_KEY" in llm.status()
+    assert llm.generate_json("hello", {}) == {}

@@ -81,7 +81,9 @@ def test_chat_requires_a_token(client):
 def test_health_reports_dependencies(client):
     body = client.get("/health").json()
     assert body["api"] == "ok"
-    assert body["llm"] in ("gemini", "deterministic")
+    # /health must say WHY the LLM is off, not just that it is: "deterministic" alone
+    # can't distinguish an unset key from a 429'd quota, and those need different fixes.
+    assert body["llm"].startswith(("gemini", "deterministic"))
     assert "postgres" in body and "neo4j" in body
 
 

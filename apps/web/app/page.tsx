@@ -51,10 +51,12 @@ export default function Console() {
             })),
         );
       } catch (e: any) {
+        // Covers both a transport failure and an `error` frame from the engine. Either
+        // way the turn must stop streaming and say so — never leave the pane spinning.
         patch((t) => ({
           ...t,
           streaming: false,
-          answer: `The console could not reach the investigation engine: ${e.message}`,
+          answer: e?.message ?? "The investigation could not be completed.",
         }));
       } finally {
         setBusy(false);
