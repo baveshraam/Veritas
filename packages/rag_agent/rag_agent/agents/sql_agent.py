@@ -109,3 +109,16 @@ def filter_viewable(rows: list[dict], officer_role: str, officer_ps_code: str) -
     """Belt-and-braces for rows that didn't come from a scoped template."""
     return [r for r in rows
             if "ps_code" not in r or can_view_fir(officer_role, officer_ps_code, r["ps_code"])]
+
+
+def fir_points(district_code: str, limit: int = 600) -> list[dict]:
+    """FIR coordinates for the map layer. The hotspot polygons alone show WHERE the
+    clusters are but not how dense the surrounding activity is — the point scatter
+    is what makes a cluster legible as a cluster rather than an arbitrary shape."""
+    with get_session() as s:
+        rows = s.execute(text(
+            "SELECT fir_id, ST_Y(location_geom) AS lat, ST_X(location_geom) AS lng "
+            "FROM fir WHERE district_code = :dc AND location_geom IS NOT NULL "
+            "ORDER BY date_filed DESC LIMIT :limit"
+        ), {"dc": district_code, "limit": limit}).mappings().all()
+    return [{"fir_id": str(r["fir_id"]), "lat": r["lat"], "lng": r["lng"]} for r in rows]

@@ -107,32 +107,61 @@ def ner_extract(text: str, lang: Literal["en", "kn"] = "en") -> list[Entity]:
     return sorted(found, key=lambda e: e.start)
 
 
-def _person_spans(text: str) -> list[tuple[int, int]]:
-    """Spans anchored on name-pool tokens, merging adjacent capitalised tokens.
+# Query words that start a sentence and are capitalised for that reason alone.
+# Without this list an unknown-name fallback reads "Does"/"Show"/"Trace" as people.
+_QUERY_STOPWORDS = frozenset("""
+does do did is are was were has have had can could would should show list find
+trace tell give what which who whom whose where when why how the a an and or but
+if any all his her their this that these those him she they them please
+forecast predict check search get open review crime crimes case cases report
+hotspot hotspots map money risk network associate associates priors
+""".split())
 
-    Anchoring on the pool (rather than any capitalised run) is what keeps a
-    sentence-initial "Was Ramesh ..." from being read as a person. The span is
-    trimmed to the first..last pool token, so "Ramesh Gowda" survives intact.
+
+def _person_spans(text: str) -> list[tuple[int, int]]:
+    """Spans of capitalised tokens that name a person.
+
+    Two tiers, and the second one matters more than it looks:
+      1. Anchored on the Karnataka name pool — precise, and keeps a sentence-initial
+         "Was Ramesh ..." from being read as a person.
+      2. A fallback for capitalised runs that hit NO gazetteer at all. Without it, a
+         name the system has never seen is simply invisible to NER, the orchestrator
+         sees no subject in the query, and the *previous* turn's person stays in
+         focus — so an officer asking about an unknown suspect gets a different
+         person's record back with no indication anything was substituted. A name it
+         cannot resolve must still be *seen*, so it can be reported as not found.
     """
     tokens = [(m.group(), m.start(), m.end()) for m in _CAPS_TOKEN.finditer(text)]
     spans: list[tuple[int, int]] = []
     group: list[tuple[str, int, int]] = []
+    known = _locations() | _gangs()
 
     def flush() -> None:
+        if not group:
+            return
         pool_idx = [i for i, (t, _, _) in enumerate(group) if t.lower() in _name_pool()]
         if pool_idx:
             spans.append((group[pool_idx[0]][1], group[pool_idx[-1]][2]))
+        else:
+            # tier 2: drop stopwords and gazetteer terms; whatever survives is a
+            # candidate person name, even though we've never seen it before.
+            rest = [t for t in group
+                    if t[0].lower() not in _QUERY_STOPWORDS and t[0].lower() not in known]
+            # A lone capitalised word at the very start of the query is capitalised
+            # because it starts a sentence — it's the verb ("Forecast crime next
+            # month"), not a name. A name is either multi-token, or appears somewhere
+            # other than position 0.
+            if rest and (len(rest) > 1 or rest[0][1] > 0):
+                spans.append((rest[0][1], rest[-1][2]))
         group.clear()
 
     for tok in tokens:
         if group and text[group[-1][2]:tok[1]] == " ":   # directly adjacent
             group.append(tok)
         else:
-            if group:
-                flush()
+            flush()
             group.append(tok)
-    if group:
-        flush()
+    flush()
     return spans
 
 

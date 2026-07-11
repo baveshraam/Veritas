@@ -49,3 +49,21 @@ def test_translate_is_noop_same_lang_and_errors_clearly_without_weights():
     assert translate("hello", "en", "en") == "hello"
     with pytest.raises(TranslationUnavailable):
         translate("hello", "en", "kn")
+
+
+def test_unknown_names_are_still_detected_as_persons():
+    """A name outside the KA pool must still be SEEN.
+
+    If NER can't see it, the orchestrator sees no subject in the query and the
+    previous turn's person stays in focus — so an officer asking about an unknown
+    suspect is silently handed a different person's record.
+    """
+    got = _labels("Does Zzyzx Qwertius have priors?")
+    assert ("PERSON", "Zzyzx Qwertius") in got
+
+
+def test_query_stopwords_are_not_mistaken_for_names():
+    for q in ("Show crime hotspots in Kolar",
+              "Trace the money trail",
+              "Forecast crime next month"):
+        assert not [e for e in ner_extract(q) if e.label == "PERSON"], q

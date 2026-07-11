@@ -24,3 +24,7 @@ Thumbs.db
 
 # Local Claude Code tooling (personal, not project-shared)
 .claude/
+
+.vercel
+.env*
+.shots/

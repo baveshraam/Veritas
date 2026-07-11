@@ -67,6 +67,15 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
                              f"({hits[0].get('record_count', 0)} record(s))")
             if len(hits) > 1:
                 resolved_note += f"; {len(hits) - 1} other person(s) share this name"
+        else:
+            # The turn names someone we hold no record for. The focus MUST be cleared,
+            # never inherited: leaving the previous turn's subject in place makes the
+            # engine answer about a different person entirely, and the officer is given
+            # someone else's record with nothing to indicate a substitution happened.
+            # Clearing it means retrieval finds nothing and the evaluator refuses —
+            # which is the correct answer to "tell me about a person we have no file on".
+            focus.active_person = None
+            resolved_note = f"no person matching '{named}' exists in the records"
     elif intents.has_unresolved_reference(query, entities):
         if state.active_entities.active_person:
             focus.active_person = state.active_entities.active_person
@@ -205,7 +214,11 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             polys, ev = prediction_agent.hotspots(dc)
             state.prediction_results["detect_hotspots"] = polys
             out += ev
-            _trace(state, "Prediction Agent (hotspots)", f"{len(polys)} cluster(s)", t0)
+            # the incident scatter under the polygons — a hull with no points beneath
+            # it is an assertion, not a hotspot
+            state.sql_query_results += sql_agent.fir_points(dc)
+            _trace(state, "Prediction Agent (hotspots)",
+                   f"{len(polys)} cluster(s) over {len(state.sql_query_results)} incidents", t0)
 
     elif intent == "FORECAST":
         dc = _district_code(state)
