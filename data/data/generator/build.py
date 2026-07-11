@@ -98,10 +98,17 @@ class Dataset:
     persons: list[Person] = field(default_factory=list)
     firs: list[Fir] = field(default_factory=list)
     criminal_records: list[CriminalRecord] = field(default_factory=list)
+    # Ground truth for entity resolution: (duplicate_person_id, original_person_id).
+    # These are the same human recorded twice under a spelling variant — exactly the
+    # data-quality problem Fellegi-Sunter exists to fix. Used to score ER, never loaded.
+    true_duplicates: list[tuple[str, str]] = field(default_factory=list)
 
 
-def _uid() -> str:
-    return str(uuid.uuid4())
+def _uid(rng: random.Random) -> str:
+    """UUIDs drawn from the seeded rng, not uuid4(), so a given seed rebuilds the
+    *same* dataset — ids included. Without this, reruns produce new person_ids and
+    nothing downstream (entity-resolution scoring, fixtures) can be reproduced."""
+    return str(uuid.UUID(int=rng.getrandbits(128), version=4))
 
 
 def _aadhaar_hash(rng: random.Random) -> str:
@@ -121,13 +128,13 @@ def make_officers(rng: random.Random, districts: list[str]) -> list[Officer]:
         for ps in _ps_codes_for(dc, 3):
             for role in ("SHO", "IO", "IO", "IO", "DSP"):
                 officers.append(Officer(
-                    officer_id=_uid(), badge_no=f"KAB{seq:05d}",
+                    officer_id=_uid(rng), badge_no=f"KAB{seq:05d}",
                     name=sample_name(rng, rng.choice("MF")),
                     ps_code=ps, district_code=dc, role=role))
                 seq += 1
     # a thin senior/analyst layer, one per state
     for role in ("SP", "IG", "SCRB_Analyst"):
-        officers.append(Officer(_uid(), f"KAB{seq:05d}", sample_name(rng, "M"),
+        officers.append(Officer(_uid(rng), f"KAB{seq:05d}", sample_name(rng, "M"),
                                 districts[0] + "-HQ", districts[0], role))
         seq += 1
     return officers
@@ -141,7 +148,7 @@ def make_persons(rng: random.Random, n: int) -> list[Person]:
         age = rng.randint(18, 70)
         dob = date(NOW.year - age, rng.randint(1, 12), rng.randint(1, 28))
         persons.append(Person(
-            person_id=_uid(), scrb_id=f"SCRB{i:07d}",
+            person_id=_uid(rng), scrb_id=f"SCRB{i:07d}",
             name_en=sample_name(rng, gender), name_kn=None,
             dob=dob, gender=gender, address_geom=sample_point(rng, dc),
             aadhaar_hash=_aadhaar_hash(rng),
@@ -190,7 +197,7 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
 
         complainant = rng.choice(persons)
         fir = Fir(
-            fir_id=_uid(), ps_code=ps, district_code=dc,
+            fir_id=_uid(rng), ps_code=ps, district_code=dc,
             fir_number=f"{year_seq[yr]:04d}/{yr}",
             date_filed=filed, ipc_sections=list(prior.ipc_sections),
             crime_type=prior.crime_type, occurrence_from=occ_from, occurrence_to=occ_to,
@@ -205,7 +212,7 @@ def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person]
             accused.criminal_history = True
             arrested = rng.random() < 0.7
             records.append(CriminalRecord(
-                record_id=_uid(), person_id=accused.person_id, fir_id=fir.fir_id,
+                record_id=_uid(rng), person_id=accused.person_id, fir_id=fir.fir_id,
                 role="Accused",
                 arrest_date=(filed.date() + timedelta(days=rng.randint(0, 30))) if arrested else None,
                 bail_status=rng.choice(BAIL_STATUSES) if arrested else "Not Applied",
@@ -240,6 +247,44 @@ def _district_name(code: str) -> str:
     return canonical_name(code) or code
 
 
+def inject_duplicates(rng: random.Random, persons: list[Person],
+                      rate: float = 0.06) -> list[tuple[str, str]]:
+    """Record ~6% of people a second time under a romanisation variant.
+
+    This is the real data-quality defect Fellegi-Sunter targets: the same human
+    entered twice as "Ramesh Gowda" and "Ramesha Gouda", different SCRB id, a
+    transposed DOB, a slightly different address, no shared Aadhaar. Without this
+    the ER pass would have nothing to find. Appends to `persons` in place and
+    returns the (duplicate_id, original_id) ground truth.
+    """
+    from ..nlp import transliterate
+
+    truth: list[tuple[str, str]] = []
+    originals = list(persons)
+    seq = len(persons)
+    for orig in originals:
+        if rng.random() >= rate:
+            continue
+        variants = [v for v in transliterate(orig.name_en) if v != orig.name_en]
+        if not variants:
+            continue
+        dob = orig.dob
+        if rng.random() < 0.4:      # transposed/mis-keyed day — common in real entry
+            dob = date(dob.year, dob.month, max(1, min(28, dob.day // 10 + (dob.day % 10) * 10)))
+        dup = Person(
+            person_id=_uid(rng), scrb_id=f"SCRB{seq:07d}",
+            name_en=rng.choice(variants), name_kn=None,
+            dob=dob, gender=orig.gender,
+            address_geom=orig.address_geom,        # same neighbourhood
+            aadhaar_hash=_aadhaar_hash(rng),       # not linkable on Aadhaar
+            criminal_history=False, risk_score=None,
+            gang_affiliation=orig.gang_affiliation, canonical_entity_id=None)
+        persons.append(dup)
+        truth.append((dup.person_id, orig.person_id))
+        seq += 1
+    return truth
+
+
 def generate(rng: random.Random, n_firs: int) -> Dataset:
     """Top-level: derive person/officer counts from FIR count, build a coherent set."""
     n_persons = max(20, int(n_firs * 0.7))
@@ -247,8 +292,12 @@ def generate(rng: random.Random, n_firs: int) -> Dataset:
     districts = sorted({sample_district(rng) for _ in range(min(31, n_firs))})
     officers = make_officers(rng, districts)
     persons = make_persons(rng, n_persons)
+    # duplicates exist before FIRs are filed, so a FIR can name either record —
+    # which is exactly why the duplicate goes undetected in the raw data.
+    truth = inject_duplicates(rng, persons)
     firs, records = make_firs(rng, officers, persons, n_firs)
-    return Dataset(officers=officers, persons=persons, firs=firs, criminal_records=records)
+    return Dataset(officers=officers, persons=persons, firs=firs,
+                   criminal_records=records, true_duplicates=truth)
 
 
 if __name__ == "__main__":

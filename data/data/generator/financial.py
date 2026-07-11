@@ -12,11 +12,10 @@ distinct from `flagged_suspicious`, which is a *detector output* set later by
 packages/ml_models via data.flag_transaction — the generator never pre-flags.
 """
 import random
-import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
-from .build import Dataset, Person
+from .build import Dataset, Person, _uid
 
 REPORTING_THRESHOLD = 50000          # ₹ — sub-threshold structuring sits just below this
 BANKS = ("SBI", "Canara", "KVG Bank", "Union Bank", "HDFC", "Axis")
@@ -51,7 +50,7 @@ class FinancialData:
 
 
 def _txn(rng, src, dst, amount, when, pattern=None, fir_id=None) -> Transaction:
-    return Transaction(str(uuid.uuid4()), round(amount, 2), when,
+    return Transaction(_uid(rng), round(amount, 2), when,
                        rng.choice(CHANNELS), src.account_id, dst.account_id,
                        pattern, fir_id)
 
@@ -60,7 +59,7 @@ def make_financial(rng: random.Random, ds: Dataset) -> FinancialData:
     """Accounts for a subset of persons (gang members over-represented), a normal
     transfer background, plus injected structuring and layering rings."""
     holders = _account_holders(rng, ds.persons)
-    accounts = [Account(str(uuid.uuid4()), rng.choice(BANKS),
+    accounts = [Account(_uid(rng), rng.choice(BANKS),
                         rng.choice(("Savings", "Current")),
                         _rand_open_date(rng), p.person_id) for p in holders]
     fin = FinancialData(accounts=accounts)

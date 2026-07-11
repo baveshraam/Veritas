@@ -23,6 +23,7 @@ def main() -> None:
     ap.add_argument("--no-init", action="store_true", help="skip schema init (assume tables exist)")
     ap.add_argument("--no-graph", action="store_true", help="skip Neo4j sync (Postgres only)")
     ap.add_argument("--no-embed", action="store_true", help="skip vector indexing")
+    ap.add_argument("--no-er", action="store_true", help="skip batch entity resolution")
     args = ap.parse_args()
 
     if not args.no_init:
@@ -36,6 +37,16 @@ def main() -> None:
         sync_graph(ds, fin)
         from ..gds import run_all as run_gds
         print(f"gds: {run_gds()}")   # pagerank/community/betweenness for HippoRAG + Louvain
+
+        # Batch entity resolution — the ONLY caller of resolve_entities. Runs after
+        # the graph exists so SAME_AS edges have Person nodes to attach to.
+        if not args.no_er:
+            from ml_models.entity_resolution import resolve_entities
+            matches = resolve_entities([p.person_id for p in ds.persons])
+            linked = sum(1 for m in matches if m.decision == "link")
+            print(f"entity resolution: {linked} links / {len(matches)} pairs scored "
+                  f"({len(ds.true_duplicates)} duplicates injected)")
+
     if not args.no_embed:
         from ..embeddings.index_job import run_all
         print(f"indexed: {run_all()}")

@@ -1,0 +1,27 @@
+[project]
+name = "veritas-ml-models"
+version = "0.1.0"
+description = "Veritas predictive analytics, financial-crime detection, entity resolution, fairness audit"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "numpy>=1.26",
+    "scipy>=1.13",
+    "scikit-learn>=1.5",
+    "veritas-data",
+]
+
+[project.optional-dependencies]
+forecasting = ["prophet>=1.1", "pandas>=2.2"]
+risk = ["xgboost>=2.1", "lightgbm>=4.5", "shap>=0.46"]
+financial = ["torch>=2.4"]          # hand-rolled GraphSAGE; no torch-geometric needed
+causal = ["dowhy>=0.11", "pandas>=2.2"]
+fairness = ["aequitas>=1.0", "pandas>=2.2"]
+dev = ["pytest>=8.0"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["ml_models*"]
