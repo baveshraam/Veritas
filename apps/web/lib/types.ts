@@ -46,3 +46,21 @@ export type Turn = {
 };
 
 export type Officer = { badge_no: string; name: string; role: string; ps_code: string };
+
+export type CopilotBrief = {
+  fir_id: string;
+  timeline: Record<string, any>[];
+  similar_cases: Record<string, any>[];
+  leads: string[];
+  draft_summary: string;
+};
+
+export type AnomalyAlert = {
+  alert_id: string;
+  district_code: string;
+  metric: string;
+  observed: number;
+  expected: number;
+  severity: "low" | "medium" | "high";
+  detected_at: string;
+};

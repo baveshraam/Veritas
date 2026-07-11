@@ -214,6 +214,13 @@ body::before {
   font-weight: 600;
 }
 .btn-accent:hover:not(:disabled) { background: #9ad3ff; }
+.btn-rec {
+  color: var(--sev-high);
+  border-color: rgba(246, 121, 154, 0.4);
+  background: rgba(246, 121, 154, 0.1);
+  animation: pulse 1.4s infinite;
+}
+.mic-wave { flex: 1; min-height: 42px; border-radius: var(--radius-sm); background: rgba(255, 255, 255, 0.04); }
 
 /* Reasoning trace ------------------------------------------------------ */
 .trace { margin: 8px 0 4px; }
@@ -361,3 +368,43 @@ body::before {
 @keyframes spin { to { transform: rotate(360deg); } }
 
 .maplibregl-ctrl-attrib, .maplibregl-ctrl-logo { display: none !important; }
+
+/* Investigation Copilot overlay --------------------------------------- */
+.copilot-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  background: rgba(5, 8, 16, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: 30px;
+  animation: fade 0.25s var(--ease) both;
+}
+.copilot-panel {
+  width: min(720px, 100%); max-height: 86vh;
+  background: var(--glass-strong);
+}
+.copilot-section { margin-bottom: 22px; }
+.copilot-section h3 {
+  margin: 0 0 10px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+.copilot-row {
+  display: flex; gap: 12px; padding: 7px 0; font-size: 13px;
+  border-bottom: 1px dashed var(--glass-line);
+}
+.copilot-date { flex: 0 0 auto; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.copilot-draft {
+  line-height: 1.7; font-size: 13px; color: var(--text-dim);
+  background: rgba(255, 255, 255, 0.03); border: 1px solid var(--glass-line);
+  border-radius: var(--radius-sm); padding: 12px;
+}
+.dim { color: var(--text-faint); font-size: 13px; }
+
+/* Alert toasts ---------------------------------------------------------- */
+.toast-stack {
+  position: fixed; right: 20px; bottom: 20px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px; width: 280px;
+}
+.toast { padding: 11px 13px; animation: rise 0.35s var(--ease) both; }
+.toast-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; font-weight: 600; }
+.toast-body { font-size: 12px; color: var(--text-dim); }
+.toast-high { border-color: rgba(246, 121, 154, 0.35); }

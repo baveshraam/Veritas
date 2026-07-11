@@ -1,6 +1,7 @@
-import type { EvidenceItem, FinalEvent, Officer, TraceEntry } from "./types";
+import type { CopilotBrief, EvidenceItem, FinalEvent, Officer, TraceEntry } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+export const WS_BASE = BASE.replace(/^http/, "ws");
 
 let token: string | null = null;
 export function setToken(t: string | null) {
@@ -47,15 +48,22 @@ export async function login(badge_no: string): Promise<{ officer: Officer }> {
  */
 export async function streamChat(
   sessionId: string,
-  query: string,
+  input: { query?: string; audio?: string; respondWithVoice?: boolean },
   language: "en" | "kn",
   onTrace: (t: TraceEntry) => void,
   onFinal: (f: FinalEvent) => void,
+  onAudio?: (base64: string) => void,
 ): Promise<void> {
   const res = await fetch(`${BASE}/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
-    body: JSON.stringify({ session_id: sessionId, query, language }),
+    body: JSON.stringify({
+      session_id: sessionId,
+      language,
+      ...(input.audio
+        ? { audio: input.audio, respond_with_voice: !!input.respondWithVoice }
+        : { query: input.query }),
+    }),
   });
   if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status})`);
 
@@ -90,11 +98,18 @@ export async function streamChat(
       }
       if (evt.type === "trace") onTrace(evt as TraceEntry);
       else if (evt.type === "final") onFinal(evt as FinalEvent);
+      else if (evt.type === "audio") onAudio?.(evt.data as string);
       // The engine failed. Surface it: an ignored error event leaves the console
       // spinning on keep-alive pings with no answer and no explanation.
       else if (evt.type === "error") throw new Error(evt.message ?? "Investigation failed");
     }
   }
+}
+
+export async function getCopilotBrief(firId: string): Promise<CopilotBrief> {
+  const r = await fetch(`${BASE}/copilot/${firId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(r.status === 404 ? "FIR not found" : "Copilot brief failed");
+  return r.json();
 }
 
 export async function exportPdf(sessionId: string): Promise<void> {
@@ -121,4 +136,23 @@ export function severityOf(confidence: number): "low" | "med" | "high" {
 
 export function evidenceFor(e: EvidenceItem): string {
   return e.source_type.replace(/_/g, " ").toLowerCase();
+}
+
+export function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve((r.result as string).split(",")[1]);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
+}
+
+/** Decodes base64 speech audio and plays it. Errors are swallowed — voice
+ * playback is an enhancement, never something a turn can fail on. */
+export function playBase64Audio(base64: string): void {
+  const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+  const url = URL.createObjectURL(new Blob([bytes], { type: "audio/wav" }));
+  const audio = new Audio(url);
+  audio.onended = () => URL.revokeObjectURL(url);
+  audio.play().catch(() => URL.revokeObjectURL(url));
 }

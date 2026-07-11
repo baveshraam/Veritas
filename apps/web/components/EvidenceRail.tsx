@@ -6,11 +6,12 @@ import { severityOf } from "@/lib/api";
  *  FULL content, not just the label — a citation you cannot inspect is a citation
  *  you cannot check, which defeats the point of having one. */
 export default function EvidenceRail({
-  evidence, active, onSelect,
+  evidence, active, onSelect, onOpenCopilot,
 }: {
   evidence: EvidenceItem[];
   active: string | null;
   onSelect: (id: string | null) => void;
+  onOpenCopilot: (firId: string) => void;
 }) {
   if (!evidence.length) {
     return (
@@ -42,6 +43,15 @@ export default function EvidenceRail({
             <div className="ev-body">{e.content}</div>
             {active === e.evidence_id && e.source_query && (
               <div className="ev-src">{e.source_query}</div>
+            )}
+            {active === e.evidence_id && e.source_type === "FIR_RECORD" && (
+              <button
+                className="btn"
+                style={{ marginTop: 8 }}
+                onClick={(ev) => { ev.stopPropagation(); onOpenCopilot(e.source_id); }}
+              >
+                Open Investigation Copilot
+              </button>
             )}
           </div>
         );

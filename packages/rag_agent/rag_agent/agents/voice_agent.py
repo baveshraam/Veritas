@@ -12,7 +12,7 @@ def transcribe(audio: bytes, language: str) -> tuple[str | None, str]:
     """Returns (text, trace detail)."""
     try:
         text = speech_to_text(audio, language)   # type: ignore[arg-type]
-        return text, f"Transcribed {len(audio)} bytes of {language} audio"
+        return text, (f'Transcribed: "{text}"' if text else "Transcription was empty")
     except VoiceUnavailable as e:
         return None, f"Speech model unavailable ({e}); expecting text input"
 

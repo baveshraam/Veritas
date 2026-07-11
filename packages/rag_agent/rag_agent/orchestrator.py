@@ -340,7 +340,13 @@ def node_evaluate(state: InvestigationState) -> InvestigationState:
 def node_synthesize(state: InvestigationState) -> InvestigationState:
     t0 = time.perf_counter()
     if state.requires_escalation:
-        state.final_answer = NOT_FOUND_MESSAGE
+        answer = NOT_FOUND_MESSAGE
+        note = None
+        if state.language != "en":
+            answer, note = translation_agent.to_language(answer, state.language)
+        if note:
+            answer = f"{answer}\n\n{note}"
+        state.final_answer = answer
         state.citations = []
         _trace(state, "Synthesis", "Refused to answer — no supporting evidence", t0)
         return state

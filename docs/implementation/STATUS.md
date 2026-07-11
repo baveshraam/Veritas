@@ -1,6 +1,8 @@
 # Status — what actually runs
 
-Last updated: the Kannada/voice pass.
+Last updated: the Console UI completeness pass (voice controls, Investigation
+Copilot workspace, live alert toasts — all previously backend-only, now wired
+into `apps/web`).
 
 ## Runs today, against the live stack
 
@@ -20,7 +22,9 @@ Last updated: the Kannada/voice pass.
 | Audit | Append-only, SHA-256, DB-level immutability | `test_api.py` |
 | **LLM synthesis** | **Gemini `gemini-flash-lite-latest`, degrading on any failure** | live API; [`02`](./02-llm-resilience.md) |
 | **Kannada translation** | **Self-hosted NLLB-200; IndicTrans2 when provisioned** | [`03`](./03-kannada-and-voice.md) |
-| **Voice input (ASR)** | **faster-whisper — English + Kannada, both self-hosted** | [`03`](./03-kannada-and-voice.md) |
+| **Voice input (ASR)** | **faster-whisper — English + Kannada, both self-hosted; push-to-talk + live waveform in the Console** | [`03`](./03-kannada-and-voice.md); `next build` |
+| **Investigation Copilot workspace** | **Timeline, MO-similar cases, ranked leads, draft summary — as a Console overlay from any FIR citation** | live API (`GET /copilot/{fir_id}`) |
+| **Live anomaly alerts** | **Isolation Forest district spikes streamed to the Console as toasts** | live API (`WS /alerts`) |
 
 ## Blocked, and precisely why
 

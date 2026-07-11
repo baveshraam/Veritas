@@ -10,6 +10,7 @@ precise reason anything is blocked). Where the two disagree, this folder is righ
 |---|---|
 | [`01-causal-layer.md`](./01-causal-layer.md) | Census 2011 ground truth (D17) + the DoWhy causal layer, and the generator defect it exposed |
 | [`02-llm-resilience.md`](./02-llm-resilience.md) | Gemini is live; degrading correctly when its quota isn't |
+| [`03-kannada-and-voice.md`](./03-kannada-and-voice.md) | Self-hosted translation/ASR/TTS, and the Console's push-to-talk UI |
 | [`STATUS.md`](./STATUS.md) | Current state at a glance: what runs, what's blocked, and on what |
 
 ## How to verify everything yourself

@@ -45,8 +45,22 @@ def test_transliterate_preserves_original_first():
     assert transliterate("") == []
 
 
-def test_translate_is_noop_same_lang_and_errors_clearly_without_weights():
+def test_translate_is_noop_same_lang_and_errors_clearly_without_weights(monkeypatch):
     assert translate("hello", "en", "en") == "hello"
+    with pytest.raises(TranslationUnavailable):
+        translate("hello", "en", "fr")  # unsupported pair — no model load, so this
+                                         # stays hermetic even when torch/transformers
+                                         # (and real weights) happen to be installed
+
+    # The "weights genuinely unavailable" contract, forced deterministically rather
+    # than by relying on this host lacking torch/transformers — which it may not.
+    # importlib.import_module (not `import data.nlp.translate as ...`) because
+    # data.nlp's __init__ re-exports the `translate` function under the same name,
+    # which shadows the submodule as an attribute of the `data.nlp` package.
+    import importlib
+    translate_mod = importlib.import_module("data.nlp.translate")
+    monkeypatch.setattr(translate_mod, "_load",
+                         lambda: (_ for _ in ()).throw(TranslationUnavailable("no weights")))
     with pytest.raises(TranslationUnavailable):
         translate("hello", "en", "kn")
 

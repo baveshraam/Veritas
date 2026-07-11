@@ -29,7 +29,7 @@ cd apps/web && npm install && npm run dev     # http://localhost:3000
 Sign in as any role — an IO and a DSP genuinely see different data.
 
 ```bash
-pytest                                        # 70 tests, all packages
+pytest                                        # 76 tests, all packages
 python packages/ml_models/fairness_run_audit.py   # pre-demo bias audit
 ```
 

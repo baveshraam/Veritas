@@ -1,7 +1,74 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import type { Turn } from "@/lib/types";
+import { blobToBase64 } from "@/lib/api";
 import ReasoningTrace from "./ReasoningTrace";
+
+/** Push-to-talk mic capture with a live waveform, drawn from an AnalyserNode —
+ * no charting dependency needed for a dozen bars on a canvas. */
+function useVoiceRecorder(onDone: (base64: string) => void) {
+  const [recording, setRecording] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const recRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+  const rafRef = useRef<number>(0);
+  const stopTracksRef = useRef<() => void>(() => {});
+
+  const draw = (analyser: AnalyserNode) => {
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    const canvas = canvasRef.current;
+    const ctx = canvas?.getContext("2d");
+    const loop = () => {
+      if (!canvas || !ctx) return;
+      analyser.getByteTimeDomainData(data);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      const bars = 24;
+      const step = Math.floor(data.length / bars);
+      for (let i = 0; i < bars; i++) {
+        const v = Math.abs(data[i * step] - 128) / 128;
+        const h = Math.max(2, v * canvas.height);
+        ctx.fillStyle = "#7cc4ff";
+        ctx.globalAlpha = 0.55 + v * 0.45;
+        ctx.fillRect(i * (canvas.width / bars), (canvas.height - h) / 2, canvas.width / bars - 2, h);
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    loop();
+  };
+
+  const start = async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stopTracksRef.current = () => stream.getTracks().forEach((t) => t.stop());
+
+    const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+    const ctx = new AudioCtx();
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 256;
+    ctx.createMediaStreamSource(stream).connect(analyser);
+    draw(analyser);
+
+    chunksRef.current = [];
+    const rec = new MediaRecorder(stream);
+    rec.ondataavailable = (e) => chunksRef.current.push(e.data);
+    rec.onstop = async () => {
+      cancelAnimationFrame(rafRef.current);
+      stopTracksRef.current();
+      ctx.close();
+      const blob = new Blob(chunksRef.current, { type: rec.mimeType });
+      if (blob.size > 0) onDone(await blobToBase64(blob));
+    };
+    rec.start();
+    recRef.current = rec;
+    setRecording(true);
+  };
+
+  const stop = () => {
+    recRef.current?.stop();
+    setRecording(false);
+  };
+
+  return { recording, canvasRef, toggle: () => (recording ? stop() : start()) };
+}
 
 /** Renders the answer with its [n] chips as real, clickable controls.
  *
@@ -28,19 +95,24 @@ function withCitations(
 }
 
 export default function ChatPane({
-  turns, busy, language, onLanguage, onSend, onCite, onExport, officer,
+  turns, busy, language, onLanguage, onSend, onSendAudio, voiceOut, onVoiceOut,
+  onCite, onExport, officer,
 }: {
   turns: Turn[];
   busy: boolean;
   language: "en" | "kn";
   onLanguage: (l: "en" | "kn") => void;
   onSend: (q: string) => void;
+  onSendAudio: (base64: string) => void;
+  voiceOut: boolean;
+  onVoiceOut: (v: boolean) => void;
   onCite: (evidenceId: string) => void;
   onExport: () => void;
   officer: { name: string; role: string; ps_code: string } | null;
 }) {
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
+  const { recording, canvasRef, toggle: toggleMic } = useVoiceRecorder(onSendAudio);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -74,6 +146,13 @@ export default function ChatPane({
               {l === "en" ? "EN" : "ಕನ್ನಡ"}
             </button>
           ))}
+          <button
+            className={`tab ${voiceOut ? "on" : ""}`}
+            onClick={() => onVoiceOut(!voiceOut)}
+            title="Speak the answer aloud"
+          >
+            {voiceOut ? "🔊" : "🔈"}
+          </button>
           <button className="tab" onClick={onExport} disabled={!turns.length} title="Export as PDF">
             PDF
           </button>
@@ -107,20 +186,34 @@ export default function ChatPane({
       </div>
 
       <div className="composer">
-        <textarea
-          value={text}
-          placeholder="Ask an investigative question…"
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
-              e.preventDefault();
-              send();
-            }
-          }}
-        />
-        <button className="btn btn-accent" onClick={send} disabled={busy || !text.trim()}>
-          {busy ? <span className="spinner" /> : "Ask"}
+        {recording ? (
+          <canvas ref={canvasRef} width={280} height={42} className="mic-wave" />
+        ) : (
+          <textarea
+            value={text}
+            placeholder="Ask an investigative question…"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+          />
+        )}
+        <button
+          className={`btn ${recording ? "btn-rec" : ""}`}
+          onClick={toggleMic}
+          disabled={busy && !recording}
+          title={recording ? "Stop and send" : "Push to talk"}
+        >
+          {recording ? "■" : "🎤"}
         </button>
+        {!recording && (
+          <button className="btn btn-accent" onClick={send} disabled={busy || !text.trim()}>
+            {busy ? <span className="spinner" /> : "Ask"}
+          </button>
+        )}
       </div>
     </div>
   );
