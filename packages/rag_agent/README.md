@@ -22,7 +22,7 @@ class EvidenceItem(BaseModel):
     source_type: Literal["FIR_RECORD", "CRIMINAL_RECORD", "GRAPH_RELATIONSHIP",
                           "COMMUNITY_SUMMARY", "ML_PREDICTION", "GEOSPATIAL_ANALYSIS"]
     source_id: str
-    source_query: Optional[str]        # exact SQL/Cypher that produced this
+    source_query: Optional[str]        # exact SQL / graph traversal that produced this
     content: str
     confidence: float
     timestamp: datetime
@@ -85,10 +85,10 @@ Produced by the Evidence Synthesis Agent, based on which specialist agent(s) con
 0. **Voice Agent** (only if `input_audio` is set): transcribes via `data.speech_to_text()`, populates `original_query`. Runs before the Orchestrator and appears in `agent_trace` as its own step so the demo shows "audio in → text out" explicitly.
 1. **Orchestrator** classifies intent, resolves pronouns/references against `SessionFocus` ("does **he** have priors" → look up `active_person`), updates `SessionFocus` (and calls `data.upsert_session_focus()` so it survives to the next turn), decomposes the query into subqueries, routes to specialist agents.
 2. **Retrieval**:
-   - **HippoRAG** (Gutiérrez et al., NeurIPS 2024) is the default path: extract query entities → seed **Personalized PageRank** (Neo4j GDS) over the knowledge graph → single-step multi-hop retrieval. ~10-20x cheaper than iterative retrieval.
-   - **Think-on-Graph / ToG** (Sun et al., ICLR 2024) kicks in when HippoRAG's confidence is low or the query is explicitly multi-hop/relational (e.g. "how are these three gangs financially connected over the last year"): the LLM iteratively beam-searches entity/relation paths on the graph itself, producing a traceable reasoning path instead of trusting one generated Cypher query.
-   - Louvain community summaries (Neo4j GDS) sit underneath both as the global-context layer.
-3. **Specialist agents** run in parallel where possible: Cypher Agent (NL→Cypher, validated via `EXPLAIN` before execution, **and** run through `packages/policy`'s depth/field rules for `officer_role` before execution — see Non-goals), SQL Agent (text-to-SQL against the `data/` schema, same policy pass), Vector Search Agent (hybrid dense+BM25, RRF fusion), Geospatial Agent (PostGIS), Prediction Agent (calls `packages/ml_models`'s `detect_hotspots`/`forecast_crime`/`score_risk`/`predict_recidivism`/`estimate_causal_effect`/`flag_transactions` — never predicts inline; `estimate_causal_effect` specifically for "why"/socioeconomic-correlation questions), Translation Agent (IndicTrans2).
+   - **HippoRAG** (Gutiérrez et al., NeurIPS 2024) is the default path: extract query entities → seed **Personalized PageRank** (`data.gds`, NetworkX) over the knowledge graph → single-step multi-hop retrieval. ~10-20x cheaper than iterative retrieval.
+   - **Think-on-Graph / ToG** (Sun et al., ICLR 2024) kicks in when HippoRAG's confidence is low or the query is explicitly multi-hop/relational (e.g. "how are these three gangs financially connected over the last year"): the LLM iteratively beam-searches entity/relation paths on the graph itself, producing a traceable reasoning path instead of trusting one generated query.
+   - Louvain community summaries (`data.gds`, NetworkX) sit underneath both as the global-context layer.
+3. **Specialist agents** run in parallel where possible: Graph Agent (bounded NetworkX traversal over the `graph_edge` list, depth-capped by `packages/policy`'s rules for `officer_role` *before* the walk starts — see Non-goals), SQL Agent (text-to-SQL against the `data/` schema, same policy pass), Vector Search Agent (hybrid dense+BM25, RRF fusion), Geospatial Agent (lat/lng + KDE/DBSCAN), Prediction Agent (calls `packages/ml_models`'s `detect_hotspots`/`forecast_crime`/`score_risk`/`predict_recidivism`/`estimate_causal_effect`/`flag_transactions` — never predicts inline; `estimate_causal_effect` specifically for "why"/socioeconomic-correlation questions), Translation Agent (IndicTrans2).
 4. **Evidence Evaluator** — CRAG-style (Yan et al., 2024): scores each retrieval batch for relevance/confidence and triggers one of: **accept** → **widen query and retry** → explicitly answer **"not found in available records."** Never fabricates on empty evidence — this is the single most important trust guarantee in the whole system.
 5. **Evidence Synthesis Agent** produces `final_answer`, ordered `citations` (each traceable to an `EvidenceItem`), and the `visualization` payload. `apps/api` forwards the **full** `evidence_items` list (not just `citations`) in the SSE final event, so the frontend's evidence-rail drawer has real content to show, not just a label.
 6. **Voice Agent** (only if `respond_with_voice`): synthesizes `output_audio` from `final_answer` via `data.text_to_speech()`.
@@ -112,7 +112,7 @@ packages/rag_agent/
     hipporag.py          # personalized PageRank retrieval
     tog.py                # beam-search deep-dive
   agents/
-    cypher_agent.py, sql_agent.py, vector_agent.py, geo_agent.py,
+    graph_agent.py, sql_agent.py, vector_agent.py, geo_agent.py,
     prediction_agent.py, synthesis_agent.py, translation_agent.py, voice_agent.py
   evidence/
     evaluator.py          # CRAG-style scoring/escalation
@@ -123,9 +123,9 @@ packages/rag_agent/
 ## Provides / Consumes
 - **Provides to `apps/api`**: `run_investigation(state) -> InvestigationState`, `generate_copilot_brief(fir_id, officer_role) -> CopilotBrief`. These are the only two entrypoints.
 - **Consumes from `packages/ml_models`**: `score_risk`, `predict_recidivism`, `forecast_crime`, `detect_hotspots`, `flag_transactions`, `estimate_causal_effect` (exact signatures in that package's README) — via the Prediction Agent only. **Not** `resolve_entities` (batch, called from `data/generator/` instead) and **not** `check_anomalies` (called directly by `apps/api` for `/alerts`).
-- **Consumes from `data/`**: Postgres session (`data.db.get_session()`), Neo4j driver (`data.graph.get_driver()`), vector store client, `speech_to_text`/`text_to_speech`, and the session/conversation write helpers (`upsert_session_focus`, `get_session_focus`) — never opens its own connection.
+- **Consumes from `data/`**: Postgres session (`data.db.get_session()`), the knowledge graph (`data.graph.load_graph()`), vector store client, `speech_to_text`/`text_to_speech`, and the session/conversation write helpers (`upsert_session_focus`, `get_session_focus`) — never opens its own connection.
 - **Consumes from `packages/policy`**: the same role→field/depth rules `apps/api` enforces on structured responses, applied here at query-construction time (see Non-goals).
 
 ## Non-goals
 - No UI rendering, no schema definitions, no ML model training — this package calls `ml_models`, it doesn't contain them.
-- **Not** a no-RBAC zone: masking a field (e.g. victim identity) or capping traversal depth *after* a Cypher query already ran is too late — those constraints must shape the query itself. So the Cypher/SQL Agents import the shared `packages/policy` module (the same rules `apps/api` owns and versions) and apply them while building queries. `apps/api` still owns and defines the rules; this package only enforces the subset that can't be enforced post-hoc. Everything that *can* be checked on the final response (e.g. full-record masking) stays in `apps/api`.
+- **Not** a no-RBAC zone: masking a field (e.g. victim identity) or capping traversal depth *after* a traversal already ran is too late — those constraints must shape the query itself. So the Graph/SQL Agents import the shared `packages/policy` module (the same rules `apps/api` owns and versions) and apply them while building queries. `apps/api` still owns and defines the rules; this package only enforces the subset that can't be enforced post-hoc. Everything that *can* be checked on the final response (e.g. full-record masking) stays in `apps/api`.

@@ -50,16 +50,21 @@ def _attractors(district_code: str) -> tuple[tuple[float, float], ...]:
     )
 
 
-def sample_point(rng: random.Random, district_code: str) -> str:
-    """WKT 'POINT(lng lat)'. SRID 4326 is applied on load."""
+def sample_point(rng: random.Random, district_code: str) -> tuple[float, float]:
+    """A (latitude, longitude) pair, both plain decimals.
+
+    Was WKT for a PostGIS geometry column. The organizers' reference schema stores
+    latitude/longitude as DECIMAL, and Catalyst Data Store has no geometry type, so
+    coordinates are two ordinary numbers now. Nothing downstream loses anything:
+    KDE/DBSCAN always worked on lat/lng arrays, never on PostGIS functions.
+    """
     if rng.random() < _BACKGROUND_SHARE:
         lat, lng = _centroids()[district_code]
         spread = _BACKGROUND_SPREAD
     else:
         lat, lng = rng.choice(_attractors(district_code))
         spread = _LOCAL_SPREAD
-    return (f"POINT({lng + rng.gauss(0, spread):.6f} "
-            f"{lat + rng.gauss(0, spread):.6f})")
+    return (round(lat + rng.gauss(0, spread), 6), round(lng + rng.gauss(0, spread), 6))
 
 
 if __name__ == "__main__":

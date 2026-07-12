@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from policy import ROLE_RANK
 
@@ -73,8 +73,17 @@ def _load_officer(officer_id: str, claimed_role: str) -> Officer:
 
 
 async def current_officer(
+    request: Request,
     creds: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> Officer:
+    # Catalyst Authentication is the identity provider wherever a Catalyst project is
+    # configured (i.e. every deployed environment). The self-signed JWT below is the
+    # local/offline path only — it is what the test-suite and `docker compose up`
+    # run against, and it is why the secret still refuses to default in production.
+    from .catalyst_auth import current_officer_catalyst, enabled
+    if enabled():
+        return await current_officer_catalyst(request)
+
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
     try:

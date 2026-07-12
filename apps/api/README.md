@@ -46,7 +46,7 @@ JWT with a `role` claim: `IO, SHO, DSP, SP, IG, SCRB_Analyst`. Verified in middl
 - Victim identity is masked below DSP rank.
 - Graph traversal depth is capped by role (e.g. IO can't run unbounded multi-hop financial traversals; DSP+ can).
 
-**Two enforcement points, one rule set.** Field-masking on *structured* responses (`/fir/{id}`, `/person/{id}`) can be applied post-hoc, so it runs here, as FastAPI middleware, on every response before it leaves the handler. But depth-capping and content-masking on the free-text `/chat` answer **cannot** be enforced after the fact — you can't un-traverse a graph or reliably redact a name out of generated prose. So the same rules also run *inside* `packages/rag_agent`'s Cypher/SQL Agents, at query-construction time, before anything is retrieved.
+**Two enforcement points, one rule set.** Field-masking on *structured* responses (`/fir/{id}`, `/person/{id}`) can be applied post-hoc, so it runs here, as FastAPI middleware, on every response before it leaves the handler. But depth-capping and content-masking on the free-text `/chat` answer **cannot** be enforced after the fact — you can't un-traverse a graph or reliably redact a name out of generated prose. So the same rules also run *inside* `packages/rag_agent`'s Graph/SQL Agents, at query-construction time, before anything is retrieved.
 
 To avoid duplicating (and inevitably drifting) the rule definitions, they live in a small shared package, **`packages/policy`** — imported by both `apps/api` (middleware + this package owns/versions the rules) and `packages/rag_agent` (query-time enforcement). This is the one deliberate exception to "no shared files between tracks" (see root `CLAUDE.md` Repository Structure): RBAC is inherently cross-cutting and can't be owned by a single track without either duplicating logic or creating a masking gap.
 
@@ -70,4 +70,4 @@ apps/api/
 - **Consumes from `data/`**: `get_session_focus`/`upsert_session_focus`, `write_conversation_turn`, `get_conversation_history` (for `/export/pdf`), `write_audit`, and the `officer` table lookup for policy-relevant fields (PS code, role).
 
 ## Non-goals
-- No Cypher/SQL generation, no retrieval logic, no ML inference, no RBAC *rule definitions* (those live in `packages/policy`) — all of that lives elsewhere. This folder is auth + policy *enforcement on structured responses* + transport + persistence orchestration, nothing else.
+- No graph traversal or SQL generation, no retrieval logic, no ML inference, no RBAC *rule definitions* (those live in `packages/policy`) — all of that lives elsewhere. This folder is auth + policy *enforcement on structured responses* + transport + persistence orchestration, nothing else.

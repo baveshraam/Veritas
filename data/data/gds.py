@@ -1,119 +1,133 @@
-"""Neo4j GDS job scripts. On-demand — not a scheduled service.
+"""Graph algorithms — NetworkX, replacing Neo4j GDS. On-demand, not a scheduled service.
 
-Lives at `data.gds` (not `data/graph/`) because `data.graph` is already the driver
-module; a `graph/` package would shadow it. The .cypher constraint files stay in
-data/graph/ as resources.
+Every algorithm the architecture named survives verbatim in method; only the engine
+changed, because Catalyst has no graph-database service for GDS to run on:
 
-packages/rag_agent reads the results (pagerank/community node properties) and calls
-`personalized_pagerank` — the HippoRAG retrieval primitive. It never runs the
-algorithms itself. Run the write-back jobs after a graph sync: `python -m data.gds`.
+    GDS                            ->  NetworkX
+    gds.pageRank.write             ->  nx.pagerank
+    gds.louvain.write              ->  nx.community.louvain_communities
+    gds.betweenness.write          ->  nx.betweenness_centrality (pivot-sampled)
+    gds.pageRank(sourceNodes=...)  ->  nx.pagerank(personalization=...)   <- HippoRAG
+
+Results are written back onto the `person` table (pagerank/community/betweenness) —
+the same node properties GDS wrote, now on the record they describe. packages/rag_agent
+reads them and calls `personalized_pagerank`; it never runs an algorithm itself.
+
+Run after a graph sync: `python -m data.gds`.
 """
-from .graph import get_driver
+import networkx as nx
+from sqlalchemy import text
 
-GRAPH_NAME = "veritas"
+from .db import get_session
+from .graph import load_graph, reset_graph, undirected
 
-# Project the whole crime graph (persons, events, accounts, gangs) so PageRank
-# influence and Louvain communities span co-offending, shared events, and money.
-_CREATE = """
-CALL gds.graph.project(
-  $name,
-  ['Person', 'CrimeEvent', 'Account', 'Gang'],
-  {
-    CO_ACCUSED_WITH: {orientation: 'UNDIRECTED'},
-    ACCUSED_IN:      {orientation: 'UNDIRECTED'},
-    MEMBER_OF:       {orientation: 'UNDIRECTED'},
-    OWNS_ACCOUNT:    {orientation: 'UNDIRECTED'},
-    TRANSFERRED_TO:  {orientation: 'NATURAL'}
-  }
-) YIELD graphName, nodeCount, relationshipCount
-RETURN graphName, nodeCount, relationshipCount
-"""
+# Exact betweenness is O(V*E) — minutes on ~19k nodes. Pivot sampling (Brandes & Pich)
+# is the standard approximation and is what keeps "who brokers between these gangs"
+# an interactive question instead of a batch job.
+_BETWEENNESS_PIVOTS = 500
 
 
-def _ensure_projection(session, recreate: bool = False) -> None:
-    exists = session.run("CALL gds.graph.exists($name) YIELD exists RETURN exists",
-                         name=GRAPH_NAME).single()["exists"]
-    if exists and recreate:
-        session.run("CALL gds.graph.drop($name)", name=GRAPH_NAME)
-        exists = False
-    if not exists:
-        session.run(_CREATE, name=GRAPH_NAME)
+def _persons(g: nx.Graph) -> list[str]:
+    return [n for n, d in g.nodes(data=True) if d.get("label") == "Person"]
 
 
-def project() -> dict:
-    with get_driver().session() as s:
-        _ensure_projection(s, recreate=True)
-        rec = s.run("CALL gds.graph.list($name) "
-                    "YIELD graphName, nodeCount, relationshipCount "
-                    "RETURN graphName, nodeCount, relationshipCount",
-                    name=GRAPH_NAME).single()
-        return dict(rec) if rec else {}
+def _write_metric(column: str, values: dict[str, float]) -> None:
+    """Write one metric back onto the person rows it describes."""
+    if not values:
+        return
+    rows = [{"pid": pid, "v": v} for pid, v in values.items()]
+    with get_session() as s:
+        s.execute(text(
+            f"UPDATE person SET {column} = :v WHERE person_id = CAST(:pid AS uuid)"
+        ), rows)
 
 
 def run_pagerank() -> None:
     """Influence — who matters in the network."""
-    with get_driver().session() as s:
-        _ensure_projection(s)
-        s.run("CALL gds.pageRank.write($name, {writeProperty: 'pagerank'})", name=GRAPH_NAME)
+    u = undirected()
+    scores = nx.pagerank(u, weight="weight")
+    _write_metric("pagerank", {n: scores[n] for n in _persons(u)})
 
 
 def run_louvain() -> None:
     """Communities — the organized-crime / gang clusters."""
-    with get_driver().session() as s:
-        _ensure_projection(s)
-        s.run("CALL gds.louvain.write($name, {writeProperty: 'community'})", name=GRAPH_NAME)
+    u = undirected()
+    communities = nx.community.louvain_communities(u, weight="weight", seed=0)
+    labels = {n: i for i, members in enumerate(communities) for n in members}
+    _write_metric("community", {n: labels[n] for n in _persons(u) if n in labels})
 
 
 def run_betweenness() -> None:
     """Brokers — persons bridging otherwise separate groups."""
-    with get_driver().session() as s:
-        _ensure_projection(s)
-        s.run("CALL gds.betweenness.write($name, {writeProperty: 'betweenness'})",
-              name=GRAPH_NAME)
+    u = undirected()
+    k = min(_BETWEENNESS_PIVOTS, u.number_of_nodes())
+    scores = nx.betweenness_centrality(u, k=k, weight="weight", seed=0)
+    _write_metric("betweenness", {n: scores[n] for n in _persons(u)})
 
 
 def personalized_pagerank(seed_person_ids: list[str], top_k: int = 20) -> list[dict]:
     """HippoRAG's retrieval primitive (Gutiérrez et al., NeurIPS 2024): seed
     Personalized PageRank from the query's entities and read off the highest-scoring
-    nodes. Single-step multi-hop retrieval — no iterative LLM calls."""
+    nodes. Single-step multi-hop retrieval — no iterative LLM calls.
+
+    nx.pagerank takes `personalization` directly, so this is the same computation
+    GDS's `sourceNodes` performed — a port, not an approximation of it.
+    """
     if not seed_person_ids:
         return []
-    with get_driver().session() as s:
-        _ensure_projection(s)
-        return s.run(
-            "MATCH (p:Person) WHERE p.person_id IN $seeds "
-            "WITH collect(p) AS sourceNodes "
-            "CALL gds.pageRank.stream($name, "
-            "     {sourceNodes: sourceNodes, maxIterations: 20}) "
-            "YIELD nodeId, score "
-            "WITH gds.util.asNode(nodeId) AS n, score WHERE score > 0 "
-            "RETURN labels(n)[0] AS label, "
-            "  coalesce(n.person_id, n.fir_id, n.account_id, n.name) AS id, "
-            "  coalesce(n.name_en, n.crime_type, n.name, '') AS text, "
-            "  score ORDER BY score DESC LIMIT $k",
-            seeds=seed_person_ids, name=GRAPH_NAME, k=top_k,
-        ).data()
+    u = undirected()
+    seeds = [s for s in seed_person_ids if s in u]
+    if not seeds:
+        return []
+
+    scores = nx.pagerank(u, personalization={s: 1.0 for s in seeds}, weight="weight")
+    ranked = sorted(((n, sc) for n, sc in scores.items() if sc > 0),
+                    key=lambda t: -t[1])[:top_k]
+    names = _display_names([n for n, _ in ranked])
+    return [{"label": u.nodes[n].get("label", "Node"), "id": n,
+             "text": names.get(n, ""), "score": float(sc)} for n, sc in ranked]
 
 
 def community_members(community_id: int, limit: int = 25) -> list[dict]:
     """Members of a Louvain community — the 'matches Community 47' copilot lead."""
-    with get_driver().session() as s:
-        return s.run(
-            "MATCH (p:Person) WHERE p.community = $cid "
-            "RETURN p.person_id AS person_id, p.name_en AS name_en, "
-            "  p.gang_affiliation AS gang, coalesce(p.pagerank, 0.0) AS pagerank "
-            "ORDER BY pagerank DESC LIMIT $limit",
-            cid=community_id, limit=limit,
-        ).data()
+    with get_session() as s:
+        return [dict(r) for r in s.execute(text(
+            "SELECT CAST(person_id AS text) AS person_id, name_en, "
+            "  gang_affiliation AS gang, COALESCE(pagerank, 0.0) AS pagerank "
+            "FROM person WHERE community = :cid "
+            "ORDER BY pagerank DESC NULLS LAST LIMIT :limit"
+        ), {"cid": community_id, "limit": limit}).mappings().all()]
+
+
+def _display_names(node_ids: list[str]) -> dict[str, str]:
+    """Readable text for mixed node kinds. The graph holds ids; the records hold the
+    names — one lookup per kind, not per node."""
+    if not node_ids:
+        return {}
+    out: dict[str, str] = {}
+    with get_session() as s:
+        for sql in (
+            "SELECT CAST(person_id AS text) AS id, name_en AS t FROM person "
+            "WHERE CAST(person_id AS text) = ANY(:ids)",
+            "SELECT CAST(fir_id AS text) AS id, crime_type AS t FROM fir "
+            "WHERE CAST(fir_id AS text) = ANY(:ids)",
+            "SELECT account_id AS id, bank AS t FROM account WHERE account_id = ANY(:ids)",
+        ):
+            for r in s.execute(text(sql), {"ids": node_ids}).mappings().all():
+                out[r["id"]] = r["t"] or ""
+    for n in node_ids:      # Gang/Location nodes are named by their id
+        out.setdefault(n, n)
+    return out
 
 
 def run_all() -> dict:
-    stats = project()
+    reset_graph()
+    g = load_graph()
     run_pagerank()
     run_louvain()
     run_betweenness()
-    return stats
+    return {"nodeCount": g.number_of_nodes(), "relationshipCount": g.number_of_edges()}
 
 
 if __name__ == "__main__":
-    print("projected + wrote pagerank/community/betweenness:", run_all())
+    print("wrote pagerank/community/betweenness:", run_all())

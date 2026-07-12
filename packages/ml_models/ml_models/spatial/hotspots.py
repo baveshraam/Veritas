@@ -29,8 +29,8 @@ MIN_SAMPLES = 10
 def _fetch_points(district_code: str, date_range: tuple[date, date]) -> np.ndarray:
     with get_session() as s:
         rows = s.execute(text(
-            "SELECT ST_Y(location_geom) AS lat, ST_X(location_geom) AS lng "
-            "FROM fir WHERE district_code = :dc AND location_geom IS NOT NULL "
+            "SELECT latitude AS lat, longitude AS lng "
+            "FROM fir WHERE district_code = :dc AND latitude IS NOT NULL "
             "  AND date_filed >= :d0 AND date_filed < :d1"
         ), {"dc": district_code, "d0": date_range[0], "d1": date_range[1]}).all()
     return np.array([[r.lat, r.lng] for r in rows], dtype=float)

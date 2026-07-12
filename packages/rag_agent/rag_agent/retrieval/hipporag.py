@@ -10,7 +10,7 @@ not run graph algorithms).
 """
 from data.gds import personalized_pagerank
 
-from ..agents import cypher_agent
+from ..agents import graph_agent
 from ..state import EvidenceItem
 
 TOP_K = 15
@@ -20,7 +20,7 @@ def seed_person_ids(person_names: list[str]) -> list[str]:
     """Resolve query entity names to graph person_ids."""
     seeds: list[str] = []
     for name in person_names:
-        for hit in cypher_agent.person_by_name(name):
+        for hit in graph_agent.person_by_name(name):
             seeds.append(hit["person_id"])
     return seeds
 

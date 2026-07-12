@@ -9,13 +9,14 @@ empty or weak does not proceed to synthesis. It either widens once, or it stops 
 says so. Nothing downstream can invent an answer, because synthesis is only ever
 handed the evidence list — it has no other input.
 """
+import re
 import time
 
 from data import upsert_session_focus
 
 from . import intents
 from .agents import (
-    cypher_agent, prediction_agent, sql_agent, synthesis_agent,
+    graph_agent, prediction_agent, sql_agent, synthesis_agent,
     translation_agent, vector_agent, voice_agent,
 )
 from .evidence.evaluator import NOT_FOUND_MESSAGE, evaluate
@@ -187,13 +188,13 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             _trace(state, "Prediction Agent", "Risk + recidivism scored", t1)
 
     elif intent == "PERSON_NETWORK" and pid:
-        rows = cypher_agent.person_network(pid, role)
+        rows = graph_agent.person_network(pid, role)
         state.graph_query_results += rows
         out += [_network_evidence(r) for r in rows]
         _trace(state, "Cypher Agent", f"{len(rows)} associate(s) within policy depth", t0)
 
     elif intent == "ALIAS_CHECK" and pid:
-        rows = cypher_agent.aliases(pid)
+        rows = graph_agent.aliases(pid)
         state.graph_query_results += rows
         if rows:
             out += [EvidenceItem(
@@ -218,7 +219,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         _trace(state, "Cypher Agent (SAME_AS)", f"{len(rows)} alias record(s)", t0)
 
     elif intent == "FINANCIAL" and pid:
-        rows = cypher_agent.money_trail(pid, role)
+        rows = graph_agent.money_trail(pid, role)
         state.graph_query_results += rows
         out += [EvidenceItem(
             evidence_id=f"flow:{r['from_account']}:{r['to_account']}",
@@ -232,6 +233,28 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             _, ev = prediction_agent.transactions(acct)
             out += ev
             break
+
+    elif intent == "FIR_LOOKUP":
+        # The classifier has always had this intent; the branch was missing, so
+        # "what is the status of FIR 0112/2026" fell through to semantic search and
+        # got refused — an exact-ID lookup answered by the wrong retriever.
+        m = re.search(r"\b(\d{3,4}/\d{4})\b", state.original_query or "")
+        if m:
+            rows = sql_agent.fir_by_number(m.group(1), role, ps)
+            state.sql_query_results += rows
+            out += [EvidenceItem(
+                evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
+                source_id=str(r["fir_id"]),
+                source_query="SELECT ... FROM fir WHERE fir_number = :n",
+                content=(f"FIR {r['fir_number']} ({r['district']}, {r['ps_code']}) — "
+                         f"{r['crime_type']}, IPC {', '.join(r['ipc_sections'] or [])}, "
+                         f"filed {r['date_filed']:%d %b %Y}, status {r['case_status']}. "
+                         f"MO: {r['modus_operandi'] or 'not recorded'}."),
+                confidence=0.97) for r in rows]
+            state.active_entities.active_fir = rows[0]["fir_id"] if rows else \
+                state.active_entities.active_fir
+            _trace(state, "SQL Agent (FIR lookup)",
+                   f"{len(rows)} record(s) for FIR {m.group(1)} within policy scope", t0)
 
     elif intent == "HOTSPOT":
         dc = _district_code(state)

@@ -1,19 +1,19 @@
 # Status — what actually runs
 
-Last updated: the Console UI completeness pass (voice controls, Investigation
-Copilot workspace, live alert toasts — all previously backend-only, now wired
-into `apps/web`).
+Last updated: the Zoho Catalyst migration (v5) — AppSail, Web Client Hosting,
+Catalyst Authentication and SmartBrowz are now the deployed platform; Neo4j and
+PostGIS are gone. Features, algorithms and UI are unchanged by that migration.
 
 ## Runs today, against the live stack
 
 | Capability | Backing | Verified by |
 |---|---|---|
-| Knowledge graph + GDS | Neo4j, PageRank / Louvain / betweenness | `data/tests/test_graph_sync.py` |
+| Knowledge graph | NetworkX over a `graph_edge` table — PageRank / Louvain / betweenness | `data/tests/test_graph_sync.py` |
 | Retrieval | HippoRAG (personalised PageRank) + Think-on-Graph beam search | `test_engine.py`, live API |
 | Verification | CRAG evaluator — refuses on weak/empty evidence | `test_engine.py` |
 | Entity resolution | Fellegi–Sunter, 100% precision/recall on injected duplicates | `test_entity_resolution.py` |
 | Forecasting | Prophet + MinT (coherence to 1e-9) | `test_models.py` |
-| Hotspots | KDE + DBSCAN over PostGIS | `test_models.py` |
+| Hotspots | KDE + DBSCAN over plain lat/lng columns | `test_models.py` |
 | Risk / recidivism | XGBoost+SHAP, calibrated LightGBM, temporal split | `test_models.py` |
 | Financial crime | Rule-based structuring detector + GraphSAGE GNN | `test_models.py` |
 | **Causal inference** | **DoWhy on real Census 2011 — identified, estimated, refuted** | live API; [`01`](./01-causal-layer.md) |

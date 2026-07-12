@@ -6,9 +6,8 @@ requires-python = ">=3.11"
 dependencies = [
     "sqlalchemy>=2.0",
     "psycopg[binary]>=3.2",
-    "geoalchemy2>=0.15",
     "pgvector>=0.3",
-    "neo4j>=5.20",
+    "networkx>=3.3",       # graph algorithms; replaces Neo4j GDS
     "pydantic>=2.7",
 ]
 

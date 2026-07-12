@@ -18,6 +18,11 @@
 - **v3.2**: Cross-README integration audit. Closed real gaps found by treating the 5 READMEs as one system: added `officer`/`session`/`conversation_turn` tables (audit_log was hash-only and had no plaintext conversation store — broke PDF export and multi-turn resumption); added the missing `visualization` + full `evidence_items` fields to the chat response (the "context view swaps by query type" and citation-drawer features had no wire contract); defined all 9 previously-untyped `ml_models` return types; fixed `resolve_entities` (was documented as a live per-query call, corrected to the batch job it actually is, run from `data/`'s generator); wired the previously-orphaned `estimate_causal_effect` and Investigation Copilot (`generate_copilot_brief`) to actual callers; extracted `packages/policy` as the one deliberate shared module, since depth-capping/masking can't be enforced post-hoc alone. Full findings in the audit that produced this pass.
 - **v4.1 (Console completeness pass)**: `apps/api` had three backend capabilities (`audio`/`respond_with_voice` on `/chat`, `GET /copilot/{fir_id}`, `WS /alerts`) with no UI ever built against them — `apps/web` had zero mic capture, no Copilot view, no alert surface, despite all three being Core/Differentiator rows in the requirement matrix. Closed all three in `apps/web/components/`: push-to-talk mic capture + live waveform (`ChatPane.tsx`, native `MediaRecorder`/`AnalyserNode`, no new dependency) with a voice-reply toggle that plays back the SSE `audio` frame; an Investigation Copilot overlay (`Copilot.tsx`) opened from any `FIR_RECORD` citation in the evidence rail; a live alert-toast stack (`AlertToasts.tsx`) off the `/alerts` WebSocket. Also gave the ASR trace step the actual transcript (`voice_agent.py`) instead of a byte count — the reasoning trace is supposed to be readable, and "Transcribed 41823 bytes" isn't. Verified: `tsc --noEmit` and `next build` clean; all three endpoints exercised live (`/copilot/{fir_id}`, `POST /chat` SSE, `WS /alerts`) against the running stack with real data — see [`docs/implementation/03-kannada-and-voice.md`](./docs/implementation/03-kannada-and-voice.md). Also fixed a genuine test hang: `data/tests/test_nlp.py`'s translation test assumed torch/transformers were absent to get a deterministic `TranslationUnavailable`; once the Kannada/voice work installed them, the test instead attempted a real network model load and stalled indefinitely — made hermetic with `monkeypatch`. Full suite: 76/76 passing. **Not verified**: actual microphone capture/playback in a real browser — no browser-automation tool was available this pass; the code path is exercised end-to-end on the backend only (see the doc above for exactly what that does and doesn't cover).
 
+- **v5 (Zoho Catalyst migration)**: Competition rule — deployment on Catalyst is mandatory, and using a third-party service *where a Catalyst equivalent exists* can invalidate the submission. Infrastructure was replaced; features, algorithms and UI were not. Done: FastAPI → **AppSail custom OCI runtime** (root `Dockerfile`, no backend rewrite); Next.js → **Slate/Web Client Hosting** (`output: "export"` — legal because every component is already `"use client"`; UI byte-identical); self-signed JWT → **Catalyst Authentication** (`apps/api/api/auth/catalyst_auth.py`; `packages/policy` untouched — Catalyst says *who*, policy still says *what they may see*; the officer record stays authoritative for role/ps_code); headless-Chrome PDF → **SmartBrowz** (`_smartbrowz_pdf`, local renderer demoted to offline fallback); **PostGIS deleted** — `location_geom`/`address_geom` → `latitude`/`longitude` DECIMAL per the organizers' ER diagram (KDE/DBSCAN never used PostGIS functions, only its storage, so no method changed); **Neo4j + GDS deleted** — the graph is now a flat `graph_edge` table traversed with **NetworkX** (`data/data/graph.py`, `data/data/gds.py`), because no Catalyst service corresponds to a graph database. Every algorithm ported exactly: PageRank, Louvain, betweenness (pivot-sampled), HippoRAG personalized PageRank (`nx.pagerank(personalization=…)` is the same computation as GDS `sourceNodes`), ToG beam search, and the role-capped bounded traversal. Account/Transaction had lived *only* in Neo4j and now have real tables. **One capability was lost, not migrated**: the LLM NL→Cypher long-tail fallback in the old Cypher Agent — with no Cypher to generate, there is nothing to translate into, and the SQL Agent is template-only. Verified: 80/80 tests, full generator rebuild (24.5K nodes / 136K edges), and the live stack driven end-to-end (`/health`, `/auth/token`, `/chat` SSE producing real ToG reasoning paths, `/copilot`).
+  **Not migrated, deliberately** — no Catalyst equivalent exists, documented as no-matching-service rather than silently swapped: Kannada NER/translation/ASR/TTS (Catalyst Zia offers **no** speech-to-text, **no** text-to-speech and **no** translation service at all — its catalog is Face Analytics, OCR, Identity Scanner, Image Moderation, Object Recognition, Barcode, Text Analytics; Zoho's STT models are English+Hindi and not exposed as a Catalyst service, so a swap would have *deleted* working Kannada voice input); the pgvector HippoRAG index (QuickML's RAG is a managed upload-documents pipeline with no arbitrary-embedding store and no custom retrieval hook); the hand-built explainable models (Zia AutoML is a black-box trainer and contradicts Layer 10).
+  **Still open**: audit-log immutability. `RULE … DO INSTEAD NOTHING` has no Catalyst Data Store equivalent (no rules, no triggers), and app-layer append-only is enforced by the same code that could bypass it. Not weakened silently — see the migration report.
+- **v5.1 (organizer ruling applied; AppSail deployed)**: The organizers ruled that **where no listed Catalyst service exists for a capability, an external or self-hosted alternative is permitted; where a Catalyst service does exist, it must be used.** That closes three items that were open in v5 as *permanently settled*, not pending: Kannada voice/NLP stays on self-hosted faster-whisper/NLLB (Zia has no speech or translation service at all), the HippoRAG index stays on pgvector (QuickML's RAG is managed-only), and audit-log immutability stays on the Postgres `RULE` mechanism (Data Store has no rules or triggers). Each is now justified as *no matching service exists, per organizer clarification* — not as a preference. The ruling explicitly does **not** exempt the relational store: Data Store *is* Catalyst's matching service for relational storage, so that migration remains mandatory and is the largest piece of work left. Also this pass: the backend was actually deployed (AppSail custom OCI, image on Docker Hub, real project `Veritas`), and the Technology Reference table below was rewritten to name which Catalyst service backs which layer.
+
 ---
 
 ## Design Philosophy
@@ -297,29 +302,28 @@ Predictive policing has a documented history of laundering historical policing b
 
 ## Technology Reference
 
-| Component | Technology | Notes |
+Deployment is on **Zoho Catalyst**, and where Catalyst has a matching service, that service is used — the competition rule is that using a third-party alternative *where a Catalyst equivalent exists* can invalidate the submission.
+
+**Catalyst services in use:**
+
+| Component | Catalyst service | Replaced | Notes |
+|---|---|---|---|
+| API runtime | **AppSail** (custom OCI runtime) | self-hosted uvicorn | Root `Dockerfile`; no backend rewrite — FastAPI runs as-is |
+| Console hosting | **Web Client Hosting** (Slate) | Next.js dev/Vercel | `output: "export"`; every component was already `"use client"` |
+| Identity | **Catalyst Authentication** | self-signed JWT | Catalyst says *who*; `packages/policy` still says *what they may see*. The `officer` record stays authoritative for role/ps_code |
+| PDF export | **SmartBrowz** | headless-Chrome subprocess | Local renderer demoted to offline fallback |
+| Relational store | **Data Store** | PostgreSQL | *In progress* — see changelog |
+
+**Application logic — not a Catalyst service, unchanged by the migration:** LangGraph, HippoRAG/ToG, Prophet+MinT, XGBoost+SHAP, LightGBM, Isolation Forest, DoWhy, Fellegi-Sunter, the AML GNN, Aequitas, Deck.gl/MapLibre, Sigma.js/Cytoscape, ECharts, Faker/Mimesis. Catalyst has no service that corresponds to any of these; they are the product, not the platform.
+
+**The three documented exceptions** — capabilities kept on external/self-hosted implementations. Each is permitted under the organizers' clarification that *where no listed Catalyst service exists for a capability, an external or self-hosted alternative is allowed*; where one does exist, it must be used. These are not preferences, they are absences:
+
+| Capability | Kept on | Why no Catalyst service exists |
 |---|---|---|
-| Knowledge Graph | Neo4j Community + GDS | Single instance sufficient |
-| Relational + Geospatial | PostgreSQL + PostGIS | FIR/person/socioeconomic + spatial |
-| Vector Store | Qdrant or pgvector | HippoRAG index lives here |
-| Agent Orchestration | LangGraph | Stateful graph, conditional edges, verification loop |
-| LLM | Claude / GPT-4o | Structured outputs, evidence synthesis |
-| Graph Reasoning | HippoRAG (personalized PageRank) + Think-on-Graph (beam search) | Published methods, not ad hoc RAG |
-| Kannada NLP | AI4Bharat (IndicNER, IndicTrans2, IndicXlit, IndicTTS) | Self-hosted |
-| Kannada ASR | Vakyansh | Self-hosted |
-| Entity Resolution | Fellegi-Sunter probabilistic linkage | Solves real name/alias duplication |
-| Forecasting | Prophet + MinT reconciliation | Coherent multi-level forecasts |
-| Risk/Recidivism | XGBoost+SHAP, LightGBM, Isolation Forest | Explainable per-prediction |
-| Causal Inference | DoWhy | Confounder-adjusted socioeconomic claims |
-| Financial Crime | Rule-based structuring detector + heterogeneous/temporal GNN | Explainable baseline + SOTA pattern catch |
-| Fairness Audit | Aequitas | Criminal-justice-purpose-built toolkit |
-| Spatial Viz | Deck.gl + MapLibre | Self-hosted OSM tiles |
-| Network Viz | Sigma.js / Cytoscape.js | Force-directed |
-| Charts | Apache ECharts | Trend lines, Sankey |
-| API | FastAPI, single service | Async, SSE/WebSocket |
-| Auth | JWT + in-process policy module | Same guarantees as Keycloak+OPA, no extra infra |
-| PDF Export | Puppeteer | Headless Chrome |
-| Data Generation | Faker/Mimesis + real NCRB/Census/NSSO/KA-GIS | Synthetic crime on real ground truth |
+| Kannada ASR / TTS / translation | faster-whisper, NLLB-200, IndicTTS (self-hosted) | Zia has **no** speech-to-text, **no** text-to-speech and **no** translation service. Its catalog is Face Analytics, OCR, Identity Scanner, Image Moderation, Object Recognition, Barcode, Text Analytics. Swapping would have *deleted* working Kannada voice input |
+| HippoRAG vector index | pgvector | QuickML's RAG is a managed upload-documents pipeline — no arbitrary-embedding store, no custom retrieval hook. Personalized-PageRank seeding cannot run inside it |
+| Knowledge graph | NetworkX over a `graph_edge` table | No Catalyst service is a graph database. Every GDS algorithm was ported exactly (PageRank, Louvain, betweenness, personalized PageRank, bounded traversal) |
+| Audit-log immutability | Postgres `RULE … DO INSTEAD NOTHING` | Data Store has no rules and no triggers. App-layer append-only would be enforced by the same code that could bypass it — strictly weaker, so it was not silently swapped |
 
 **Not built** (described only, Appendix A): Kafka, Flink, Iceberg/MinIO, Kubernetes/Helm/ArgoCD, Keycloak, OPA, Kong, MLflow, Airflow, separate TimescaleDB, Trino/DuckDB.
 

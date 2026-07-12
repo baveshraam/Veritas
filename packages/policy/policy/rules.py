@@ -21,7 +21,8 @@ _DSP_RANK = ROLE_RANK["DSP"]
 
 # Victim-identifying fields nulled below DSP rank. Operational fields
 # (person_id, scrb_id, risk_score, criminal_history) stay visible.
-_VICTIM_IDENTITY_FIELDS = ("name_en", "name_kn", "dob", "address_geom", "aadhaar_hash")
+_VICTIM_IDENTITY_FIELDS = ("name_en", "name_kn", "dob", "address_lat", "address_lng",
+                           "aadhaar_hash")
 
 
 def _rank(officer_role: str) -> int:

@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev -p 3000",
     "build": "next build",
+    "build:catalyst": "next build && node -e \"require('fs').cpSync('out','../../client',{recursive:true})\"",
     "start": "next start",
     "lint": "next lint"
   },

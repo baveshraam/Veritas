@@ -7,7 +7,7 @@ Owns Layer 8's policy rules (not its transport/middleware wiring — that's `app
 ## Why this exists (don't skip this if you're touching auth/RBAC)
 Masking a field or capping graph-traversal depth **after** a query already ran is too late — you can't un-traverse a graph, and you can't reliably redact a name out of already-generated prose. So the rules have to be enforceable in two different places at two different times:
 - **Post-hoc, on structured responses** (`/fir/{id}`, `/person/{id}`) — `apps/api` applies this as middleware.
-- **At query-construction time** — `packages/rag_agent`'s Cypher/SQL Agents apply this before running a query, so a restricted field or an over-deep traversal is never retrieved in the first place.
+- **At query-construction time** — `packages/rag_agent`'s Graph/SQL Agents apply this before running a query, so a restricted field or an over-deep traversal is never retrieved in the first place.
 
 Both call into this package so there's exactly one definition of what each role can see.
 
@@ -33,7 +33,7 @@ packages/policy/
 
 ## Provides / Consumes
 - **Provides to `apps/api`**: `can_view_fir`, `mask_person_fields` — applied as middleware on `/fir/{id}` and `/person/{id}`.
-- **Provides to `packages/rag_agent`**: `max_traversal_depth`, `can_view_fir` — applied inside the Cypher/SQL Agents before query execution.
+- **Provides to `packages/rag_agent`**: `max_traversal_depth`, `can_view_fir` — applied inside the Graph/SQL Agents before traversal/query execution.
 - **Consumes**: nothing — pure functions over the role/PS-code strings callers already have (`officer.role`/`officer.ps_code` come from `data/`'s `officer` table via whichever caller looked them up).
 
 ## Non-goals

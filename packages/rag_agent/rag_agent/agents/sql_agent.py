@@ -34,6 +34,16 @@ def fir_by_id(fir_id: str, officer_role: str, officer_ps_code: str) -> list[dict
     return [dict(r) for r in rows]
 
 
+def fir_by_number(fir_number: str, officer_role: str, officer_ps_code: str) -> list[dict]:
+    """Lookup by the human-facing number ("0112/2026") — what officers actually type."""
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    with get_session() as s:
+        rows = s.execute(text(
+            f"SELECT {_FIR_COLUMNS} FROM fir f WHERE f.fir_number = :n {scope}"
+        ), {"n": fir_number, **extra}).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def search_firs(officer_role: str, officer_ps_code: str,
                 crime_type: Optional[str] = None, district: Optional[str] = None,
                 date_from: Optional[date] = None, date_to: Optional[date] = None,
@@ -117,8 +127,8 @@ def fir_points(district_code: str, limit: int = 600) -> list[dict]:
     is what makes a cluster legible as a cluster rather than an arbitrary shape."""
     with get_session() as s:
         rows = s.execute(text(
-            "SELECT fir_id, ST_Y(location_geom) AS lat, ST_X(location_geom) AS lng "
-            "FROM fir WHERE district_code = :dc AND location_geom IS NOT NULL "
+            "SELECT fir_id, latitude AS lat, longitude AS lng "
+            "FROM fir WHERE district_code = :dc AND latitude IS NOT NULL "
             "ORDER BY date_filed DESC LIMIT :limit"
         ), {"dc": district_code, "limit": limit}).mappings().all()
     return [{"fir_id": str(r["fir_id"]), "lat": r["lat"], "lng": r["lng"]} for r in rows]

@@ -1,0 +1,12 @@
+# Build constraints for the AppSail image (see Dockerfile).
+#
+# torch is pinned to the CPU build and MUST stay pinned during the main resolve, not
+# merely pre-installed: `data[translation]` asks for `torch>=2.2`, and left to itself
+# pip happily satisfies that from PyPI with the CUDA build — dragging nvidia-cudnn /
+# triton (~2GB) into a container that has no GPU, and thrashing the resolver while it
+# backtracks between the two indexes.
+torch==2.5.1+cpu
+
+# psycopg 3.2.0's `binary` extra requires psycopg-binary==3.2.0.dev1 — a version that
+# was never published. Any resolve that backtracks onto 3.2.0 dies there. Pin past it.
+psycopg==3.2.9

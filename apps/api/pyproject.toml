@@ -11,6 +11,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
     "sse-starlette>=2.1",
+    "zcatalyst-sdk>=0.1",       # Catalyst Authentication + SmartBrowz + Data Store
     "veritas-data[embeddings]",
     "veritas-policy",
     "veritas-rag-agent",

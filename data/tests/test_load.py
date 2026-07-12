@@ -24,10 +24,23 @@ def test_every_row_dict_has_exactly_the_insert_columns():
             assert set(r.keys()) == set(cols)
 
 
-def test_geometry_columns_wrapped():
-    person_sql = _insert_sql("person", _PERSON_COLS, "address_geom")
-    fir_sql = _insert_sql("fir", _FIR_COLS, "location_geom")
-    assert "ST_GeomFromText(:address_geom, 4326)" in person_sql
-    assert "ST_GeomFromText(:location_geom, 4326)" in fir_sql
-    # non-geom columns stay plain binds
-    assert ":scrb_id" in person_sql and "ST_GeomFromText(:scrb_id" not in person_sql
+def test_coordinates_are_plain_decimal_binds():
+    """No PostGIS: coordinates bind as ordinary numbers, and nothing in the insert
+    path may reintroduce a geometry wrapper (Catalyst Data Store has no such type)."""
+    person_sql = _insert_sql("person", _PERSON_COLS)
+    fir_sql = _insert_sql("fir", _FIR_COLS)
+    assert ":address_lat" in person_sql and ":address_lng" in person_sql
+    assert ":latitude" in fir_sql and ":longitude" in fir_sql
+    assert "ST_" not in person_sql and "ST_" not in fir_sql
+
+
+def test_generated_coordinates_are_numbers_inside_karnataka():
+    for r in fir_rows(_DS):
+        assert isinstance(r["latitude"], float) and isinstance(r["longitude"], float)
+        assert 11.5 < r["latitude"] < 18.5 and 74.0 < r["longitude"] < 78.6
+
+
+def test_every_officer_has_the_email_catalyst_authenticates_on():
+    emails = [r["email"] for r in officer_rows(_DS)]
+    assert all(e.endswith("@ksp.gov.in") for e in emails)
+    assert len(set(emails)) == len(emails)          # Catalyst identity must be unique

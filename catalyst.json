@@ -1,0 +1,18 @@
+{
+  "project_details": {
+    "id": "52852000000013048",
+    "project_name": "Veritas"
+  },
+  "client": {
+    "source": "client"
+  },
+  "appsail": [
+    {
+      "name": "veritas-api",
+      "type": "container",
+      "source": "docker://baveshraam/veritas-api:latest",
+      "port": 8000,
+      "stack": "custom"
+    }
+  ]
+}

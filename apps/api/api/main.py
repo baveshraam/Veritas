@@ -61,9 +61,11 @@ async def health() -> dict:
     except Exception as e:
         status["postgres"] = f"unavailable: {type(e).__name__}"
     try:
-        from data.graph import get_driver
-        get_driver().verify_connectivity()
-        status["neo4j"] = "ok"
+        from data.graph import load_graph
+        g = load_graph()
+        status["graph"] = "ok"
+        status["graph_nodes"] = g.number_of_nodes()
+        status["graph_edges"] = g.number_of_edges()
     except Exception as e:
-        status["neo4j"] = f"unavailable: {type(e).__name__}"
+        status["graph"] = f"unavailable: {type(e).__name__}"
     return status

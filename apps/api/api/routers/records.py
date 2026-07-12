@@ -105,7 +105,7 @@ async def get_person(person_id: str, officer: Officer = Depends(current_officer)
         row = s.execute(text(
             "SELECT person_id, scrb_id, name_en, name_kn, dob, gender, "
             "       aadhaar_hash, criminal_history, risk_score, gang_affiliation, "
-            "       canonical_entity_id, ST_AsText(address_geom) AS address_geom "
+            "       canonical_entity_id, address_lat, address_lng "
             "FROM person WHERE person_id = CAST(:p AS uuid)"),
             {"p": person_id}).mappings().first()
     if not row:

@@ -1,7 +1,9 @@
 """Investigation-engine checks that need no database or LLM."""
 import pytest
 
-from rag_agent.agents.cypher_agent import _FORBIDDEN, _cap_depth
+import networkx as nx
+
+from rag_agent.agents import graph_agent
 from rag_agent.agents.synthesis_agent import build_citations
 from rag_agent.evidence.evaluator import (
     ACCEPT_THRESHOLD, NOT_FOUND_MESSAGE, evaluate, score_batch,
@@ -50,24 +52,38 @@ def test_corroboration_across_source_types_raises_confidence():
     assert score_batch(mixed) > score_batch(same)
 
 
-# --- policy at query-construction time --------------------------------------
+# --- policy at traversal time ------------------------------------------------
+#
+# The depth cap used to be rewritten into the Cypher `*1..n` pattern before the query
+# ran. With NetworkX it bounds the walk itself — same rule, same place in the pipeline
+# (before any data is reached), so an IO still cannot out-traverse their role.
 
-def test_traversal_depth_is_capped_in_the_query_text():
-    q = "MATCH (a)-[:TRANSFERRED_TO*1..4]->(b) RETURN b"
-    assert "*1..2" in _cap_depth(q, 2)          # IO
-    assert "*1..4" in _cap_depth(q, 4)          # DSP
-    # a model asking for 9 hops still gets the caller's cap
-    assert "*1..2" in _cap_depth("MATCH (a)-[:X*1..9]-(b) RETURN b", 2)
+def _money_chain() -> nx.MultiDiGraph:
+    """P owns A0; money flows A0 -> A1 -> A2 -> A3 -> A4, one hop at a time."""
+    g = nx.MultiDiGraph()
+    g.add_node("P", label="Person")
+    for i in range(5):
+        g.add_node(f"A{i}", label="Account")
+    g.add_edge("P", "A0", rel="OWNS_ACCOUNT", amount=None)
+    for i in range(4):
+        g.add_edge(f"A{i}", f"A{i+1}", rel="TRANSFERRED_TO", amount=1000.0)
+    return g
 
 
-@pytest.mark.parametrize("bad", [
-    "MATCH (n) DETACH DELETE n",
-    "MERGE (p:Person {x: 1})",
-    "MATCH (n) SET n.risk = 1",
-    "CREATE (n:Person)",
-])
-def test_generated_cypher_cannot_write(bad):
-    assert _FORBIDDEN.search(bad)
+@pytest.mark.parametrize("role,expected_depth", [("IO", 2), ("SHO", 2), ("DSP", 4), ("IG", 4)])
+def test_money_trail_depth_is_capped_by_role(monkeypatch, role, expected_depth):
+    monkeypatch.setattr(graph_agent, "load_graph", _money_chain)
+    hops = [r["hops"] for r in graph_agent.money_trail("P", role)]
+    assert hops, "the trail must find something at every role"
+    assert max(hops) == expected_depth
+
+
+def test_money_trail_never_walks_a_payment_backwards(monkeypatch):
+    """TRANSFERRED_TO is the one directed relation: following it in reverse would
+    report money that never moved that way."""
+    monkeypatch.setattr(graph_agent, "load_graph", _money_chain)
+    reached = {r["to_account"] for r in graph_agent.money_trail("P", "IG")}
+    assert reached == {"A1", "A2", "A3", "A4"}      # never back to A0, never to P
 
 
 # --- intents ----------------------------------------------------------------

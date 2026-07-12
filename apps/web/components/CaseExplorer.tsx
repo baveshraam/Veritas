@@ -128,10 +128,9 @@ export default function CaseExplorer({
               <button
                 className="btn btn-sm"
                 onClick={() =>
-                  onAsk(
-                    `Summarise FIR ${c.fir_number} — the accused, the victim, the ` +
-                      `current status, and any linked cases.`,
-                  )
+                  // phrased to hit the FIR_LOOKUP intent: "fir" + "status of",
+                  // and no word that scores for CRIME_SEARCH (show/list/cases)
+                  onAsk(`What is the status of FIR ${c.fir_number}?`)
                 }
               >
                 Ask about this case

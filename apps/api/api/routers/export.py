@@ -1,10 +1,14 @@
 """POST /export/pdf — the conversation as a KSP-letterhead PDF.
 
 Renders from data.conversation_turn (the plaintext content store), NOT from
-audit_log, which holds only hashes. Puppeteer/headless-Chrome is the architecture's
-renderer; when it isn't installed we return the print-ready HTML with a header
-saying so, rather than failing the export or shipping a fake PDF — an officer can
-still print it from the browser.
+audit_log, which holds only hashes.
+
+The renderer is **Catalyst SmartBrowz** (`convert_to_pdf`) — the platform's headless
+browser service. The local headless-Chrome path below it is kept as the offline
+fallback only: it is what runs under `docker compose up` and in the test suite, where
+there is no Catalyst project to call. When neither is reachable we return the
+print-ready HTML with a header saying so, rather than failing the export or shipping
+a fake PDF — an officer can still print it from the browser.
 """
 import html
 import os
@@ -97,7 +101,28 @@ def _find_browser() -> str | None:
     return None
 
 
-def _to_pdf(page: str) -> bytes | None:
+def _smartbrowz_pdf(page: str) -> bytes | None:
+    """Catalyst SmartBrowz render. Returns None when Catalyst isn't configured here."""
+    from ..auth.catalyst_auth import enabled
+    if not enabled():
+        return None
+    try:
+        import zcatalyst_sdk
+        app = zcatalyst_sdk.initialize()
+        # A4, KSP letterhead margins. The HTML is the same string the local renderer
+        # gets, so the two paths cannot drift into producing different documents.
+        return app.smartbrowz().convert_to_pdf(page, pdf_options={
+            "format": "A4",
+            "margin": {"top": "15mm", "bottom": "15mm", "left": "12mm", "right": "12mm"},
+            "print_background": True,
+        })
+    except Exception:
+        # A PDF export is not worth 500-ing a session over — fall through to the
+        # local renderer, and to HTML below that.
+        return None
+
+
+def _local_pdf(page: str) -> bytes | None:
     """Headless Chrome render. Returns None when no browser is installed."""
     chrome = _find_browser()
     if not chrome:
@@ -125,7 +150,7 @@ async def export_pdf(req: ExportRequest, officer: Officer = Depends(current_offi
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No conversation for this session")
 
     page = _render_html(req.session_id, officer, turns)
-    pdf = _to_pdf(page)
+    pdf = _smartbrowz_pdf(page) or _local_pdf(page)
     record(officer.officer_id, req.session_id, "/export/pdf",
            req.model_dump(), {"turns": len(turns), "pdf": bool(pdf)})
 

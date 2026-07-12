@@ -12,9 +12,12 @@ node reached, preferring edges that carry weight). The search still runs, still
 produces real paths, and still terminates — it is just less selective.
 """
 from dataclasses import dataclass, field
+from functools import lru_cache
 
-from data.graph import get_driver
+from data.db import get_session
+from data.graph import load_graph, neighbours
 from policy import max_traversal_depth
+from sqlalchemy import text
 
 from ..llm import available, generate_json
 from ..state import EvidenceItem
@@ -49,16 +52,45 @@ class Path:
         return " ".join(parts)
 
 
+_FRONTIER_CAP = 60      # the Cypher had `LIMIT 60`; the beam cannot fan out unbounded
+
+
 def _neighbours(node_id: str) -> list[dict]:
-    with get_driver().session() as s:
-        return s.run(
-            "MATCH (n) WHERE n.person_id = $id OR n.account_id = $id OR n.fir_id = $id "
-            "MATCH (n)-[r]-(m) "
-            "RETURN type(r) AS rel, "
-            "  coalesce(m.person_id, m.account_id, m.fir_id, m.name) AS id, "
-            "  coalesce(m.name_en, m.crime_type, m.name, m.account_id, '?') AS label, "
-            "  coalesce(m.pagerank, 0.0) AS pagerank LIMIT 60",
-            id=node_id).data()
+    """One hop out of `node_id`. The Cypher matched any node kind by id and returned
+    (rel, id, display label, pagerank); the graph and the record tables between them
+    hold exactly the same four things."""
+    hops = [{"rel": rel, "id": dst} for rel, dst, _ in neighbours(node_id)][:_FRONTIER_CAP]
+    if not hops:
+        return []
+    meta = _node_meta(tuple(h["id"] for h in hops))
+    for h in hops:
+        label, pagerank = meta.get(h["id"], (h["id"], 0.0))
+        h["label"], h["pagerank"] = label, pagerank
+    return hops
+
+
+@lru_cache(maxsize=512)
+def _node_meta(node_ids: tuple[str, ...]) -> dict[str, tuple[str, float]]:
+    """Display label + PageRank per node. Cached: a beam search revisits the same
+    frontier nodes repeatedly, and this was one DB round-trip each time."""
+    out: dict[str, tuple[str, float]] = {}
+    ids = list(node_ids)
+    with get_session() as s:
+        for row in s.execute(text(
+            "SELECT CAST(person_id AS text) AS id, name_en AS label, "
+            "  COALESCE(pagerank, 0.0) AS pagerank FROM person "
+            "WHERE CAST(person_id AS text) = ANY(:ids)"), {"ids": ids}).mappings():
+            out[row["id"]] = (row["label"] or "?", float(row["pagerank"]))
+        for row in s.execute(text(
+            "SELECT CAST(fir_id AS text) AS id, crime_type AS label FROM fir "
+            "WHERE CAST(fir_id AS text) = ANY(:ids)"), {"ids": ids}).mappings():
+            out[row["id"]] = (row["label"] or "?", 0.0)
+    g = load_graph()
+    for nid in ids:                      # Account/Gang/Location are named by their id
+        out.setdefault(nid, (nid, 0.0))
+        if nid not in g:
+            out[nid] = (nid, 0.0)
+    return out
 
 
 def _rank(question: str, candidates: list[dict]) -> list[float]:

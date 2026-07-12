@@ -9,14 +9,15 @@ Architecture: [`CLAUDE.md`](./CLAUDE.md). Each track's contract is its own READM
 ## Run it
 
 ```bash
-# 1. Databases (Postgres+PostGIS+pgvector, Neo4j+GDS)
+# 1. Database (Postgres + pgvector). The knowledge graph is an edge-list table in
+#    the same database, traversed with NetworkX — there is no graph server.
 docker compose up -d
 
 # 2. Python packages (editable, in dependency order)
 pip install -e data -e packages/policy -e packages/ml_models -e packages/rag_agent -e apps/api
 
-# 3. Build the dataset: schema -> generate -> Postgres -> Neo4j -> GDS ->
-#    entity resolution -> vector index. Idempotent; rerun to refresh.
+# 3. Build the dataset: schema -> generate -> Postgres -> graph edges -> graph
+#    algorithms -> entity resolution -> vector index. Idempotent; rerun to refresh.
 cd data && python -m data.generator.run --firs 3000 && cd ..
 
 # 4. Backend
@@ -29,9 +30,26 @@ cd apps/web && npm install && npm run dev     # http://localhost:3000
 Sign in as any role — an IO and a DSP genuinely see different data.
 
 ```bash
-pytest                                        # 76 tests, all packages
+pytest                                        # 80 tests, all packages
 python packages/ml_models/fairness_run_audit.py   # pre-demo bias audit
 ```
+
+## Deploy it (Zoho Catalyst)
+
+The competition requires deployment on Catalyst. The backend runs as an **AppSail**
+custom (OCI) service, the Console as **Web Client Hosting**.
+
+```bash
+docker build --platform linux/amd64 -t baveshraam/veritas-api:latest .
+docker push baveshraam/veritas-api:latest
+
+cd apps/web && npm run build:catalyst && cd ..    # static export -> client/
+catalyst deploy
+```
+
+Set `GEMINI_API_KEY` and `VERITAS_POSTGRES_DSN` in the AppSail environment (console →
+AppSail → Configuration). See [`CLAUDE.md`](./CLAUDE.md) for which Catalyst services
+back which layer, and for the three capabilities with no Catalyst equivalent.
 
 ## What's real vs. what's gated
 
@@ -39,12 +57,12 @@ Everything below runs today against the live stack:
 
 | | |
 |---|---|
-| Knowledge graph | Neo4j + GDS — PageRank, Louvain communities, betweenness |
+| Knowledge graph | NetworkX over a `graph_edge` table — PageRank, Louvain communities, betweenness |
 | Retrieval | HippoRAG (personalized PageRank) + Think-on-Graph beam search |
 | Verification | CRAG evaluator — refuses to answer on weak/empty evidence |
 | Entity resolution | Fellegi-Sunter — 100% precision/recall on injected duplicates |
 | Forecasting | Prophet + MinT (coherence verified to 1e-9) |
-| Hotspots | KDE + DBSCAN over PostGIS |
+| Hotspots | KDE + DBSCAN over plain lat/lng columns |
 | Risk / recidivism | XGBoost+SHAP, calibrated LightGBM, temporal split |
 | Financial crime | Rule-based structuring detector + GraphSAGE GNN |
 | Causal inference | DoWhy on **real Census 2011** ground truth — identified, estimated, *and refuted* |
@@ -58,8 +76,10 @@ Implementation record — what's built, verified, and why: [`docs/implementation
 **Gated on things we don't have** — each fails loudly with the exact remedy rather
 than degrading silently:
 
-- **Kannada translation / voice** need the self-hosted AI4Bharat and Vakyansh weights.
-  Record text is never sent to a cloud model, so there is no shortcut here.
+- **Kannada TTS** (voice *output*) needs the self-hosted IndicTTS/Kokoro weights. Voice
+  *input* (faster-whisper ASR) and translation (NLLB-200) run today. Catalyst Zia has no
+  speech or translation service at all, so these stay self-hosted — permitted by the
+  organizers' ruling that an external alternative is allowed where no Catalyst service exists.
 - **District-level police strength** is not published in India (BPR&D/KSP report it
   state-wide only). It is therefore an *unmeasured confounder*, named as such with
   every causal estimate rather than adjusted for with an invented number.

@@ -1,11 +1,11 @@
-"""Offline checks for financial-crime generation + its graph builders."""
+"""Offline checks for financial-crime generation + its edge builders."""
 import random
 
 from data.generator.build import generate
 from data.generator.financial import REPORTING_THRESHOLD, make_financial
 from data.generator.graph_sync import (
-    account_nodes, involved_in_edges, linked_to_edges, owns_account_edges,
-    transaction_nodes, transferred_to_edges,
+    account_rows, involved_in_edges, linked_to_edges, owns_account_edges,
+    transferred_to_edges, txn_rows,
 )
 
 _rng = random.Random(11)
@@ -23,22 +23,25 @@ def test_patterns_injected_and_labeled():
 
 
 def test_generator_never_pre_flags():
-    # flagged_suspicious is a detector output, not generated ground truth
-    for n in transaction_nodes(_FIN):
-        assert n["flagged_suspicious"] is False
+    # flagged_suspicious is a detector OUTPUT. The txn row must not carry it at all,
+    # or the AML models would be scoring against their own answer key.
+    for r in txn_rows(_FIN):
+        assert "flagged_suspicious" not in r
+        assert "flag_type" not in r and "detector" not in r
 
 
 def test_graph_edges_reference_real_accounts_and_persons():
-    account_ids = {a["account_id"] for a in account_nodes(_FIN)}
-    txn_ids = {t["txn_id"] for t in transaction_nodes(_FIN)}
+    account_ids = {a["account_id"] for a in account_rows(_FIN)}
+    txn_ids = {t["txn_id"] for t in txn_rows(_FIN)}
     person_ids = {p.person_id for p in _DS.persons}
     fir_ids = {f.fir_id for f in _DS.firs}
 
     for e in owns_account_edges(_FIN):
-        assert e["person_id"] in person_ids and e["account_id"] in account_ids
+        assert e["src_id"] in person_ids and e["dst_id"] in account_ids
     for e in transferred_to_edges(_FIN):
-        assert e["src"] in account_ids and e["dst"] in account_ids
+        assert e["src_id"] in account_ids and e["dst_id"] in account_ids
+        assert e["amount"] is not None          # the money is the point of the edge
     for e in involved_in_edges(_FIN):
-        assert e["account_id"] in account_ids and e["txn_id"] in txn_ids
+        assert e["src_id"] in account_ids and e["dst_id"] in txn_ids
     for e in linked_to_edges(_FIN):
-        assert e["txn_id"] in txn_ids and e["fir_id"] in fir_ids
+        assert e["src_id"] in txn_ids and e["dst_id"] in fir_ids

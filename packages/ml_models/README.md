@@ -123,7 +123,7 @@ packages/ml_models/
 - **Provides to `data/generator/`**: `resolve_entities`, called once per data-generation run (batch), not part of any live query path.
 - **Provides to whoever runs the pre-demo checklist**: `run_fairness_audit`, invoked out-of-band via a standalone script, not by any other folder's runtime code.
 - **Consumes from `data/`**: feature data via `data/`'s connection helpers only (never opens its own DB connection, never redefines a schema), plus `data.nlp.transliterate()` for name-variant generation inside `resolve_entities`.
-- **Writes to `data/`**: via the named write helpers in `data/README.md` (`set_canonical_entity`, `write_same_as_edge`, `flag_transaction`) — never raw SQL/Cypher from this package.
+- **Writes to `data/`**: via the named write helpers in `data/README.md` (`set_canonical_entity`, `write_same_as_edge`, `flag_transaction`) — never raw SQL from this package.
 
 ## Non-goals
 - No orchestration/routing logic, no NL understanding, no direct API/DB access outside `data/`'s helpers — this package is a pure model layer.

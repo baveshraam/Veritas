@@ -77,21 +77,33 @@ def _similar_cases(fir: dict, limit: int = 5) -> list[dict]:
 
 
 def _leads(fir_id: str, officer_role: str) -> list[str]:
-    from data.graph import get_driver
+    """Investigative leads for the accused on this FIR.
 
-    depth = max_traversal_depth(officer_role)
-    with get_driver().session() as g:
-        rows = g.run(
-            "MATCH (c:CrimeEvent {fir_id: $f})<-[:ACCUSED_IN]-(p:Person) "
-            # DIRECT co-accused only. At the 4-hop policy cap this counts most of the
-            # connected component ("857 associates"), which is true and useless — you
-            # cannot canvass 857 people. A lead has to be something an IO can act on
-            # this week, so it names the people who actually offended alongside them.
-            "OPTIONAL MATCH (p)-[:CO_ACCUSED_WITH]-(o:Person) "
-            "RETURN p.name_en AS name, p.community AS community, "
-            "  p.gang_affiliation AS gang, coalesce(p.pagerank,0.0) AS pagerank, "
-            "  count(DISTINCT o) AS direct_associates, "
-            "  collect(DISTINCT o.name_en)[..3] AS names", f=fir_id).data()
+    DIRECT co-accused only — deliberately, and unchanged from the Cypher version. At
+    the 4-hop policy cap this would count most of the connected component ("857
+    associates"), which is true and useless: you cannot canvass 857 people. A lead has
+    to be actionable this week, so it names the people who actually offended alongside
+    them.
+    """
+    from data.graph import load_graph
+
+    with get_session() as s:
+        accused = [dict(r) for r in s.execute(text(
+            "SELECT CAST(p.person_id AS text) AS person_id, p.name_en AS name, "
+            "  p.community, p.gang_affiliation AS gang, "
+            "  COALESCE(p.pagerank, 0.0) AS pagerank "
+            "FROM criminal_record cr JOIN person p ON p.person_id = cr.person_id "
+            "WHERE cr.fir_id = CAST(:f AS uuid)"), {"f": fir_id}).mappings().all()]
+    if not accused:
+        return []
+
+    g = load_graph()
+    rows = []
+    for a in accused:
+        associates = [dst for _, dst, d in g.out_edges(a["person_id"], data=True)
+                      if d["rel"] == "CO_ACCUSED_WITH"] if a["person_id"] in g else []
+        names = _names_of(associates[:3])
+        rows.append({**a, "direct_associates": len(set(associates)), "names": names})
 
     leads: list[str] = []
     for r in rows:
@@ -109,6 +121,15 @@ def _leads(fir_id: str, officer_role: str) -> list[str]:
             leads.append(f"{r['name']} ranks high for network influence "
                          f"(PageRank {r['pagerank']:.2f}) — likely an organiser, not a runner.")
     return leads[:6]
+
+
+def _names_of(person_ids: list[str]) -> list[str]:
+    if not person_ids:
+        return []
+    with get_session() as s:
+        return [r[0] for r in s.execute(text(
+            "SELECT name_en FROM person WHERE CAST(person_id AS text) = ANY(:ids)"),
+            {"ids": person_ids}).all() if r[0]]
 
 
 def _draft_summary(fir: dict, timeline: list[dict], similar: list[dict],

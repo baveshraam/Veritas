@@ -1,73 +1,71 @@
-"""Mirror a generated Dataset into Neo4j.
+"""Mirror a generated Dataset into the graph edge list (and the financial tables).
 
-Node/edge param lists are built by pure functions (testable offline); `sync_graph`
-is the thin UNWIND executor. Postgres stays the system of record; the graph is the
-traversal/GDS projection of it. CO_ACCUSED_WITH is derived here (it's graph-only —
-no Postgres table), aggregating shared FIRs into an edge strength.
+Edge param lists are built by pure functions (testable offline); `sync_graph` is the
+thin executemany layer. The record tables stay the system of record; `graph_edge` is
+the traversal projection of them. CO_ACCUSED_WITH is derived here — it is graph-only,
+aggregating shared FIRs into an edge strength.
 
-Not built here: Account/Transaction (financial-crime generation) and SAME_AS
-(entity-resolution batch, packages/ml_models) — they attach later without changing
-this module's node/edge shapes.
+Was Neo4j. The node MERGEs are gone: nodes are the records themselves (person, fir,
+account, txn) plus the two name-only kinds (Gang, Location), which need no storage
+because their id *is* their name. Only edges get a table.
+
+SAME_AS (entity-resolution batch, packages/ml_models) attaches later, through
+data.transactions, without changing anything here.
 """
 from collections import defaultdict
+from dataclasses import asdict
 from itertools import combinations
 from typing import Optional
 
-from ..graph import get_driver
+from sqlalchemy import text
+
+from ..db import get_session
+from ..graph import publish_graph, reset_graph
 from .build import Dataset
 from .financial import FinancialData
 
-
-def person_nodes(ds: Dataset) -> list[dict]:
-    return [{
-        "person_id": p.person_id, "scrb_id": p.scrb_id,
-        "name_en": p.name_en, "name_kn": p.name_kn, "gender": p.gender,
-        "risk_score": p.risk_score, "gang_affiliation": p.gang_affiliation,
-        "is_habitual_offender": p.criminal_history,
-        "canonical_entity_id": p.canonical_entity_id,
-    } for p in ds.persons]
+_EDGE_COLS = ["edge_type", "src_id", "src_label", "dst_id", "dst_label",
+              "role", "edge_date", "amount", "strength", "confidence"]
 
 
-def crimeevent_nodes(ds: Dataset) -> list[dict]:
-    return [{
-        "fir_id": f.fir_id, "crime_type": f.crime_type, "ipc_sections": f.ipc_sections,
-        "date_occurred": f.occurrence_from, "location": f.district, "district": f.district,
-        "modus_operandi": f.modus_operandi, "case_status": f.case_status,
-    } for f in ds.firs]
+def _edge(edge_type: str, src: str, src_label: str, dst: str, dst_label: str,
+          *, role=None, edge_date=None, amount=None, strength=None,
+          confidence=None) -> dict:
+    """One graph_edge row. Every column is always present — executemany binds the
+    full column set for every row, so a missing key is a runtime error, not a NULL."""
+    return {"edge_type": edge_type, "src_id": str(src), "src_label": src_label,
+            "dst_id": str(dst), "dst_label": dst_label, "role": role,
+            "edge_date": edge_date, "amount": amount, "strength": strength,
+            "confidence": confidence}
 
 
-def location_nodes(ds: Dataset) -> list[dict]:
-    return [{"name": name} for name in sorted({f.district for f in ds.firs})]
-
-
-def gang_nodes(ds: Dataset) -> list[dict]:
-    gangs = {p.gang_affiliation for p in ds.persons if p.gang_affiliation}
-    return [{"name": g} for g in sorted(gangs)]
-
+# --- edges derived from the record layer -------------------------------------
 
 def accused_in_edges(ds: Dataset) -> list[dict]:
-    return [{
-        "person_id": r.person_id, "fir_id": r.fir_id,
-        "role": r.role, "arrest_date": r.arrest_date,
-    } for r in ds.criminal_records]
+    return [_edge("ACCUSED_IN", r.person_id, "Person", r.fir_id, "CrimeEvent",
+                  role=r.role, edge_date=r.arrest_date)
+            for r in ds.criminal_records]
 
 
 def victim_in_edges(ds: Dataset) -> list[dict]:
-    return [{"person_id": f.complainant_id, "fir_id": f.fir_id} for f in ds.firs]
+    return [_edge("VICTIM_IN", f.complainant_id, "Person", f.fir_id, "CrimeEvent")
+            for f in ds.firs]
 
 
 def member_of_edges(ds: Dataset) -> list[dict]:
-    return [{"person_id": p.person_id, "gang": p.gang_affiliation}
+    return [_edge("MEMBER_OF", p.person_id, "Person", p.gang_affiliation, "Gang")
             for p in ds.persons if p.gang_affiliation]
 
 
 def occurred_at_edges(ds: Dataset) -> list[dict]:
-    return [{"fir_id": f.fir_id, "location": f.district} for f in ds.firs]
+    return [_edge("OCCURRED_AT", f.fir_id, "CrimeEvent", f.district, "Location")
+            for f in ds.firs]
 
 
 def co_accused_edges(ds: Dataset) -> list[dict]:
     """Undirected co-offending links: persons accused in the same FIR, strength =
-    number of shared FIRs. Emitted once per unordered pair (a < b)."""
+    number of shared FIRs. Emitted once per unordered pair (a < b) — data.graph adds
+    the reverse direction when it materialises the graph."""
     by_fir: dict[str, set[str]] = defaultdict(set)
     for r in ds.criminal_records:
         if r.role == "Accused":
@@ -76,102 +74,83 @@ def co_accused_edges(ds: Dataset) -> list[dict]:
     for fir_id, people in by_fir.items():
         for a, b in combinations(sorted(people), 2):
             shared[(a, b)].append(fir_id)
-    return [{"a": a, "b": b, "fir_ids": firs, "strength": len(firs)}
+    return [_edge("CO_ACCUSED_WITH", a, "Person", b, "Person", strength=len(firs))
             for (a, b), firs in shared.items()]
 
 
-def account_nodes(fin: FinancialData) -> list[dict]:
-    return [{"account_id": a.account_id, "bank": a.bank,
-             "account_type": a.account_type, "opened_date": a.opened_date}
+# --- edges + rows from the financial layer -----------------------------------
+
+def owns_account_edges(fin: FinancialData) -> list[dict]:
+    return [_edge("OWNS_ACCOUNT", a.owner_person_id, "Person", a.account_id, "Account")
             for a in fin.accounts]
 
 
-def transaction_nodes(fin: FinancialData) -> list[dict]:
-    return [{"txn_id": t.txn_id, "amount": t.amount, "date": t.date,
-             "channel": t.channel, "flagged_suspicious": False,
-             "injected_pattern": t.injected_pattern}
-            for t in fin.transactions]
-
-
-def owns_account_edges(fin: FinancialData) -> list[dict]:
-    return [{"person_id": a.owner_person_id, "account_id": a.account_id} for a in fin.accounts]
-
-
 def transferred_to_edges(fin: FinancialData) -> list[dict]:
-    return [{"src": t.src_account_id, "dst": t.dst_account_id,
-             "amount": t.amount, "date": t.date} for t in fin.transactions]
+    """The one genuinely DIRECTED relation — money moves one way."""
+    return [_edge("TRANSFERRED_TO", t.src_account_id, "Account",
+                  t.dst_account_id, "Account", amount=t.amount, edge_date=t.date)
+            for t in fin.transactions]
 
 
 def involved_in_edges(fin: FinancialData) -> list[dict]:
     rows = []
     for t in fin.transactions:
-        rows.append({"account_id": t.src_account_id, "txn_id": t.txn_id})
-        rows.append({"account_id": t.dst_account_id, "txn_id": t.txn_id})
+        rows.append(_edge("INVOLVED_IN", t.src_account_id, "Account", t.txn_id, "Transaction"))
+        rows.append(_edge("INVOLVED_IN", t.dst_account_id, "Account", t.txn_id, "Transaction"))
     return rows
 
 
 def linked_to_edges(fin: FinancialData) -> list[dict]:
-    return [{"txn_id": t.txn_id, "fir_id": t.linked_fir_id}
+    return [_edge("LINKED_TO", t.txn_id, "Transaction", t.linked_fir_id, "CrimeEvent")
             for t in fin.transactions if t.linked_fir_id]
 
 
-_CYPHER = {
-    "person": "UNWIND $rows AS r MERGE (p:Person {person_id: r.person_id}) SET p += r",
-    "crimeevent": "UNWIND $rows AS r MERGE (c:CrimeEvent {fir_id: r.fir_id}) SET c += r",
-    "location": "UNWIND $rows AS r MERGE (l:Location {name: r.name})",
-    "gang": "UNWIND $rows AS r MERGE (g:Gang {name: r.name})",
-    "accused_in": (
-        "UNWIND $rows AS r MATCH (p:Person {person_id: r.person_id}), "
-        "(c:CrimeEvent {fir_id: r.fir_id}) "
-        "MERGE (p)-[e:ACCUSED_IN]->(c) SET e.role = r.role, e.arrest_date = r.arrest_date"),
-    "victim_in": (
-        "UNWIND $rows AS r MATCH (p:Person {person_id: r.person_id}), "
-        "(c:CrimeEvent {fir_id: r.fir_id}) MERGE (p)-[:VICTIM_IN]->(c)"),
-    "member_of": (
-        "UNWIND $rows AS r MATCH (p:Person {person_id: r.person_id}), "
-        "(g:Gang {name: r.gang}) MERGE (p)-[:MEMBER_OF]->(g)"),
-    "occurred_at": (
-        "UNWIND $rows AS r MATCH (c:CrimeEvent {fir_id: r.fir_id}), "
-        "(l:Location {name: r.location}) MERGE (c)-[:OCCURRED_AT]->(l)"),
-    "co_accused": (
-        "UNWIND $rows AS r MATCH (a:Person {person_id: r.a}), (b:Person {person_id: r.b}) "
-        "MERGE (a)-[e:CO_ACCUSED_WITH]->(b) SET e.strength = r.strength, e.fir_ids = r.fir_ids"),
-    "account": "UNWIND $rows AS r MERGE (a:Account {account_id: r.account_id}) SET a += r",
-    "transaction": "UNWIND $rows AS r MERGE (t:Transaction {txn_id: r.txn_id}) SET t += r",
-    "owns_account": (
-        "UNWIND $rows AS r MATCH (p:Person {person_id: r.person_id}), "
-        "(a:Account {account_id: r.account_id}) MERGE (p)-[:OWNS_ACCOUNT]->(a)"),
-    "transferred_to": (
-        "UNWIND $rows AS r MATCH (s:Account {account_id: r.src}), (d:Account {account_id: r.dst}) "
-        "CREATE (s)-[:TRANSFERRED_TO {amount: r.amount, date: r.date}]->(d)"),
-    "involved_in": (
-        "UNWIND $rows AS r MATCH (a:Account {account_id: r.account_id}), "
-        "(t:Transaction {txn_id: r.txn_id}) MERGE (a)-[:INVOLVED_IN]->(t)"),
-    "linked_to": (
-        "UNWIND $rows AS r MATCH (t:Transaction {txn_id: r.txn_id}), "
-        "(c:CrimeEvent {fir_id: r.fir_id}) MERGE (t)-[:LINKED_TO]->(c)"),
-}
+def account_rows(fin: FinancialData) -> list[dict]:
+    return [{"account_id": a.account_id, "owner_person_id": a.owner_person_id,
+             "bank": a.bank, "account_type": a.account_type,
+             "opened_date": a.opened_date} for a in fin.accounts]
+
+
+def txn_rows(fin: FinancialData) -> list[dict]:
+    # flagged_suspicious/flag_* are detector OUTPUT — the generator never pre-flags,
+    # or the AML models would be scoring their own answer key.
+    return [{"txn_id": t.txn_id, "src_account_id": t.src_account_id,
+             "dst_account_id": t.dst_account_id, "amount": t.amount,
+             "txn_date": t.date, "channel": t.channel,
+             "linked_fir_id": t.linked_fir_id, "injected_pattern": t.injected_pattern}
+            for t in fin.transactions]
+
+
+# --- write -------------------------------------------------------------------
+
+_ACCOUNT_COLS = ["account_id", "owner_person_id", "bank", "account_type", "opened_date"]
+_TXN_COLS = ["txn_id", "src_account_id", "dst_account_id", "amount", "txn_date",
+             "channel", "linked_fir_id", "injected_pattern"]
+
+
+def _insert(table: str, cols: list[str]) -> str:
+    return (f"INSERT INTO {table} ({', '.join(cols)}) "
+            f"VALUES ({', '.join(':' + c for c in cols)})")
 
 
 def sync_graph(ds: Dataset, fin: Optional[FinancialData] = None, wipe: bool = True) -> None:
-    builders = [
-        ("person", lambda: person_nodes(ds)), ("crimeevent", lambda: crimeevent_nodes(ds)),
-        ("location", lambda: location_nodes(ds)), ("gang", lambda: gang_nodes(ds)),
-        ("accused_in", lambda: accused_in_edges(ds)), ("victim_in", lambda: victim_in_edges(ds)),
-        ("member_of", lambda: member_of_edges(ds)), ("occurred_at", lambda: occurred_at_edges(ds)),
-        ("co_accused", lambda: co_accused_edges(ds)),
-    ]
+    edges = (accused_in_edges(ds) + victim_in_edges(ds) + member_of_edges(ds)
+             + occurred_at_edges(ds) + co_accused_edges(ds))
     if fin is not None:
-        builders += [
-            ("account", lambda: account_nodes(fin)), ("transaction", lambda: transaction_nodes(fin)),
-            ("owns_account", lambda: owns_account_edges(fin)),
-            ("transferred_to", lambda: transferred_to_edges(fin)),
-            ("involved_in", lambda: involved_in_edges(fin)), ("linked_to", lambda: linked_to_edges(fin)),
-        ]
-    with get_driver().session() as s:
+        edges += (owns_account_edges(fin) + transferred_to_edges(fin)
+                  + involved_in_edges(fin) + linked_to_edges(fin))
+
+    with get_session() as s:
         if wipe:
-            s.run("MATCH (n) DETACH DELETE n")
-        for key, builder in builders:
-            rows = builder()
-            if rows:
-                s.run(_CYPHER[key], rows=rows)
+            s.execute(text("TRUNCATE graph_edge, txn, account CASCADE"))
+        if fin is not None:
+            s.execute(text(_insert("account", _ACCOUNT_COLS)), account_rows(fin))
+            s.execute(text(_insert("txn", _TXN_COLS)), txn_rows(fin))
+        if edges:
+            s.execute(text(_insert("graph_edge", _EDGE_COLS)), edges)
+    reset_graph()   # the in-memory graph is now stale
+    # Refresh the Stratus fast-path object so a cold AppSail container reads one blob
+    # instead of paginating 136k edges through ZCQL's 300-row cap. No-op off Catalyst.
+    publish_graph()
+
+

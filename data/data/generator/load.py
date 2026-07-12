@@ -1,69 +1,120 @@
-"""Persist a generated Dataset to Postgres.
+"""Persist a generated Dataset to the Catalyst Data Store.
 
-Row-mapping is pure (`*_rows` return list[dict]) so column coverage is testable
-without a database; `load_dataset` is the thin executemany layer. Geometry WKT is
-wrapped in ST_GeomFromText on the way in; ipc_sections goes in as a Python list
-(psycopg adapts to text[]).
+Two paths, same rows:
+
+  load_dataset(ds)   writes through data.ds. On the sqlite backend that is the whole
+                     story. On Catalyst it works too, but a 25K-case rebuild is ~1,500
+                     REST calls, so it is not how you seed a fresh environment.
+
+  write_csvs(ds)     dumps one CSV per table for `catalyst ds:import`, which is the
+                     sanctioned bulk path into Data Store and needs no credentials
+                     beyond the CLI login you already have.
+
+Insert order follows the ER's foreign keys: masters, then Unit/Employee, then CaseMaster,
+then everything that hangs off a case. Anything else leaves dangling references.
 """
-from dataclasses import asdict
+from __future__ import annotations
 
-from sqlalchemy import text
+import csv
+from datetime import date, datetime
+from pathlib import Path
 
-from ..db import get_session
+from .. import ds as store
 from .build import Dataset
 
-# Insert order respects FKs: officer/person before fir; fir before criminal_record.
-_OFFICER_COLS = ["officer_id", "badge_no", "name", "ps_code", "district_code", "role"]
-_PERSON_COLS = ["person_id", "scrb_id", "name_en", "name_kn", "dob", "gender",
-                "aadhaar_hash", "criminal_history", "risk_score", "gang_affiliation",
-                "canonical_entity_id", "address_geom"]
-_FIR_COLS = ["fir_id", "ps_code", "district_code", "fir_number", "date_filed",
-             "ipc_sections", "crime_type", "occurrence_from", "occurrence_to",
-             "district", "taluk", "complainant_id", "io_id", "case_status",
-             "modus_operandi", "narrative", "location_geom"]
-_RECORD_COLS = ["record_id", "person_id", "fir_id", "role", "arrest_date",
-                "bail_status", "conviction"]
+# Parents before children. Not alphabetical, not arbitrary — this is the FK topology.
+LOAD_ORDER = [
+    "State", "District", "UnitType", "Rank", "Designation", "Court",
+    "CaseCategory", "GravityOffence", "CaseStatusMaster",
+    "OccupationMaster", "ReligionMaster", "CasteMaster",
+    "CrimeHead", "CrimeSubHead", "Act", "Section", "CrimeHeadActSection",
+    "Unit", "Employee",
+    "CaseMaster",
+    "ComplainantDetails", "Victim", "Accused", "ActSectionAssociation",
+    "ArrestSurrender", "inv_arrestsurrenderaccused", "ChargesheetDetails",
+]
+
+# Wiped on rebuild. The record layer plus everything DERIVED from it: identities resolved
+# out of Accused rows, the graph built from those identities, the financial layer keyed to
+# them. Leaving derived rows behind after a rebuild leaves them pointing at cases that no
+# longer exist — and a citation to a deleted FIR is the one failure a citation-grounded
+# system must never have. vx_district_socioeconomic (real Census data) and the
+# session/conversation/audit tables are deliberately NOT wiped.
+DERIVED = ["vx_person", "vx_accused_identity", "vx_graph_edge", "vx_account", "vx_txn"]
 
 
-def officer_rows(ds: Dataset) -> list[dict]:
-    return [asdict(o) for o in ds.officers]
+def load_dataset(ds: Dataset, wipe: bool = True) -> dict[str, int]:
+    if wipe:
+        store.truncate(list(reversed(LOAD_ORDER)) + DERIVED)
+    counts = {}
+    for table in LOAD_ORDER:
+        rows = ds.tables.get(table) or []
+        if rows:
+            counts[table] = store.insert(table, rows)
+    return counts
 
 
-def person_rows(ds: Dataset) -> list[dict]:
-    return [asdict(p) for p in ds.persons]
+def _csv_value(v: object) -> str:
+    if v is None:
+        return ""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, datetime):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(v, date):
+        return v.strftime("%Y-%m-%d")
+    return str(v)
 
 
-def fir_rows(ds: Dataset) -> list[dict]:
-    return [asdict(f) for f in ds.firs]
+def write_csvs(ds: Dataset, out_dir: str | Path = ".veritas/seed") -> list[Path]:
+    """One CSV per table, in FK order, for `catalyst ds:import`."""
+    from ..schema import TABLES
+
+    out = Path(out_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    written = []
+    for i, table in enumerate(LOAD_ORDER):
+        rows = ds.tables.get(table) or []
+        if not rows:
+            continue
+        cols = [c.name for c in TABLES[table]]
+        # Numbered so the import order is obvious to a human running them by hand.
+        path = out / f"{i:02d}_{table}.csv"
+        with path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            w.writerows([[_csv_value(r.get(c)) for c in cols] for r in rows])
+        written.append(path)
+    return written
 
 
-def record_rows(ds: Dataset) -> list[dict]:
-    return [asdict(r) for r in ds.criminal_records]
+if __name__ == "__main__":
+    import random
 
+    from .build import generate
 
-def _insert_sql(table: str, cols: list[str], geom_col: str | None = None) -> str:
-    values = []
-    for c in cols:
-        if c == geom_col:
-            values.append(f"ST_GeomFromText(:{c}, 4326)")
-        else:
-            values.append(f":{c}")
-    return f"INSERT INTO {table} ({', '.join(cols)}) VALUES ({', '.join(values)})"
+    store.reset_for_tests()                       # in-memory sqlite
+    ds = generate(random.Random(7), 200)
+    counts = load_dataset(ds)
 
+    # The load is only correct if the data is still queryable *as the ER intends* —
+    # i.e. a case joins to its station, its IO, its sections and its accused.
+    n = store.scalar('SELECT COUNT("CaseMasterID") AS c FROM "CaseMaster"')
+    assert n == 200, n
+    row = store.one(
+        'SELECT "CaseMaster"."CrimeNo", "Unit"."UnitName", "CrimeSubHead"."CrimeHeadName" '
+        'FROM "CaseMaster" '
+        'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
+        'JOIN "CrimeSubHead" ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID"')
+    assert row and len(row["CrimeNo"]) == 18 and row["UnitName"] and row["CrimeHeadName"], row
 
-def load_dataset(ds: Dataset, wipe: bool = True) -> None:
-    with get_session() as s:
-        if wipe:
-            # The generated record layer, plus document_embedding — which is DERIVED
-            # from it. Leaving embeddings behind across a rebuild leaves rows whose
-            # source_id points at a FIR that no longer exists, so retrieval happily
-            # cites a deleted record. In a system whose whole claim is that every
-            # answer traces to a real record, a dangling citation is the worst
-            # possible bug. index_job repopulates it immediately after the load.
-            # district_socioeconomic (real data) and session/audit are untouched.
-            s.execute(text("TRUNCATE criminal_record, fir, person, officer CASCADE"))
-            s.execute(text("TRUNCATE document_embedding"))
-        s.execute(text(_insert_sql("officer", _OFFICER_COLS)), officer_rows(ds))
-        s.execute(text(_insert_sql("person", _PERSON_COLS, "address_geom")), person_rows(ds))
-        s.execute(text(_insert_sql("fir", _FIR_COLS, "location_geom")), fir_rows(ds))
-        s.execute(text(_insert_sql("criminal_record", _RECORD_COLS)), record_rows(ds))
+    # No orphans: every accused row's case exists.
+    orphans = store.scalar(
+        'SELECT COUNT("AccusedMasterID") AS c FROM "Accused" WHERE "CaseMasterID" NOT IN '
+        '(SELECT "CaseMasterID" FROM "CaseMaster")')
+    assert orphans == 0, f"{orphans} orphaned accused rows"
+
+    paths = write_csvs(ds, ".veritas/seed-selfcheck")
+    print(f"load OK: {sum(counts.values())} rows across {len(counts)} tables; "
+          f"{len(paths)} CSVs; sample join -> {row['CrimeNo']} @ {row['UnitName']} "
+          f"({row['CrimeHeadName']})")

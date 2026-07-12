@@ -18,10 +18,12 @@ def test_unknown_role_cannot_view():
 
 def test_victim_identity_masked_below_dsp():
     person = {"person_id": "p1", "name_en": "Ramesh Gowda", "dob": "1990-01-01",
-              "aadhaar_hash": "abc", "address_geom": "POINT(77 13)", "risk_score": 0.4}
+              "aadhaar_hash": "abc", "address_lat": 13.0, "address_lng": 77.0,
+              "risk_score": 0.4}
     for role in ("IO", "SHO"):
         m = mask_person_fields(role, person)
         assert m["name_en"] is None and m["dob"] is None and m["aadhaar_hash"] is None
+        assert m["address_lat"] is None and m["address_lng"] is None   # home address is identity
         assert m["person_id"] == "p1" and m["risk_score"] == 0.4   # operational fields kept
     for role in ("DSP", "SP", "IG", "SCRB_Analyst"):
         assert mask_person_fields(role, person)["name_en"] == "Ramesh Gowda"

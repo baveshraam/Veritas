@@ -14,11 +14,13 @@ Explained per flag by neighbourhood attribution (which neighbouring accounts mov
 the model's score), not a bare probability — an unexplained "0.87 suspicious" is
 useless to an investigating officer.
 """
+from decimal import Decimal
 from functools import lru_cache
 
 import numpy as np
+from sqlalchemy import text
 
-from data.graph import get_driver
+from data.db import get_session
 
 from ..types import TransactionFlag
 
@@ -34,24 +36,34 @@ def _fetch_graph() -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
     An account is 'laundering' ground truth if any transaction it participates in
     carries an injected_pattern.
     """
-    with get_driver().session() as g:
-        nodes = g.run(
-            "MATCH (a:Account) "
-            "OPTIONAL MATCH (a)-[out:TRANSFERRED_TO]->() "
-            "OPTIONAL MATCH (a)<-[inc:TRANSFERRED_TO]-() "
-            "WITH a, count(DISTINCT out) AS out_deg, count(DISTINCT inc) AS in_deg, "
-            "     coalesce(sum(DISTINCT out.amount), 0.0) AS out_amt, "
-            "     coalesce(sum(DISTINCT inc.amount), 0.0) AS in_amt "
-            "OPTIONAL MATCH (a)-[:INVOLVED_IN]->(t:Transaction) "
-            "RETURN a.account_id AS id, out_deg, in_deg, out_amt, in_amt, "
-            "  count(t) AS txn_count, "
-            "  avg(coalesce(t.amount, 0.0)) AS avg_amt, "
-            "  max(CASE WHEN t.injected_pattern IS NOT NULL THEN 1 ELSE 0 END) AS label"
-        ).data()
-        edges = g.run(
-            "MATCH (a:Account)-[:TRANSFERRED_TO]->(b:Account) "
-            "RETURN DISTINCT a.account_id AS src, b.account_id AS dst"
-        ).data()
+    # Same features, same labels, same undirected adjacency as the Cypher version —
+    # aggregated in SQL over the txn table instead of over TRANSFERRED_TO edges.
+    _NODES = """
+        WITH tx AS (
+          SELECT src_account_id AS a, amount, injected_pattern FROM txn
+          UNION ALL
+          SELECT dst_account_id AS a, amount, injected_pattern FROM txn
+        )
+        SELECT a.account_id AS id,
+          (SELECT count(*) FROM txn o WHERE o.src_account_id = a.account_id) AS out_deg,
+          (SELECT count(*) FROM txn i WHERE i.dst_account_id = a.account_id) AS in_deg,
+          COALESCE((SELECT sum(amount) FROM txn o
+                     WHERE o.src_account_id = a.account_id), 0) AS out_amt,
+          COALESCE((SELECT sum(amount) FROM txn i
+                     WHERE i.dst_account_id = a.account_id), 0) AS in_amt,
+          COALESCE((SELECT count(*) FROM tx WHERE tx.a = a.account_id), 0) AS txn_count,
+          COALESCE((SELECT avg(amount) FROM tx WHERE tx.a = a.account_id), 0) AS avg_amt,
+          CASE WHEN EXISTS (SELECT 1 FROM tx
+                             WHERE tx.a = a.account_id
+                               AND tx.injected_pattern IS NOT NULL) THEN 1 ELSE 0 END AS label
+        FROM account a
+    """
+    _EDGES = "SELECT DISTINCT src_account_id AS src, dst_account_id AS dst FROM txn"
+
+    with get_session() as s:
+        nodes = [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in r.items()}
+                 for r in s.execute(text(_NODES)).mappings().all()]
+        edges = [dict(r) for r in s.execute(text(_EDGES)).mappings().all()]
 
     ids = [n["id"] for n in nodes]
     index = {a: i for i, a in enumerate(ids)}
@@ -148,10 +160,11 @@ def detect_subgraph(account_id: str, threshold: float = 0.5) -> list[Transaction
     hot = sorted(neighbours, key=lambda a: -probs[index[a]])[:5]
     hot_scores = ", ".join(f"{a[:8]}… ({probs[index[a]]:.2f})" for a in hot)
 
-    with get_driver().session() as g:
-        txns = g.run(
-            "MATCH (a:Account {account_id: $aid})-[:INVOLVED_IN]->(t:Transaction) "
-            "RETURN t.txn_id AS txn_id", aid=account_id).data()
+    with get_session() as s:
+        txns = [dict(r) for r in s.execute(text(
+            "SELECT txn_id FROM txn "
+            "WHERE src_account_id = :aid OR dst_account_id = :aid"
+        ), {"aid": account_id}).mappings().all()]
 
     explanation = (
         f"Account scores {probs[i]:.2f} in the laundering-subgraph classifier. "

@@ -1,26 +1,43 @@
-"""Build an internally consistent synthetic dataset in memory.
+"""Build an internally consistent synthetic dataset **in the organizers' ER shape**.
 
-Pure functions: given a seeded Random and a FIR count, return dataclass rows with
-referential integrity already wired (every FIR's complainant/IO/accused point at
-real generated persons/officers). No DB, no I/O — data/generator/load.py persists
-the result, data/generator/graph_sync.py mirrors it to Neo4j. Kept pure so the
-whole build is unit-testable without a running database.
+Pure functions: given a seeded Random and a case count, return rows that already satisfy
+every foreign key in Police_FIR_ER_Diagram.pdf. No DB, no I/O — generator/load.py persists
+them to the Catalyst Data Store.
+
+The one thing to understand about this file: **their ER has no person.** An `Accused` row
+belongs to exactly one case and carries a name string; `Accused.PersonID` is a sort label
+("A1", "A2"), not an identity. So a habitual offender appearing in six FIRs is six
+unrelated rows, and half of them may be spelled differently — "Ramesh Gowda" in one
+station, "Ramesha Gouda" in the next. That is not a defect we inject for show; it is what
+the schema structurally *is*, and it is what real police records look like.
+
+So the generator keeps a private cast of `TruePerson`s that it never writes to the record
+layer, and emits `Accused` rows *from* them, sometimes under a romanisation variant. The
+ground-truth mapping is returned for scoring only. Recovering it — Accused rows -> people —
+is the entity-resolution pass's job, and it is the only reason a question like "does he
+have priors?" can be answered against this schema at all.
+
+Two properties are load-bearing and easy to destroy; both are preserved from the previous
+generator, where each was a real bug found by a model that correctly learned there was no
+signal to find:
+  * incidents cluster around activity centres, not uniformly in a district (or KDE/DBSCAN
+    find no hotspot to find);
+  * accused are drawn by preferential attachment on prior offences, in chronological
+    order (or a prior record predicts nothing and recidivism is unlearnable).
 """
-import hashlib
+from __future__ import annotations
+
 import random
-import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+from ..districts import all_districts
 from ..priors import CrimeTypePrior, district_weights, sample_crime_type, sample_district
+from . import refdata as rd
 from .geo import sample_point
-from .names import sample_name
+from .names import full_record_name, sample_name, sample_patronym
 
 NOW = date(2026, 7, 1)
-ROLES = ("IO", "SHO", "DSP", "SP", "IG", "SCRB_Analyst")
-BAIL_STATUSES = ("Not Applied", "Granted", "Rejected", "Pending")
-GANGS = ("Sikhwal Gang", "KGF Syndicate", "Nayak Group", "Hubli Chain-Snatchers",
-         "Coastal Smuggling Ring", "Peenya Auto-Lifters")
 
 _MO = {
     "Theft": "Pickpocketing in a crowded market",
@@ -33,243 +50,347 @@ _MO = {
     "Narcotics": "Ganja transported concealed in a goods vehicle",
 }
 
+GANGS = ("Sikhwal Gang", "KGF Syndicate", "Nayak Group", "Hubli Chain-Snatchers",
+         "Coastal Smuggling Ring", "Peenya Auto-Lifters")
 
-@dataclass
-class Officer:
-    officer_id: str
-    badge_no: str
-    name: str
-    ps_code: str
-    district_code: str
-    role: str
+RECIDIVISM_ALPHA = 4.0      # strength of preferential attachment to prior offenders
+LOCAL_WEIGHT = 15.0         # how much more likely an accused is to live in the case district
+VARIANT_RATE = 0.35         # chance an accused is recorded under a spelling variant
 
 
 @dataclass
-class Person:
-    person_id: str
-    scrb_id: str
+class TruePerson:
+    """A human. Deliberately NOT an ER table — the ER has no such concept.
+
+    This is the generator's private ground truth. It is written to the record layer only
+    indirectly, as name strings on Accused/Victim/Complainant rows.
+    """
+    uid: int
     name_en: str
-    name_kn: str | None
+    patronym: str                     # father's given name — stable across every case
     dob: date
-    gender: str
-    address_geom: str          # WKT
-    aadhaar_hash: str
-    criminal_history: bool
-    risk_score: float | None
-    gang_affiliation: str | None
-    canonical_entity_id: str | None
-
-
-@dataclass
-class Fir:
-    fir_id: str
-    ps_code: str
-    district_code: str
-    fir_number: str
-    date_filed: datetime
-    ipc_sections: list[str]
-    crime_type: str
-    occurrence_from: datetime
-    occurrence_to: datetime
-    location_geom: str          # WKT
-    district: str
-    taluk: str
-    complainant_id: str
-    io_id: str
-    case_status: str
-    modus_operandi: str
-    narrative: str
-
-
-@dataclass
-class CriminalRecord:
-    record_id: str
-    person_id: str
-    fir_id: str
-    role: str
-    arrest_date: date | None
-    bail_status: str
-    conviction: bool
+    gender: str                       # M/F/T
+    home_district: str                # KAnn
+    lat: float
+    lng: float
+    gang: str | None = None
+    offences: int = 0
 
 
 @dataclass
 class Dataset:
-    officers: list[Officer] = field(default_factory=list)
-    persons: list[Person] = field(default_factory=list)
-    firs: list[Fir] = field(default_factory=list)
-    criminal_records: list[CriminalRecord] = field(default_factory=list)
-    # Ground truth for entity resolution: (duplicate_person_id, original_person_id).
-    # These are the same human recorded twice under a spelling variant — exactly the
-    # data-quality problem Fellegi-Sunter exists to fix. Used to score ER, never loaded.
-    true_duplicates: list[tuple[str, str]] = field(default_factory=list)
+    """Rows keyed by ER table name, ready for data.ds.insert()."""
+    tables: dict[str, list[dict]] = field(default_factory=dict)
+    people: list[TruePerson] = field(default_factory=list)
+    # AccusedMasterID -> TruePerson.uid. The answer key for entity resolution. Never loaded.
+    accused_truth: dict[int, int] = field(default_factory=dict)
+
+    def rows(self, table: str) -> list[dict]:
+        return self.tables.setdefault(table, [])
 
 
-def _uid(rng: random.Random) -> str:
-    """UUIDs drawn from the seeded rng, not uuid4(), so a given seed rebuilds the
-    *same* dataset — ids included. Without this, reruns produce new person_ids and
-    nothing downstream (entity-resolution scoring, fixtures) can be reproduced."""
-    return str(uuid.UUID(int=rng.getrandbits(128), version=4))
+# ------------------------------------------------------------------- police force / units
+def make_units_and_employees(rng: random.Random) -> tuple[list[dict], list[dict]]:
+    """Stations scale with each district's real crime weight.
 
-
-def _aadhaar_hash(rng: random.Random) -> str:
-    digits = "".join(str(rng.randint(0, 9)) for _ in range(12))
-    return hashlib.sha256(digits.encode()).hexdigest()
-
-
-def _ps_codes_for(district_code: str, n: int) -> list[str]:
-    return [f"{district_code}-PS{i:02d}" for i in range(1, n + 1)]
-
-
-def make_officers(rng: random.Random, districts: list[str]) -> list[Officer]:
-    """Stations scale with the district's real crime weight; a handful of officers each.
-
-    Bengaluru Urban carries ~28% of Karnataka's recorded crime and Kodagu well under
-    1%, so giving every district the same number of stations would misstate both the
-    force distribution and the per-station caseload an IO sees under RBAC.
+    Bengaluru Urban carries ~28% of Karnataka's recorded crime and Kodagu well under 1%.
+    Giving every district the same number of stations would misstate both the force
+    distribution and the per-station caseload an IO sees under RBAC.
     """
-    officers: list[Officer] = []
+    units: list[dict] = []
+    employees: list[dict] = []
     weights = district_weights()
-    seq = 1
-    for dc in districts:
-        for ps in _ps_codes_for(dc, max(2, round(weights[dc] / 2))):
-            for role in ("SHO", "IO", "IO", "IO", "DSP"):
-                officers.append(Officer(
-                    officer_id=_uid(rng), badge_no=f"KAB{seq:05d}",
-                    name=sample_name(rng, rng.choice("MF")),
-                    ps_code=ps, district_code=dc, role=role))
-                seq += 1
-    # a thin senior/analyst layer, one per state
-    for role in ("SP", "IG", "SCRB_Analyst"):
-        officers.append(Officer(_uid(rng), f"KAB{seq:05d}", sample_name(rng, "M"),
-                                districts[0] + "-HQ", districts[0], role))
-        seq += 1
-    return officers
+    emp_id = 1
+
+    for d in all_districts():
+        did = rd.district_id(d.code)
+        hq_id = did * 100                       # district HQ
+        units.append({"UnitID": hq_id, "UnitName": f"{d.name} District HQ", "TypeID": 3,
+                      "ParentUnit": None, "NationalityID": rd.NATIONALITY_INDIA,
+                      "StateID": rd.KARNATAKA_STATE_ID, "DistrictID": did, "Active": True})
+
+        n_ps = max(2, round(weights[d.code] / 2))
+        for i in range(1, n_ps + 1):
+            uid = did * 100 + i
+            units.append({"UnitID": uid, "UnitName": f"{d.name} PS-{i:02d}", "TypeID": 1,
+                          "ParentUnit": hq_id, "NationalityID": rd.NATIONALITY_INDIA,
+                          "StateID": rd.KARNATAKA_STATE_ID, "DistrictID": did, "Active": True})
+            # A station is an SHO, three IOs and a DSP. The DSP is what makes the
+            # "victim identity masked below DSP" policy rule exercisable at every station.
+            for role, rank in (("SHO", 4), ("IO", 5), ("IO", 5), ("IO", 5), ("DSP", 3)):
+                employees.append(_employee(rng, emp_id, did, uid, rank,
+                                           rd.ROLE_TO_DESIGNATION[role]))
+                emp_id += 1
+
+    # A thin state-level layer: SP, IG, SCRB analyst, posted at the first district's HQ.
+    for role, rank in (("SP", 2), ("IG", 1), ("SCRB_Analyst", 4)):
+        d0 = all_districts()[0]
+        employees.append(_employee(rng, emp_id, rd.district_id(d0.code), rd.district_id(d0.code) * 100,
+                                   rank, rd.ROLE_TO_DESIGNATION[role]))
+        emp_id += 1
+    return units, employees
 
 
-def make_persons(rng: random.Random, n: int) -> list[Person]:
-    persons: list[Person] = []
-    for i in range(n):
+def _employee(rng: random.Random, eid: int, did: int, uid: int, rank: int,
+              designation: int) -> dict:
+    gender = "F" if rng.random() < 0.18 else "M"
+    age = rng.randint(26, 58)
+    return {
+        "EmployeeID": eid, "DistrictID": did, "UnitID": uid, "RankID": rank,
+        "DesignationID": designation, "KGID": f"KGID{eid:06d}",
+        "FirstName": sample_name(rng, gender),
+        "EmployeeDOB": date(NOW.year - age, rng.randint(1, 12), rng.randint(1, 28)),
+        "GenderID": rd.GENDER[gender], "BloodGroupID": rng.randint(1, rd.BLOOD_GROUPS),
+        "PhysicallyChallenged": rng.random() < 0.02,
+        "AppointmentDate": date(NOW.year - rng.randint(1, age - 22), rng.randint(1, 12),
+                                rng.randint(1, 28)),
+    }
+
+
+# ------------------------------------------------------------------------------- the cast
+def make_people(rng: random.Random, n: int) -> list[TruePerson]:
+    people = []
+    for uid in range(1, n + 1):
         gender = "F" if rng.random() < 0.30 else "M"
         dc = sample_district(rng)
         age = rng.randint(18, 70)
-        dob = date(NOW.year - age, rng.randint(1, 12), rng.randint(1, 28))
-        persons.append(Person(
-            person_id=_uid(rng), scrb_id=f"SCRB{i:07d}",
-            name_en=sample_name(rng, gender), name_kn=None,
-            dob=dob, gender=gender, address_geom=sample_point(rng, dc),
-            aadhaar_hash=_aadhaar_hash(rng),
-            criminal_history=False, risk_score=None,
-            gang_affiliation=None, canonical_entity_id=None))
-    return persons
+        lat, lng = sample_point(rng, dc)
+        people.append(TruePerson(
+            uid=uid, name_en=sample_name(rng, gender), patronym=sample_patronym(rng),
+            dob=date(NOW.year - age, rng.randint(1, 12), rng.randint(1, 28)),
+            gender=gender, home_district=dc, lat=lat, lng=lng))
+    return people
 
 
-def _case_status(rng: random.Random, prior: CrimeTypePrior) -> str:
+def _recorded_name(rng: random.Random, p: TruePerson) -> str:
+    """How this person's name got typed into *this* FIR.
+
+    The S/o / D/o form every Indian FIR uses. A third of the time the given name is a
+    romanisation variant — which is precisely why the same human is unrecognisable across
+    stations, and why entity resolution is not optional. The patronymic drifts too, but
+    less often: it is copied from a document more often than heard aloud.
+    """
+    from ..nlp import transliterate
+
+    name = p.name_en
+    if rng.random() < VARIANT_RATE:
+        variants = [v for v in transliterate(name) if v != name]
+        name = rng.choice(variants) if variants else name
+    patronym = p.patronym
+    if rng.random() < VARIANT_RATE / 3:
+        variants = [v for v in transliterate(patronym) if v != patronym]
+        patronym = rng.choice(variants) if variants else patronym
+    return full_record_name(name, patronym, p.gender)
+
+
+def _recorded_age(rng: random.Random, p: TruePerson, on: date) -> int:
+    """Age as written down: usually right, sometimes off by a year or two.
+
+    Real FIRs record a stated age, not a verified DOB. The noise is what forces
+    Fellegi-Sunter to weigh partial agreement instead of demanding an exact match.
+    """
+    true_age = on.year - p.dob.year
+    return max(18, true_age + rng.choice([0, 0, 0, 0, 1, -1, 2, -2]))
+
+
+# ---------------------------------------------------------------------------------- cases
+def _case_status(rng: random.Random, prior: CrimeTypePrior) -> int:
     if rng.random() > prior.chargesheet_rate:
-        return "Under Investigation"
-    # chargesheeted → resolved by court per conviction rate
+        return 1                                                # Under Investigation
     r = rng.random()
     if r < prior.conviction_rate:
-        return "Convicted"
+        return 3                                                # Convicted
     if r < prior.conviction_rate + 0.25:
-        return "Acquitted"
-    return "Chargesheeted"
+        return 4                                                # Acquitted
+    return 2                                                    # Chargesheeted
 
 
-def make_firs(rng: random.Random, officers: list[Officer], persons: list[Person],
-              n: int) -> tuple[list[Fir], list[CriminalRecord]]:
-    by_ps: dict[str, list[Officer]] = {}
-    for o in officers:
-        if o.role in ("IO", "SHO"):
-            by_ps.setdefault(o.ps_code, []).append(o)
-    # Stations grouped by district, so a FIR's district can be drawn from the real
-    # KSP/NCRB crime weights and only THEN assigned a station inside it. Picking a
-    # station uniformly instead (the previous behaviour) spread crime evenly across
-    # districts regardless of their weight, which flattened the district crime rate
-    # to noise — and every district-level model downstream (causal effects, the
-    # socioeconomic risk story, the Isolation Forest spike detector, the choropleth)
-    # reads that rate as its signal.
-    by_district: dict[str, list[str]] = {}
-    for ps in by_ps:
-        by_district.setdefault(ps.split("-")[0], []).append(ps)
+def _crime_no(category: int, district: int, unit: int, year: int, serial: int) -> str:
+    """The ER's format: 1 category + 4 district + 4 unit + 4 year + 5 serial = 18 digits.
 
-    firs: list[Fir] = []
-    records: list[CriminalRecord] = []
-    year_seq: dict[int, int] = {}
+    e.g. FIR 1 0443 0006 2026 00001 -> "104430006202600001". A separate serial runs per
+    (station, category, year), exactly as the diagram specifies.
+    """
+    return f"{category:1d}{district:04d}{unit:04d}{year:04d}{serial:05d}"
 
-    # Chronological order matters: accused are drawn by preferential attachment on
-    # their PRIOR offences, so the FIRs must be created oldest-first for a "prior"
-    # to actually precede the offence it predicts. Generating them in random order
-    # would make the repeat-offender structure — and the recidivism model trained on
-    # it — non-causal.
-    filed_dates = sorted(_rand_datetime(rng, days_back=rng.randint(1, 1095))
-                         for _ in range(n))
-    offence_count: dict[str, int] = {}
+
+def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TruePerson,
+                  district: str) -> list[TruePerson]:
+    """Two forces decide who did it: prior offending, and proximity.
+
+    Preferential attachment on priors. Uniform sampling means a prior record predicts
+    nothing about future offending, so there is no habitual cohort and a recidivism model
+    correctly learns there is no signal. Real offending is heavily skewed. Weighting by
+    1 + ALPHA * priors reproduces that skew — and it only works because cases are
+    generated oldest-first, so a "prior" genuinely precedes the offence it predicts.
+
+    Locality. Offenders overwhelmingly offend near where they live; they do not commute
+    across Karnataka at random. Drawing them state-wide (which is what this did first)
+    scatters one man's cases across 31 districts, and then *where a crime happened carries
+    no information about who did it* — which destroys entity resolution's second-strongest
+    signal (measured: m[location] came out identical to u[location], i.e. exactly zero
+    evidence) and flattens the co-accused graph into geographic nonsense, so Louvain finds
+    communities that no real gang would recognise. LOCAL_WEIGHT restores the patch.
+    The residual cross-district draw is real too: it is what organised crime looks like.
+    """
+    k = rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0]
+    weights = [(1.0 + RECIDIVISM_ALPHA * p.offences)
+               * (LOCAL_WEIGHT if p.home_district == district else 1.0)
+               for p in pool]
+    chosen: list[TruePerson] = []
+    for _ in range(50):
+        if len(chosen) == k:
+            break
+        p = rng.choices(pool, weights=weights, k=1)[0]
+        if p.uid == complainant.uid or p in chosen:
+            continue
+        if p.gang is None and rng.random() < 0.15:
+            p.gang = rng.choice(GANGS)
+        chosen.append(p)
+    return chosen
+
+
+def _narrative(crime_type: str, district: str, filed: datetime, mo: str) -> str:
+    return (f"On {filed:%d %b %Y}, a case of {crime_type.lower()} was registered in "
+            f"{district} district. {mo}. Investigation is being carried out as per procedure.")
+
+
+def generate(rng: random.Random, n_cases: int) -> Dataset:
+    ds = Dataset()
+    ds.tables.update(rd.build())                     # masters first: every FK below resolves
+
+    units, employees = make_units_and_employees(rng)
+    ds.tables["Unit"] = units
+    ds.tables["Employee"] = employees
+
+    people = make_people(rng, max(20, int(n_cases * 0.7)))
+    ds.people = people
+
+    # Stations and their staff, indexed for lookup during case generation.
+    stations = [u for u in units if u["TypeID"] == 1]
+    by_district: dict[int, list[dict]] = {}
+    for u in stations:
+        by_district.setdefault(u["DistrictID"], []).append(u)
+    ios: dict[int, list[int]] = {}
+    for e in employees:
+        if e["DesignationID"] in (rd.ROLE_TO_DESIGNATION["IO"], rd.ROLE_TO_DESIGNATION["SHO"]):
+            ios.setdefault(e["UnitID"], []).append(e["EmployeeID"])
+
+    # Oldest-first. See _pick_accused.
+    filed_dates = sorted(_rand_datetime(rng, rng.randint(1, 1095)) for _ in range(n_cases))
+
+    serial: dict[tuple[int, int, int], int] = {}     # (unit, category, year) -> running no
+    ids = dict(case=0, comp=0, vic=0, acc=0, arr=0, cs=0)
 
     for filed in filed_dates:
         prior = sample_crime_type(rng)
         dc = sample_district(rng)
-        ps = rng.choice(by_district[dc])
-        district = _district_name(dc)
-        io = rng.choice(by_ps[ps])
-        occ_from = filed - timedelta(hours=rng.randint(2, 240))   # crime precedes the report
+        did = rd.district_id(dc)
+        unit = rng.choice(by_district[did])
+        uid = unit["UnitID"]
+        io = rng.choice(ios[uid])
+        year = filed.year
+        category = rd.CASE_CATEGORY["FIR"]
+        key = (uid, category, year)
+        serial[key] = serial.get(key, 0) + 1
+
+        ids["case"] += 1
+        case_id = ids["case"]
+        occ_from = filed - timedelta(hours=rng.randint(2, 240))     # crime precedes the report
         occ_to = min(occ_from + timedelta(hours=rng.randint(0, 12)), filed)
-        yr = filed.year
-        year_seq[yr] = year_seq.get(yr, 0) + 1
+        lat, lng = sample_point(rng, dc)
+        dname = _district_name(dc)
+        mo = _MO.get(prior.crime_type, f"{prior.crime_type} — routine method")
+        status = _case_status(rng, prior)
 
-        complainant = rng.choice(persons)
-        fir = Fir(
-            fir_id=_uid(rng), ps_code=ps, district_code=dc,
-            fir_number=f"{year_seq[yr]:04d}/{yr}",
-            date_filed=filed, ipc_sections=list(prior.ipc_sections),
-            crime_type=prior.crime_type, occurrence_from=occ_from, occurrence_to=occ_to,
-            location_geom=sample_point(rng, dc), district=district, taluk=district,
-            complainant_id=complainant.person_id, io_id=io.officer_id,
-            case_status=_case_status(rng, prior),
-            modus_operandi=_MO.get(prior.crime_type, f"{prior.crime_type} — routine method"),
-            narrative=_stub_narrative(prior.crime_type, district, filed))
-        firs.append(fir)
+        ds.rows("CaseMaster").append({
+            "CaseMasterID": case_id,
+            "CrimeNo": _crime_no(category, did, uid, year, serial[key]),
+            "CaseNo": f"{year:04d}{serial[key]:05d}",
+            "CrimeRegisteredDate": filed.date(),
+            "PolicePersonID": io, "PoliceStationID": uid,
+            "CaseCategoryID": category,
+            "GravityOffenceID": rd.gravity_id(prior.crime_type),
+            "CrimeMajorHeadID": rd.crime_head_id(prior.crime_type),
+            "CrimeMinorHeadID": rd.sub_head_id(prior.crime_type),
+            "CaseStatusID": status, "CourtID": did,
+            "IncidentFromDate": occ_from, "IncidentToDate": occ_to,
+            "InfoReceivedPSDate": filed,
+            "latitude": lat, "longitude": lng,
+            "BriefFacts": _narrative(prior.crime_type, dname, filed, mo),
+        })
 
-        for accused in _pick_accused(rng, persons, complainant, offence_count):
-            accused.criminal_history = True
-            offence_count[accused.person_id] = offence_count.get(accused.person_id, 0) + 1
-            arrested = rng.random() < 0.7
-            records.append(CriminalRecord(
-                record_id=_uid(rng), person_id=accused.person_id, fir_id=fir.fir_id,
-                role="Accused",
-                arrest_date=(filed.date() + timedelta(days=rng.randint(0, 30))) if arrested else None,
-                bail_status=rng.choice(BAIL_STATUSES) if arrested else "Not Applied",
-                conviction=(fir.case_status == "Convicted")))
-    return firs, records
+        # ActSectionAssociation — the ER's replacement for a TEXT[] of IPC sections.
+        act = rd.act_for(prior.crime_type)
+        for order, sec in enumerate(prior.ipc_sections, start=1):
+            ds.rows("ActSectionAssociation").append({
+                "CaseMasterID": case_id, "ActID": act, "SectionID": sec,
+                "ActOrderID": 1, "SectionOrderID": order})
 
+        complainant = rng.choice(people)
+        ids["comp"] += 1
+        ds.rows("ComplainantDetails").append({
+            "ComplainantID": ids["comp"], "CaseMasterID": case_id,
+            "ComplainantName": _recorded_name(rng, complainant),
+            "AgeYear": _recorded_age(rng, complainant, filed.date()),
+            "OccupationID": rng.randint(1, len(rd.OCCUPATIONS)),
+            "ReligionID": rng.randint(1, len(rd.RELIGIONS)),
+            "CasteID": rng.randint(1, len(rd.CASTES)),
+            "GenderID": rd.GENDER[complainant.gender]})
 
-RECIDIVISM_ALPHA = 4.0    # strength of preferential attachment to prior offenders
+        # Victims: property crime often has the complainant as the sole victim; crimes
+        # against the body always name one.
+        for _ in range(rng.choices([1, 2], weights=[85, 15])[0]):
+            v = complainant if rng.random() < 0.6 else rng.choice(people)
+            ids["vic"] += 1
+            ds.rows("Victim").append({
+                "VictimMasterID": ids["vic"], "CaseMasterID": case_id,
+                "VictimName": _recorded_name(rng, v),
+                "AgeYear": _recorded_age(rng, v, filed.date()),
+                "GenderID": rd.GENDER[v.gender],
+                "VictimPolice": "1" if rng.random() < 0.01 else "0"})
 
+        for n, person in enumerate(_pick_accused(rng, people, complainant, dc), start=1):
+            person.offences += 1
+            ids["acc"] += 1
+            acc_id = ids["acc"]
+            ds.accused_truth[acc_id] = person.uid          # the answer key. Never loaded.
+            ds.rows("Accused").append({
+                "AccusedMasterID": acc_id, "CaseMasterID": case_id,
+                "AccusedName": _recorded_name(rng, person),
+                "AgeYear": _recorded_age(rng, person, filed.date()),
+                "GenderID": rd.GENDER[person.gender],
+                "PersonID": f"A{n}"})                      # a sort label, per the ER
 
-def _pick_accused(rng: random.Random, pool: list[Person], complainant: Person,
-                  offence_count: dict[str, int]) -> list[Person]:
-    """Accused are drawn with preferential attachment on prior offences.
+            if rng.random() < 0.7:                         # arrested
+                ids["arr"] += 1
+                arr_id = ids["arr"]
+                ds.rows("ArrestSurrender").append({
+                    "ArrestSurrenderID": arr_id, "CaseMasterID": case_id,
+                    "ArrestSurrenderTypeID": rd.ARREST_TYPE[
+                        "Surrender" if rng.random() < 0.12 else "Arrest"],
+                    "ArrestSurrenderDate": filed.date() + timedelta(days=rng.randint(0, 30)),
+                    "ArrestSurrenderStateId": rd.KARNATAKA_STATE_ID,
+                    "ArrestSurrenderDistrictId": did, "PoliceStationID": uid,
+                    "IOID": io, "CourtID": did, "AccusedMasterID": acc_id,
+                    "IsAccused": True, "IsComplainantAccused": False})
+                ds.rows("inv_arrestsurrenderaccused").append(
+                    {"ArrestSurrenderID": arr_id, "AccusedMasterID": acc_id})
 
-    Uniform sampling — which is what this did first — means a prior record predicts
-    nothing about future offending, so there is no repeat-offender population, and
-    any recidivism model trained on it correctly learns that there is no signal
-    (it predicted the positive class exactly zero times). Real offending is heavily
-    skewed: a small habitual cohort accounts for a large share of cases. Weighting
-    by 1 + ALPHA * priors reproduces that skew.
-    """
-    k = rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0]
-    weights = [1.0 + RECIDIVISM_ALPHA * offence_count.get(p.person_id, 0) for p in pool]
+        if status in (2, 3, 4):                            # chargesheeted or beyond
+            ids["cs"] += 1
+            ds.rows("ChargesheetDetails").append({
+                "CSID": ids["cs"], "CaseMasterID": case_id,
+                "csdate": filed + timedelta(days=rng.randint(30, 180)),
+                "cstype": "A", "PolicePersonID": io})
+        elif rng.random() < 0.05:                          # closed as false / undetected
+            ids["cs"] += 1
+            ds.rows("ChargesheetDetails").append({
+                "CSID": ids["cs"], "CaseMasterID": case_id,
+                "csdate": filed + timedelta(days=rng.randint(60, 240)),
+                "cstype": rng.choice(["B", "C"]), "PolicePersonID": io})
 
-    chosen: list[Person] = []
-    guard = 0
-    while len(chosen) < k and guard < 50:
-        guard += 1
-        p = rng.choices(pool, weights=weights, k=1)[0]
-        if p.person_id == complainant.person_id or p in chosen:
-            continue
-        if p.gang_affiliation is None and rng.random() < 0.15:
-            p.gang_affiliation = rng.choice(GANGS)
-        chosen.append(p)
-    return chosen
+    return ds
 
 
 def _rand_datetime(rng: random.Random, days_back: int) -> datetime:
@@ -277,73 +398,44 @@ def _rand_datetime(rng: random.Random, days_back: int) -> datetime:
     return base + timedelta(hours=rng.randint(0, 23), minutes=rng.randint(0, 59))
 
 
-def _stub_narrative(crime_type: str, district: str, filed: datetime) -> str:
-    return (f"On {filed:%d %b %Y}, a case of {crime_type.lower()} was registered in "
-            f"{district} district. Investigation is being carried out as per procedure.")
-
-
 def _district_name(code: str) -> str:
     from ..districts import canonical_name
     return canonical_name(code) or code
 
 
-def inject_duplicates(rng: random.Random, persons: list[Person],
-                      rate: float = 0.06) -> list[tuple[str, str]]:
-    """Record ~6% of people a second time under a romanisation variant.
-
-    This is the real data-quality defect Fellegi-Sunter targets: the same human
-    entered twice as "Ramesh Gowda" and "Ramesha Gouda", different SCRB id, a
-    transposed DOB, a slightly different address, no shared Aadhaar. Without this
-    the ER pass would have nothing to find. Appends to `persons` in place and
-    returns the (duplicate_id, original_id) ground truth.
-    """
-    from ..nlp import transliterate
-
-    truth: list[tuple[str, str]] = []
-    originals = list(persons)
-    seq = len(persons)
-    for orig in originals:
-        if rng.random() >= rate:
-            continue
-        variants = [v for v in transliterate(orig.name_en) if v != orig.name_en]
-        if not variants:
-            continue
-        dob = orig.dob
-        if rng.random() < 0.4:      # transposed/mis-keyed day — common in real entry
-            dob = date(dob.year, dob.month, max(1, min(28, dob.day // 10 + (dob.day % 10) * 10)))
-        dup = Person(
-            person_id=_uid(rng), scrb_id=f"SCRB{seq:07d}",
-            name_en=rng.choice(variants), name_kn=None,
-            dob=dob, gender=orig.gender,
-            address_geom=orig.address_geom,        # same neighbourhood
-            aadhaar_hash=_aadhaar_hash(rng),       # not linkable on Aadhaar
-            criminal_history=False, risk_score=None,
-            gang_affiliation=orig.gang_affiliation, canonical_entity_id=None)
-        persons.append(dup)
-        truth.append((dup.person_id, orig.person_id))
-        seq += 1
-    return truth
-
-
-def generate(rng: random.Random, n_firs: int) -> Dataset:
-    """Top-level: derive person/officer counts from FIR count, build a coherent set."""
-    n_persons = max(20, int(n_firs * 0.7))
-    # Every district has police stations. Sampling districts into a set here (the
-    # previous behaviour) silently dropped ~half of them — 16 of 31 — so a query
-    # about Raichur or Kalaburagi returned "no records" for a district that simply
-    # never got generated. Crime VOLUME is what the weights control, not existence.
-    districts = sorted(district_weights())
-    officers = make_officers(rng, districts)
-    persons = make_persons(rng, n_persons)
-    # duplicates exist before FIRs are filed, so a FIR can name either record —
-    # which is exactly why the duplicate goes undetected in the raw data.
-    truth = inject_duplicates(rng, persons)
-    firs, records = make_firs(rng, officers, persons, n_firs)
-    return Dataset(officers=officers, persons=persons, firs=firs,
-                   criminal_records=records, true_duplicates=truth)
-
-
 if __name__ == "__main__":
     ds = generate(random.Random(7), 500)
-    print(f"officers={len(ds.officers)} persons={len(ds.persons)} "
-          f"firs={len(ds.firs)} records={len(ds.criminal_records)}")
+
+    cases = {r["CaseMasterID"] for r in ds.tables["CaseMaster"]}
+    assert len(cases) == 500
+
+    # Every CrimeNo is the ER's 18-digit format, and unique.
+    nos = [r["CrimeNo"] for r in ds.tables["CaseMaster"]]
+    assert all(len(n) == 18 and n.isdigit() for n in nos), "CrimeNo is not 18 digits"
+    assert len(set(nos)) == len(nos), "CrimeNo collision"
+    # CaseNo is the last 9 digits of CrimeNo, per the diagram's highlighted note.
+    assert all(r["CaseNo"] == r["CrimeNo"][-9:] for r in ds.tables["CaseMaster"])
+
+    # Referential integrity: no child row may point at a case that doesn't exist.
+    for t in ("ComplainantDetails", "Victim", "Accused", "ArrestSurrender",
+              "ActSectionAssociation", "ChargesheetDetails"):
+        assert all(r["CaseMasterID"] in cases for r in ds.tables[t]), t
+    accused = {r["AccusedMasterID"] for r in ds.tables["Accused"]}
+    assert all(r["AccusedMasterID"] in accused for r in ds.tables["ArrestSurrender"])
+    assert all(r["AccusedMasterID"] in accused for r in ds.tables["inv_arrestsurrenderaccused"])
+    units = {r["UnitID"] for r in ds.tables["Unit"]}
+    emps = {r["EmployeeID"] for r in ds.tables["Employee"]}
+    assert all(r["PoliceStationID"] in units for r in ds.tables["CaseMaster"])
+    assert all(r["PolicePersonID"] in emps for r in ds.tables["CaseMaster"])
+
+    # The two properties that models actually depend on.
+    repeat = sum(1 for p in ds.people if p.offences > 2)
+    assert repeat > 0, "no habitual offenders — recidivism would be unlearnable"
+    canonical = {p.uid: full_record_name(p.name_en, p.patronym, p.gender) for p in ds.people}
+    variants = sum(1 for a in ds.tables["Accused"]
+                   if a["AccusedName"] != canonical[ds.accused_truth[a["AccusedMasterID"]]])
+    assert variants > 0, "no name variants — entity resolution would have nothing to find"
+
+    print(f"build OK: cases={len(cases)} accused={len(accused)} "
+          f"habitual={repeat} name-variants={variants}/{len(accused)} "
+          f"units={len(units)} employees={len(emps)}")
