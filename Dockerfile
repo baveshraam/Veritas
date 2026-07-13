@@ -53,9 +53,44 @@ RUN --mount=type=cache,target=/root/.cache/pip pip install \
         "./packages/rag_agent" \
         "./apps/api"
 
-# fastembed's ONNX cache and HF weights must land somewhere writable at runtime.
-ENV VERITAS_FASTEMBED_CACHE=/tmp/fastembed \
-    HF_HOME=/tmp/hf
+# Model weights are BAKED IN, not fetched at runtime.
+#
+# Three reasons, in order of how much they matter:
+#   1. A running container that reaches out to huggingface.co is a third-party dependency at
+#      request time — exactly what the competition rule is about, and exactly what "self-
+#      hosted so FIR text never leaves the network" is supposed to prevent. Downloading the
+#      *model* is not the same as sending it data, but it is still an egress dependency the
+#      deployment does not control.
+#   2. A cold AppSail container would otherwise spend its first Kannada request downloading
+#      2.4GB of NLLB. That is not a slow answer, it is a timeout.
+#   3. If the download fails — rate limit, network policy, a renamed repo — the failure lands
+#      on an officer's query instead of on a build.
+ENV VERITAS_FASTEMBED_CACHE=/opt/models/fastembed \
+    HF_HOME=/opt/models/hf \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1
+
+RUN --mount=type=cache,target=/root/.cache/pip \
+    HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python - <<'PY'
+import os
+# The retrieval embedder: every single query goes through it.
+from fastembed import TextEmbedding
+TextEmbedding(model_name="BAAI/bge-small-en-v1.5",
+              cache_dir=os.environ["VERITAS_FASTEMBED_CACHE"])
+
+# Kannada translation. Kept self-hosted because Catalyst Zia has no translation service at
+# all — see CLAUDE.md. NLLB-200 rather than IndicTrans2 only because IndicTrans2's weights
+# are gated behind a click-through, which a build cannot do.
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
+AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-distilled-600M")
+
+# ASR. Zia has no speech-to-text either. `base.en` for English, multilingual `small` for
+# Kannada — both are what data.nlp.speech loads by default, so they must both be here.
+from faster_whisper import WhisperModel
+WhisperModel("base.en", device="cpu", compute_type="int8")
+WhisperModel("small", device="cpu", compute_type="int8")
+PY
 
 # AppSail injects $X_ZOHO_CATALYST_LISTEN_PORT; fall back to 8000 for local runs.
 EXPOSE 8000

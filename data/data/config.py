@@ -1,7 +1,7 @@
-"""Connection settings, read from the environment once.
+"""Veritas configuration — read from the environment once.
 
-Single source for every DSN so no module hardcodes a connection string.
-Defaults target a local docker-compose dev stack; override via env in prod.
+All data access goes through data.ds (ZCQL → Catalyst Data Store | SQLite).
+This module exists only for any non-database settings that need a single source.
 """
 import os
 from functools import lru_cache
@@ -10,16 +10,13 @@ from pydantic import BaseModel
 
 
 class Settings(BaseModel):
-    postgres_dsn: str
+    catalyst_project_id: str
+    catalyst_org: str
 
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    # One store now: the knowledge graph is an edge-list table in the same database
-    # (see data.graph), so there is no second DSN to configure.
     return Settings(
-        postgres_dsn=os.getenv(
-            "VERITAS_POSTGRES_DSN",
-            "postgresql+psycopg://veritas:veritas@localhost:5432/veritas",
-        ),
+        catalyst_project_id=os.getenv("CATALYST_PROJECT_ID", "52852000000013048"),
+        catalyst_org=os.getenv("CATALYST_ORG", "60077763394"),
     )

@@ -22,9 +22,7 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
-from sqlalchemy import text
-
-from data.db import get_session
+from data import ds, queries
 
 from ..types import ForecastResult
 
@@ -34,18 +32,21 @@ logging.getLogger("prophet").setLevel(logging.WARNING)
 MIN_POINTS = 20          # Prophet needs a real series, not three dots
 
 
-def _daily_counts(district_code: str) -> pd.DataFrame:
-    """Long frame: one row per (ps_code, day) with the FIR count, zero-filled."""
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT ps_code, date_trunc('day', date_filed)::date AS ds, count(*) AS y "
-            "FROM fir WHERE district_code = :dc AND date_filed IS NOT NULL "
-            "GROUP BY 1, 2 ORDER BY 2"
-        ), {"dc": district_code}).all()
+def _daily_counts(district_id: int) -> pd.DataFrame:
+    """Long frame: one row per (station, day) with the case count, zero-filled.
+
+    The daily aggregation is done here, not in the query: ZCQL has no date_trunc. The rows
+    are one district's cases — thousands, not millions.
+    """
+    rows = queries.cases_in_district(district_id)
+    rows = [r for r in rows if r["CrimeRegisteredDate"]]
     if not rows:
         return pd.DataFrame(columns=["ps_code", "ds", "y"])
-    df = pd.DataFrame(rows, columns=["ps_code", "ds", "y"])
-    df["ds"] = pd.to_datetime(df["ds"])
+
+    df = pd.DataFrame([{"ps_code": r["PoliceStationID"],
+                        "ds": ds.to_dt(r["CrimeRegisteredDate"])} for r in rows])
+    df["ds"] = pd.to_datetime(df["ds"]).dt.normalize()
+    df = df.groupby(["ps_code", "ds"]).size().reset_index(name="y")
     # zero-fill: a day with no FIR is a real zero, not a gap
     full = pd.MultiIndex.from_product(
         [df["ps_code"].unique(),
@@ -89,7 +90,7 @@ def _mint_reconcile(base: np.ndarray, resid_var: np.ndarray, n_bottom: int) -> n
 
 
 def forecast_crime(district_code: str, horizon_days: int) -> ForecastResult:
-    df = _daily_counts(district_code)
+    df = _daily_counts(queries.district_id(district_code))
     if df.empty:
         return ForecastResult(level="district", series=[], reconciled=False)
 

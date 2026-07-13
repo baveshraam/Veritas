@@ -7,10 +7,9 @@ this month is unlike the district's own history, never "deploy here".
 import asyncio
 from datetime import datetime, timedelta, timezone
 
-from data.db import get_session
+from data import ds
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from ml_models.serving import check_anomalies
-from sqlalchemy import text
 
 router = APIRouter()
 
@@ -26,9 +25,12 @@ MAX_PER_POLL = 4
 
 
 def _districts() -> list[str]:
-    with get_session() as s:
-        return [r.district_code for r in s.execute(text(
-            "SELECT DISTINCT district_code FROM fir WHERE district_code IS NOT NULL")).all()]
+    """The district codes to watch. Read from the District master, not from the cases —
+    a district with no case this month is exactly the one a spike would be news in."""
+    from data.districts import all_districts
+    known = {r["DistrictID"] for r in ds.query('SELECT "DistrictID" FROM "District"')}
+    from data.generator.refdata import district_id
+    return [d.code for d in all_districts() if district_id(d.code) in known]
 
 
 def _recent(alert) -> bool:

@@ -28,6 +28,7 @@ signal to find:
 from __future__ import annotations
 
 import random
+from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
@@ -50,11 +51,9 @@ _MO = {
     "Narcotics": "Ganja transported concealed in a goods vehicle",
 }
 
-GANGS = ("Sikhwal Gang", "KGF Syndicate", "Nayak Group", "Hubli Chain-Snatchers",
-         "Coastal Smuggling Ring", "Peenya Auto-Lifters")
-
 RECIDIVISM_ALPHA = 4.0      # strength of preferential attachment to prior offenders
 LOCAL_WEIGHT = 15.0         # how much more likely an accused is to live in the case district
+CREW_WEIGHT = 40.0          # pull towards people the lead offender has already worked with
 VARIANT_RATE = 0.35         # chance an accused is recorded under a spelling variant
 
 
@@ -73,7 +72,6 @@ class TruePerson:
     home_district: str                # KAnn
     lat: float
     lng: float
-    gang: str | None = None
     offences: int = 0
 
 
@@ -215,38 +213,57 @@ def _crime_no(category: int, district: int, unit: int, year: int, serial: int) -
 
 
 def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TruePerson,
-                  district: str) -> list[TruePerson]:
-    """Two forces decide who did it: prior offending, and proximity.
+                  district: str, crews: dict[int, Counter]) -> list[TruePerson]:
+    """Three forces decide who did it: prior offending, proximity, and who they run with.
 
     Preferential attachment on priors. Uniform sampling means a prior record predicts
     nothing about future offending, so there is no habitual cohort and a recidivism model
     correctly learns there is no signal. Real offending is heavily skewed. Weighting by
-    1 + ALPHA * priors reproduces that skew — and it only works because cases are
-    generated oldest-first, so a "prior" genuinely precedes the offence it predicts.
+    1 + ALPHA * priors reproduces that skew — and it only works because cases are generated
+    oldest-first, so a "prior" genuinely precedes the offence it predicts.
 
     Locality. Offenders overwhelmingly offend near where they live; they do not commute
     across Karnataka at random. Drawing them state-wide (which is what this did first)
     scatters one man's cases across 31 districts, and then *where a crime happened carries
     no information about who did it* — which destroys entity resolution's second-strongest
     signal (measured: m[location] came out identical to u[location], i.e. exactly zero
-    evidence) and flattens the co-accused graph into geographic nonsense, so Louvain finds
-    communities that no real gang would recognise. LOCAL_WEIGHT restores the patch.
-    The residual cross-district draw is real too: it is what organised crime looks like.
+    evidence). LOCAL_WEIGHT restores it. The residual cross-district draw is real too: it
+    is what organised crime looks like.
+
+    Triadic closure — the crew. Drawing every co-accused independently from the pool was
+    the remaining defect, and it was a bad one: it makes co-offending a *random* graph over
+    the active offenders, and a random graph has no community structure. Louvain duly found
+    one giant community containing 254 of 255 people, which is a true statement about the
+    data and a useless one about crime. Real offenders reoffend with the people they already
+    offended with. Weighting each additional accused by how often they have worked with this
+    case's lead (CREW_WEIGHT) is what makes a crew a crew — and it is the thing Louvain is
+    there to recover. The gang label is a *consequence* of this structure, not an input to
+    it: nothing downstream reads TruePerson.gang, and the ER records no gang at all.
     """
     k = rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0]
-    weights = [(1.0 + RECIDIVISM_ALPHA * p.offences)
-               * (LOCAL_WEIGHT if p.home_district == district else 1.0)
-               for p in pool]
+    base = [(1.0 + RECIDIVISM_ALPHA * p.offences)
+            * (LOCAL_WEIGHT if p.home_district == district else 1.0)
+            for p in pool]
+
     chosen: list[TruePerson] = []
-    for _ in range(50):
+    for _ in range(60):
         if len(chosen) == k:
             break
+        if not chosen:
+            weights = base
+        else:
+            # Everyone after the lead is drawn towards the lead's known associates.
+            crew = crews[chosen[0].uid]
+            weights = [b * (1.0 + CREW_WEIGHT * crew[p.uid]) for b, p in zip(base, pool)]
         p = rng.choices(pool, weights=weights, k=1)[0]
         if p.uid == complainant.uid or p in chosen:
             continue
-        if p.gang is None and rng.random() < 0.15:
-            p.gang = rng.choice(GANGS)
         chosen.append(p)
+
+    for a in chosen:                      # record the crew ties this case just created
+        for b in chosen:
+            if a.uid != b.uid:
+                crews[a.uid][b.uid] += 1
     return chosen
 
 
@@ -281,6 +298,8 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
 
     serial: dict[tuple[int, int, int], int] = {}     # (unit, category, year) -> running no
     ids = dict(case=0, comp=0, vic=0, acc=0, arr=0, cs=0)
+    # Who has offended with whom, so far. The crew structure Louvain is meant to recover.
+    crews: dict[int, Counter] = defaultdict(Counter)
 
     for filed in filed_dates:
         prior = sample_crime_type(rng)
@@ -350,7 +369,8 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
                 "GenderID": rd.GENDER[v.gender],
                 "VictimPolice": "1" if rng.random() < 0.01 else "0"})
 
-        for n, person in enumerate(_pick_accused(rng, people, complainant, dc), start=1):
+        for n, person in enumerate(
+                _pick_accused(rng, people, complainant, dc, crews), start=1):
             person.offences += 1
             ids["acc"] += 1
             acc_id = ids["acc"]

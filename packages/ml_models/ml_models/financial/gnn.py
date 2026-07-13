@@ -14,56 +14,86 @@ Explained per flag by neighbourhood attribution (which neighbouring accounts mov
 the model's score), not a bare probability — an unexplained "0.87 suspicious" is
 useless to an investigating officer.
 """
-from decimal import Decimal
+import json
+import os
+from pathlib import Path
 from functools import lru_cache
 
 import numpy as np
-from sqlalchemy import text
 
-from data.db import get_session
+from data import ds
 
 from ..types import TransactionFlag
 
 DETECTOR = "gnn_subgraph"
+
+# Ground truth for training, written by data/generator/run.py. Deliberately NOT a column on
+# vx_txn: `FlaggedSuspicious` is this model's OUTPUT, and a classifier trained on a label
+# sitting in the table it scores is measuring nothing.
+def _aml_labels_path() -> Path:
+    """Read from the environment on every call, not at import — a path frozen at import time
+    cannot be redirected by a test."""
+    return Path(os.getenv("VERITAS_AML_LABELS", ".veritas/aml_labels.json"))
 _HIDDEN = 24
 _EPOCHS = 120
 _SEED = 0
 
 
-def _fetch_graph() -> tuple[list[str], np.ndarray, np.ndarray, np.ndarray]:
+def _injected_txn_ids() -> set[int]:
+    """TxnIDs carrying an injected laundering pattern. Empty if the labels file is absent —
+    an untrained detector that flags nothing is safe; one trained on absent labels is not.
+    """
+    path = _aml_labels_path()
+    if not path.exists():
+        return set()
+    return {int(k) for k in json.loads(path.read_text(encoding="utf-8"))}
+
+
+def _fetch_graph() -> tuple[list[int], np.ndarray, np.ndarray, np.ndarray]:
     """Account-level graph: node features, adjacency (undirected), labels.
 
-    An account is 'laundering' ground truth if any transaction it participates in
-    carries an injected_pattern.
-    """
-    # Same features, same labels, same undirected adjacency as the Cypher version —
-    # aggregated in SQL over the txn table instead of over TRANSFERRED_TO edges.
-    _NODES = """
-        WITH tx AS (
-          SELECT src_account_id AS a, amount, injected_pattern FROM txn
-          UNION ALL
-          SELECT dst_account_id AS a, amount, injected_pattern FROM txn
-        )
-        SELECT a.account_id AS id,
-          (SELECT count(*) FROM txn o WHERE o.src_account_id = a.account_id) AS out_deg,
-          (SELECT count(*) FROM txn i WHERE i.dst_account_id = a.account_id) AS in_deg,
-          COALESCE((SELECT sum(amount) FROM txn o
-                     WHERE o.src_account_id = a.account_id), 0) AS out_amt,
-          COALESCE((SELECT sum(amount) FROM txn i
-                     WHERE i.dst_account_id = a.account_id), 0) AS in_amt,
-          COALESCE((SELECT count(*) FROM tx WHERE tx.a = a.account_id), 0) AS txn_count,
-          COALESCE((SELECT avg(amount) FROM tx WHERE tx.a = a.account_id), 0) AS avg_amt,
-          CASE WHEN EXISTS (SELECT 1 FROM tx
-                             WHERE tx.a = a.account_id
-                               AND tx.injected_pattern IS NOT NULL) THEN 1 ELSE 0 END AS label
-        FROM account a
-    """
-    _EDGES = "SELECT DISTINCT src_account_id AS src, dst_account_id AS dst FROM txn"
+    An account is 'laundering' ground truth if any transaction it participates in carries
+    an injected pattern. Those labels live in a file the generator writes, not in `vx_txn`
+    — a detector whose training label sits in the column it is scoring is not a detector.
 
-    with get_session() as s:
-        nodes = [{k: (float(v) if isinstance(v, Decimal) else v) for k, v in r.items()}
-                 for r in s.execute(text(_NODES)).mappings().all()]
-        edges = [dict(r) for r in s.execute(text(_EDGES)).mappings().all()]
+    The aggregation is done here, not in the query: ZCQL has no CTE, no correlated subquery
+    and no CASE. The old Postgres version pushed all of that server-side; the transaction
+    table is tens of thousands of rows, so a single scan in numpy is the same answer.
+    """
+    accounts = ds.query('SELECT "AccountID" FROM "vx_account"')
+    txns = ds.query('SELECT "TxnID", "SrcAccountID", "DstAccountID", "Amount" FROM "vx_txn"')
+    labelled = _injected_txn_ids()
+
+    stats: dict[int, dict] = {
+        a["AccountID"]: {"id": a["AccountID"], "out_deg": 0, "in_deg": 0, "out_amt": 0.0,
+                         "in_amt": 0.0, "txn_count": 0, "total_amt": 0.0, "label": 0}
+        for a in accounts}
+    edge_pairs: set[tuple[int, int]] = set()
+
+    for t in txns:
+        src, dst, amt = t["SrcAccountID"], t["DstAccountID"], float(t["Amount"] or 0)
+        dirty = t["TxnID"] in labelled
+        for acct, is_src in ((src, True), (dst, False)):
+            st = stats.get(acct)
+            if st is None:
+                continue
+            st["txn_count"] += 1
+            st["total_amt"] += amt
+            if is_src:
+                st["out_deg"] += 1
+                st["out_amt"] += amt
+            else:
+                st["in_deg"] += 1
+                st["in_amt"] += amt
+            if dirty:
+                st["label"] = 1
+        if src in stats and dst in stats:
+            edge_pairs.add((src, dst))
+
+    nodes = list(stats.values())
+    for n in nodes:
+        n["avg_amt"] = n["total_amt"] / n["txn_count"] if n["txn_count"] else 0.0
+    edges = [{"src": a, "dst": b} for a, b in edge_pairs]
 
     ids = [n["id"] for n in nodes]
     index = {a: i for i, a in enumerate(ids)}
@@ -148,23 +178,22 @@ def score_accounts() -> dict[str, float]:
     return {a: float(p) for a, p in zip(ids, probs)}
 
 
-def detect_subgraph(account_id: str, threshold: float = 0.5) -> list[TransactionFlag]:
+def detect_subgraph(account_id: int, threshold: float = 0.5) -> list[TransactionFlag]:
     """Flag the account's transactions if it sits in a suspicious subgraph."""
     ids, index, probs, A = _trained()
-    i = index.get(account_id)
+    i = index.get(int(account_id))
     if i is None or probs[i] < threshold:
         return []
 
     # attribution: which neighbours carry the suspicion (this is the "why")
     neighbours = [ids[j] for j in np.where(A[i] > 0)[0]]
     hot = sorted(neighbours, key=lambda a: -probs[index[a]])[:5]
-    hot_scores = ", ".join(f"{a[:8]}… ({probs[index[a]]:.2f})" for a in hot)
+    hot_scores = ", ".join(f"#{a} ({probs[index[a]]:.2f})" for a in hot)
 
-    with get_session() as s:
-        txns = [dict(r) for r in s.execute(text(
-            "SELECT txn_id FROM txn "
-            "WHERE src_account_id = :aid OR dst_account_id = :aid"
-        ), {"aid": account_id}).mappings().all()]
+    txns = ds.query('SELECT "TxnID" FROM "vx_txn" WHERE "SrcAccountID" = :aid',
+                    {"aid": int(account_id)})
+    txns += ds.query('SELECT "TxnID" FROM "vx_txn" WHERE "DstAccountID" = :aid',
+                     {"aid": int(account_id)})
 
     explanation = (
         f"Account scores {probs[i]:.2f} in the laundering-subgraph classifier. "
@@ -173,7 +202,7 @@ def detect_subgraph(account_id: str, threshold: float = 0.5) -> list[Transaction
         f"flag (fan-in/layering across accounts), not a single-account rule breach."
     )
     return [TransactionFlag(
-        txn_id=t["txn_id"], detector=DETECTOR, confidence=round(float(probs[i]), 4),
+        txn_id=str(t["TxnID"]), detector=DETECTOR, confidence=round(float(probs[i]), 4),
         explanation=explanation,
-        related_account_ids=[account_id] + hot,
+        related_account_ids=[str(account_id)] + [str(a) for a in hot],
     ) for t in txns]

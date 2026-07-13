@@ -36,9 +36,7 @@ import io
 import urllib.request
 from pathlib import Path
 
-from sqlalchemy import text
-
-from .db import get_session
+from . import ds
 from .districts import canonical_code
 
 SEED_DIR = Path(__file__).resolve().parent / "seed"
@@ -152,31 +150,47 @@ def write_derived(rows: list[dict] | None = None) -> Path:
     return DERIVED_PATH
 
 
+# derived-CSV column -> Data Store column. The CSV keeps the Census's own vocabulary;
+# the table follows the schema's naming. One map, so neither has to bend to the other.
+_DS_COLUMN = {
+    "year": "Year", "population": "Population", "literacy_rate": "LiteracyRate",
+    "urban_ratio": "UrbanRatio", "poverty_index": "PovertyIndex",
+    "marginal_worker_rate": "MarginalWorkerRate", "youth_ratio": "YouthRatio",
+}
+
+
+def read_derived() -> list[dict]:
+    """The 30 derived rows, from the committed CSV if there is one (so a clean checkout
+    needs no network) and from the raw PCA otherwise."""
+    if not DERIVED_PATH.exists():
+        return derive()
+    with DERIVED_PATH.open(encoding="utf-8") as fh:
+        return [
+            {k: (int(v) if k in ("year", "population") else
+                 v if k == "district_code" else float(v))
+             for k, v in r.items()}
+            for r in csv.DictReader(fh)
+        ]
+
+
 def load() -> int:
-    """Upsert the real socioeconomic layer into Postgres. Idempotent.
+    """Replace the real socioeconomic layer in the Data Store. Idempotent.
 
-    Reads the committed derived CSV when present (so a clean checkout needs no
-    network), and falls back to deriving it from the raw PCA.
+    Data Store has no UPSERT (no ON CONFLICT, no MERGE), and these are 30 rows of static
+    2011 ground truth — so it is a wipe and reload, not a merge. Nothing references them
+    by ROWID, so nothing breaks.
     """
-    if DERIVED_PATH.exists():
-        with DERIVED_PATH.open(encoding="utf-8") as fh:
-            rows = [
-                {k: (int(v) if k in ("year", "population") else
-                     v if k == "district_code" else float(v))
-                 for k, v in r.items()}
-                for r in csv.DictReader(fh)
-            ]
-    else:
-        rows = derive()
+    from .generator.refdata import district_id
 
-    cols = ", ".join(COLUMNS)
-    vals = ", ".join(f":{c}" for c in COLUMNS)
-    upd = ", ".join(f"{c} = EXCLUDED.{c}" for c in COLUMNS if c != "district_code")
-    with get_session() as s:
-        s.execute(text(
-            f"INSERT INTO district_socioeconomic ({cols}) VALUES ({vals}) "
-            f"ON CONFLICT (district_code) DO UPDATE SET {upd}"), rows)
-    return len(rows)
+    rows = read_derived()
+    out = []
+    for r in rows:
+        row = {"DistrictID": district_id(r["district_code"])}
+        row.update({_DS_COLUMN[k]: v for k, v in r.items() if k in _DS_COLUMN})
+        out.append(row)
+
+    ds.truncate(["vx_district_socioeconomic"])
+    return ds.insert("vx_district_socioeconomic", out)
 
 
 if __name__ == "__main__":

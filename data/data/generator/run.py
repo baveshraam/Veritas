@@ -1,63 +1,86 @@
 """Rebuild the whole synthetic dataset. `python -m data.generator.run`.
 
-Order: init schema -> generate in memory -> load records -> build the graph edge
-list -> graph algorithms -> entity resolution -> embeddings. Rerunning this is the
-only way the dataset refreshes — there is no streaming ingestion.
+    schema -> real Census ground truth -> generate -> load records
+           -> RESOLVE IDENTITIES -> financial layer -> graph edges -> graph algorithms
+           -> embeddings
+
+The identity step is not optional and cannot move. The organizers' ER has no person: an
+`Accused` row belongs to exactly one case, and its `PersonID` is a per-case label ("A1").
+Until Fellegi-Sunter reconstructs people out of those rows, two cases naming the same man
+are two strangers — so there is no co-offending to find, no account to attribute to a
+human, and no network to run PageRank over. Everything downstream of it depends on it.
+
+Rerunning this is the only way the dataset refreshes; there is no streaming ingestion, and
+with no real-time source there is nothing for one to ingest.
 """
 import argparse
+import json
 import random
+from pathlib import Path
 
-from ..db import init_db
+from .. import ds as store
 from .build import generate
 from .financial import make_financial
 from .graph_sync import sync_graph
 from .load import load_dataset
 
+# AML ground truth. Deliberately a file, not a column: `vx_txn.FlaggedSuspicious` is a
+# *detector output*, and a generator that writes its own answer key into the table the
+# models read would make every AML metric meaningless.
+AML_LABELS = Path(".veritas/aml_labels.json")
+
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Rebuild the Veritas synthetic dataset")
-    ap.add_argument("--firs", type=int, default=10000, help="number of FIRs (10-50K typical)")
+    ap.add_argument("--cases", type=int, default=10000, help="number of FIRs (10-50K typical)")
     ap.add_argument("--seed", type=int, default=42)
-    ap.add_argument("--no-init", action="store_true", help="skip schema init (assume tables exist)")
-    ap.add_argument("--no-graph", action="store_true", help="skip graph edge build + algorithms")
+    ap.add_argument("--no-graph", action="store_true", help="skip graph edges + algorithms")
     ap.add_argument("--no-embed", action="store_true", help="skip vector indexing")
-    ap.add_argument("--no-er", action="store_true", help="skip batch entity resolution")
+    ap.add_argument("--csv", action="store_true", help="also dump seed CSVs for ds:import")
     args = ap.parse_args()
 
-    if not args.no_init:
-        init_db()
+    store.init_db()
 
-    # Real ground truth (Census 2011) before anything synthetic. It is upserted, not
-    # truncated, so it survives dataset rebuilds — and the causal layer is dead
-    # without it, so a rebuild that silently skipped it would be worse than one that
-    # fails here.
+    # Real ground truth (Census 2011) before anything synthetic. Upserted, not truncated,
+    # so it survives a rebuild — the causal layer is dead without it.
     from ..socioeconomic import load as load_socioeconomic
     print(f"socioeconomic: {load_socioeconomic()} districts (Census 2011)")
 
     rng = random.Random(args.seed)
-    ds = generate(rng, args.firs)
-    fin = make_financial(rng, ds)
-    load_dataset(ds)
-    if not args.no_graph:
-        sync_graph(ds, fin)
-        from ..gds import run_all as run_gds
-        print(f"gds: {run_gds()}")   # pagerank/community/betweenness for HippoRAG + Louvain
+    ds = generate(rng, args.cases)
+    counts = load_dataset(ds)
+    print(f"records: {sum(counts.values())} rows across {len(counts)} tables")
 
-        # Batch entity resolution — the ONLY caller of resolve_entities. Runs after
-        # the graph exists so SAME_AS edges attach to persons that are really there.
-        if not args.no_er:
-            from ml_models.entity_resolution import resolve_entities
-            matches = resolve_entities([p.person_id for p in ds.persons])
-            linked = sum(1 for m in matches if m.decision == "link")
-            print(f"entity resolution: {linked} links / {len(matches)} pairs scored "
-                  f"({len(ds.true_duplicates)} duplicates injected)")
+    # Identity, before anything that needs a person.
+    from ml_models.entity_resolution import resolve_entities
+    matches = resolve_entities()
+    people = store.query('SELECT "PersonUID", "IsHabitualOffender" FROM "vx_person"')
+    links = sum(1 for m in matches if m.decision == "link")
+    print(f"identities: {len(people)} people from {len(ds.accused_truth)} accused rows "
+          f"({links} links)")
+
+    # Financial layer — accounts belong to people, so it could not have run any earlier.
+    case_ids = [c["CaseMasterID"] for c in ds.tables["CaseMaster"]]
+    accounts, txns, labels = make_financial(rng, people, case_ids)
+    store.insert("vx_account", accounts)
+    store.insert("vx_txn", txns)
+    AML_LABELS.parent.mkdir(parents=True, exist_ok=True)
+    AML_LABELS.write_text(json.dumps(labels), encoding="utf-8")
+    print(f"financial: {len(accounts)} accounts, {len(txns)} txns, "
+          f"{len(labels)} injected (labels -> {AML_LABELS})")
+
+    if not args.no_graph:
+        print(f"graph: {sync_graph()} edges")
+        from ..gds import run_all as run_gds
+        print(f"gds: {run_gds()}")
 
     if not args.no_embed:
         from ..embeddings.index_job import run_all
-        print(f"indexed: {run_all()}")
-    print(f"loaded: officers={len(ds.officers)} persons={len(ds.persons)} "
-          f"firs={len(ds.firs)} records={len(ds.criminal_records)} "
-          f"accounts={len(fin.accounts)} txns={len(fin.transactions)}")
+        print(f"embeddings: {run_all()}")
+
+    if args.csv:
+        from .load import write_csvs
+        print(f"seed CSVs: {len(write_csvs(ds))} files")
 
 
 if __name__ == "__main__":

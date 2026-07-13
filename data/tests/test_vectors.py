@@ -1,26 +1,81 @@
-"""Vector helpers + a regression guard against the SQLAlchemy `:param::type` bug."""
-import re
-from pathlib import Path
+"""Hybrid retrieval over the Stratus index.
 
-from data.vectors import EMBED_DIM, _vec_literal
+pgvector is gone, and the reason the replacement is *hybrid* rather than pure dense is the
+thing worth testing: an officer types a crime number or an IPC section, and a dense model
+has no notion of either. The lexical half is what makes an exact identifier findable.
+"""
+import pytest
 
-_PKG = Path(__file__).resolve().parent.parent / "data"
+from data.vectors import build_index, embed, hybrid_search, load_index
+
+DOCS = [
+    {"collection": "fir_narrative", "source_id": "1",
+     "content": "Chain snatching near the Kolar bus stand by two men on a motorcycle."},
+    {"collection": "fir_narrative", "source_id": "2",
+     "content": "Burglary at a jewellery shop in Hubballi; case registered under IPC 457."},
+    {"collection": "fir_narrative", "source_id": "3",
+     "content": "House break-in at night in Mysuru while the occupants were away."},
+    {"collection": "criminal_profile", "source_id": "77",
+     "content": "Ramesh Gowda. Accused in cases of Theft, Robbery."},
+]
 
 
-def test_vec_literal_format():
-    lit = _vec_literal([0.1, -0.2, 0.3])
-    assert lit.startswith("[") and lit.endswith("]")
-    assert lit.count(",") == 2
-    assert EMBED_DIM == 384
+@pytest.fixture(scope="module", autouse=True)
+def index(tmp_path_factory):
+    import os
+    os.environ["VERITAS_VECTOR_INDEX"] = str(tmp_path_factory.mktemp("v") / "idx.npz")
+    load_index.cache_clear()
+    assert build_index(DOCS) == 4
 
 
-def test_no_colon_colon_casts_in_any_helper():
-    # SQLAlchemy text() silently drops `:name` when followed by `::` — every cast
-    # must be CAST(:name AS type). This scans all helper modules so the bug that
-    # broke the embedding upsert can't reappear anywhere.
-    offenders = []
-    for py in _PKG.glob("*.py"):
-        for i, line in enumerate(py.read_text(encoding="utf-8").splitlines(), 1):
-            if re.search(r":\w+::\w+", line):
-                offenders.append(f"{py.name}:{i}")
-    assert not offenders, f"`:param::type` casts found (use CAST): {offenders}"
+def test_embeddings_are_l2_normalised():
+    """Cosine similarity is then a plain dot product — which is what `hybrid_search` does."""
+    import numpy as np
+    m = embed(["a test sentence", "another one"])
+    assert np.allclose(np.linalg.norm(m, axis=1), 1.0, atol=1e-5)
+
+
+def test_dense_retrieval_finds_a_paraphrase():
+    """No shared keywords with document 3 beyond 'house' — this is the half a keyword index
+    could not do."""
+    hits = hybrid_search("someone entered a residence at night while nobody was home", k=1)
+    assert hits[0]["source_id"] == "3", hits
+
+
+def test_lexical_retrieval_finds_an_exact_identifier():
+    """The reason this is hybrid. 'IPC 457' is a rare token a dense model cannot represent,
+    and it is exactly what an investigator types."""
+    hits = hybrid_search("IPC 457", k=1)
+    assert hits[0]["source_id"] == "2", hits
+
+
+def test_collection_filter_is_respected():
+    hits = hybrid_search("Ramesh Gowda", collection="criminal_profile", k=2)
+    assert hits and all(h["collection"] == "criminal_profile" for h in hits)
+
+    hits = hybrid_search("Ramesh Gowda", collection="fir_narrative", k=2)
+    assert all(h["collection"] == "fir_narrative" for h in hits)
+
+
+def test_scores_are_bounded_and_ranked():
+    hits = hybrid_search("theft in Kolar", k=4)
+    scores = [h["score"] for h in hits]
+    assert scores == sorted(scores, reverse=True)
+    assert all(-1.0 <= s <= 1.0 for s in scores)
+
+
+def test_an_empty_index_returns_nothing_rather_than_raising():
+    import numpy as np
+    from data import vectors
+    load_index.cache_clear()
+    original = vectors._bucket
+    vectors._bucket = lambda: None
+    try:
+        import os
+        os.environ["VERITAS_VECTOR_INDEX"] = "/nonexistent/idx.npz"
+        vectors._LOCAL_INDEX = __import__("pathlib").Path("/nonexistent/idx.npz")
+        load_index.cache_clear()
+        assert hybrid_search("anything") == []
+    finally:
+        vectors._bucket = original
+        load_index.cache_clear()

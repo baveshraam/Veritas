@@ -22,8 +22,25 @@ venv/
 .DS_Store
 Thumbs.db
 
+# Local Catalyst / Zoho CLI config & debug logs (machine-specific)
+.catalystrc
+catalyst-debug.log
+
 # Local Claude Code tooling (personal, not project-shared)
 .claude/
+.agents/
+
+# Local Veritas tooling state
+.veritas/
+
+# Skills lock file (auto-generated tooling state)
+skills-lock.json
+
+# Build / export output (Next.js static export)
+client/
+
+# Zip archives (data exports, build artifacts)
+*.zip
 
 .vercel
 .env*

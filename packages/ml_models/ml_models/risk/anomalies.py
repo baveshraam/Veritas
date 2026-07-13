@@ -9,23 +9,25 @@ from datetime import datetime
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
-from sqlalchemy import text
 
-from data.db import get_session
+from data import ds, queries
 
 from ..types import AnomalyAlert
 
 MIN_MONTHS = 12          # below a year of history an "anomaly" is just noise
 
 
-def _monthly_counts(district_code: str) -> list[tuple[datetime, int]]:
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT date_trunc('month', date_filed) AS m, count(*) AS c "
-            "FROM fir WHERE district_code = :dc AND date_filed IS NOT NULL "
-            "GROUP BY 1 ORDER BY 1"
-        ), {"dc": district_code}).all()
-    return [(r.m, int(r.c)) for r in rows]
+def _monthly_counts(district_id: int) -> list[tuple[datetime, int]]:
+    """Monthly case counts for one district. Bucketed here because ZCQL has no
+    date_trunc — and one district's cases are a few thousand rows."""
+    counts: dict[datetime, int] = {}
+    for r in queries.cases_in_district(district_id):
+        d = ds.to_dt(r["CrimeRegisteredDate"])
+        if d is None:
+            continue
+        month = datetime(d.year, d.month, 1)
+        counts[month] = counts.get(month, 0) + 1
+    return sorted(counts.items())
 
 
 def _severity(observed: float, expected: float, sigma: float) -> str:
@@ -40,7 +42,7 @@ def _severity(observed: float, expected: float, sigma: float) -> str:
 
 
 def check_anomalies(district_code: str) -> list[AnomalyAlert]:
-    series = _monthly_counts(district_code)
+    series = _monthly_counts(queries.district_id(district_code))
     if len(series) < MIN_MONTHS:
         return []
 

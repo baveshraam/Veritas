@@ -6,7 +6,6 @@ requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
     "langgraph>=0.2",
-    "google-genai>=1.0",
     "veritas-data",
     "veritas-policy",
     "veritas-ml-models",

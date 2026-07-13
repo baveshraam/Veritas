@@ -10,14 +10,24 @@ def _labels(text):
 
 
 def test_ner_extracts_each_entity_type():
-    q = ("Was Ramesh Gowda accused under IPC 302 in Kolar, and is he linked to "
-         "the KGF Syndicate vehicle KA 05 MJ 1234?")
+    q = ("Was Ramesh Gowda accused under IPC 302 in Kolar, "
+         "and was vehicle KA 05 MJ 1234 involved?")
     got = _labels(q)
     assert ("PERSON", "Ramesh Gowda") in got        # not "Was Ramesh"
     assert ("IPC_SECTION", "302") in got
     assert ("LOCATION", "Kolar") in got
-    assert ("GANG", "KGF Syndicate") in got
     assert ("VEHICLE", "KA 05 MJ 1234") in got
+
+
+def test_there_is_no_gang_entity():
+    """Deliberate. The organizers' ER records no gang, so a GANG entity would have nothing
+    to resolve against — organised-crime grouping is the Louvain community over co-offending,
+    reached through a person. A gazetteer of invented gang names would match only invented
+    gangs, which is worse than not having the label."""
+    from data.nlp.entities import Entity
+    import typing
+    labels = typing.get_args(Entity.model_fields["label"].annotation)
+    assert "GANG" not in labels
 
 
 def test_longest_location_alias_wins():

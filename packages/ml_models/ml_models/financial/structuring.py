@@ -9,9 +9,7 @@ Runs alongside the GNN (see gnn.py) — both detectors' flags are returned toget
 because the GNN catches coordinated patterns this cannot see, and this catches the
 ones a judge will actually accept as evidence.
 """
-from sqlalchemy import text
-
-from data.db import get_session
+from data import ds
 
 from ..types import TransactionFlag
 
@@ -23,26 +21,25 @@ MIN_DEPOSITS = 5                   # a burst, not a coincidence
 DETECTOR = "rule_based_structuring"
 
 
-def detect_structuring(account_id: str) -> list[TransactionFlag]:
+def detect_structuring(account_id: int) -> list[TransactionFlag]:
     """Incoming sub-threshold deposits clustered in a WINDOW_DAYS window.
 
-    Reads the txn table directly. Under Neo4j this was a TRANSFERRED_TO traversal
-    followed by a second query to recover the txn_id behind the edge — the row
-    carries its own id, so that second lookup is simply gone.
+    Reads vx_txn directly. Under Neo4j this was a TRANSFERRED_TO traversal followed by a
+    second query to recover the txn_id behind the edge — the row carries its own id, so
+    that second lookup is simply gone.
     """
-    with get_session() as s:
-        rows = [dict(r) for r in s.execute(text(
-            "SELECT txn_id, src_account_id AS src, amount, txn_date AS date "
-            "FROM txn WHERE dst_account_id = :aid "
-            "  AND amount < :threshold AND amount > :floor "
-            "ORDER BY txn_date"
-        ), {"aid": account_id, "threshold": REPORTING_THRESHOLD,
-            "floor": REPORTING_THRESHOLD * SUB_THRESHOLD_FLOOR}).mappings().all()]
+    rows = ds.query(
+        'SELECT "TxnID", "SrcAccountID", "Amount", "TxnDate" FROM "vx_txn" '
+        'WHERE "DstAccountID" = :aid AND "Amount" < :threshold AND "Amount" > :floor '
+        'ORDER BY "TxnDate"',
+        {"aid": int(account_id), "threshold": REPORTING_THRESHOLD,
+         "floor": REPORTING_THRESHOLD * SUB_THRESHOLD_FLOOR},
+    )
     if len(rows) < MIN_DEPOSITS:
         return []
 
-    for r in rows:                       # DECIMAL -> float, so the arithmetic below works
-        r["amount"] = float(r["amount"])
+    rows = [{"txn_id": r["TxnID"], "src": r["SrcAccountID"],
+             "amount": float(r["Amount"]), "date": ds.to_dt(r["TxnDate"])} for r in rows]
     dates = [r["date"] for r in rows]
     flags: list[TransactionFlag] = []
 
@@ -63,11 +60,11 @@ def detect_structuring(account_id: str) -> list[TransactionFlag]:
         )
         for j in window:
             flags.append(TransactionFlag(
-                txn_id=rows[j]["txn_id"],
+                txn_id=str(rows[j]["txn_id"]),
                 detector=DETECTOR,
                 confidence=min(0.99, 0.5 + 0.05 * len(window)),
                 explanation=explanation,
-                related_account_ids=accounts + [account_id],
+                related_account_ids=[str(a) for a in accounts] + [str(account_id)],
             ))
         break     # one flagged burst per account is enough to open the enquiry
     return flags

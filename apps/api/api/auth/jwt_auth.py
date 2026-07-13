@@ -54,22 +54,17 @@ def issue_token(officer_id: str, role: str) -> str:
 
 
 def _load_officer(officer_id: str, claimed_role: str) -> Officer:
-    """Resolve ps_code/role from the officer table — the token says who you are, the
-    database says what you are. A token whose role no longer matches the record is
-    rejected rather than trusted."""
-    from data.db import get_session
-    from sqlalchemy import text
+    """Resolve role/station from the Employee record — the token says who you are, the
+    database says what you are. A token whose role no longer matches the record is rejected
+    rather than trusted."""
+    from data import officers
 
-    with get_session() as s:
-        row = s.execute(text(
-            "SELECT officer_id, role, ps_code, district_code, badge_no, name "
-            "FROM officer WHERE officer_id = CAST(:o AS uuid)"), {"o": officer_id}).first()
-    if not row:
+    rec = officers.by_id(officer_id)
+    if not rec:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unknown officer")
-    if row.role != claimed_role:
+    if rec.role != claimed_role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token role does not match record")
-    return Officer(str(row.officer_id), row.role, row.ps_code or "",
-                   row.district_code or "", row.badge_no or "", row.name or "")
+    return Officer(*rec)
 
 
 async def current_officer(

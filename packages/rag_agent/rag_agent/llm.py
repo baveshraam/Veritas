@@ -1,44 +1,48 @@
-"""LLM client — Google Gemini, read from the environment, never hardcoded.
+"""LLM client — Catalyst QuickML LLM Serving (GLM-4.7-Flash).
+
+Was Gemini. Gemini is a third-party service and QuickML is Catalyst's equivalent, so under
+the competition rule — where a Catalyst service exists, it must be used — the provider had
+to move. The *interface* did not: `available()` / `generate()` / `generate_json()` and the
+degraded-mode contract below are unchanged, which is why nothing else in the package had to
+be touched.
 
 What the LLM is and isn't used for:
-  - IS: synthesising prose from evidence the caller already retrieved, ranking
-    leads, and NL->Cypher for queries no intent template covers.
-  - IS NOT: translating or transcribing FIR content. Record text stays inside the
-    network (Layer 6 is self-hosted for exactly this reason).
+  - IS: synthesising prose from evidence the caller already retrieved, ranking leads,
+    drafting a case-diary paragraph.
+  - IS NOT: translating or transcribing FIR content, and it never sees Kannada. Record text
+    stays inside the network — the Kannada NLP/ASR/TTS layer is self-hosted for exactly that
+    reason, and a query in Kannada is translated to English *in our own container* before
+    the model is called, then the answer is translated back.
+  - IS NOT: the thing that makes an answer true. It never sees the database, and it cannot
+    add a claim to an answer that the evidence chain does not already contain.
 
-Degraded mode is a designed behaviour, not a stub: the deterministic paths (intent
-templates + extractive synthesis) produce grounded, cited answers on their own. The
-LLM makes them fluent; it is never the thing that makes them true.
+Authentication is nothing. Inside AppSail the Catalyst SDK is injected with the app's own
+credentials (`CATALYST_AUTH`), so there is no API key in the image, no secret to rotate, and
+nothing to leak. Locally, where there is no Catalyst, `available()` is simply False.
 
-**A present key is not an available LLM.** The original design only degraded when
-`GEMINI_API_KEY` was absent, which turned out to be the rare case. The common one is
-a key that is valid but rate-limited: Gemini's free tier returns 429 RESOURCE_
-EXHAUSTED, and it does so precisely when a demo hammers it. Under the old contract
-`available()` returned True, the guard passed, and the raw provider error propagated
-out of the Cypher Agent and the ToG beam search (neither wrapped its call) and killed
-the turn.
-
-So every provider failure — quota, network, 5xx, bad key — is funnelled into the one
-signal the rest of the system already understands:
+Degraded mode is a designed behaviour, not a stub: the deterministic paths (intent templates
++ extractive synthesis) produce grounded, cited answers on their own. The LLM makes them
+fluent. So every provider failure — quota, network, 5xx, bad credentials — is funnelled into
+the one signal the rest of the system already understands:
 
     generate()       raises LLMUnavailable  -> callers fall back to templates
-    generate_json()  returns {}             -> callers treat as "no LLM opinion"
+    generate_json()  returns {}             -> callers treat it as "no LLM opinion"
 
-and trips a short cooldown so we stop hammering an exhausted quota. The cooldown is
-deliberately short: free-tier limits are per-minute, so a permanent trip would give
-up an LLM that is seconds away from working again.
+and trips a short cooldown so an exhausted endpoint is not hammered.
 """
 import json
+import logging
 import os
 import time
-from functools import lru_cache
+import urllib.error
+import urllib.request
 
-# Free-tier quota is the binding constraint and it differs per model: this key is
-# 429-exhausted on gemini-2.0-flash/-lite and 2.5-pro, and serving on flash-lite-
-# latest. Override with VERITAS_GEMINI_MODEL when the quota picture moves.
-MODEL = os.getenv("VERITAS_GEMINI_MODEL", "gemini-flash-lite-latest")
+log = logging.getLogger(__name__)
 
-# Gemini free-tier limits are per-minute, so back off for slightly over a minute.
+MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")
+ENDPOINT = os.getenv("QUICKML_ENDPOINT", "").strip()
+TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
+
 COOLDOWN_SECONDS = 70.0
 
 _degraded_until = 0.0
@@ -46,23 +50,40 @@ _degraded_reason = ""
 
 
 class LLMUnavailable(RuntimeError):
-    """No usable LLM right now: no key, exhausted quota, or the provider is failing."""
+    """No usable LLM right now: not configured, exhausted, or the provider is failing."""
+
+
+def _token() -> str | None:
+    """The app's own Catalyst token. Injected by AppSail; absent everywhere else."""
+    try:
+        import zcatalyst_sdk
+        from zcatalyst_sdk.credentials import Credential
+        cred = zcatalyst_sdk.initialize()._app._credential  # noqa: SLF001
+        if isinstance(cred, Credential):
+            return cred.get_token()
+        return cred.get_token()
+    except Exception:
+        return None
+
+
+def _configured() -> bool:
+    return bool(ENDPOINT) and os.getenv("CATALYST_PROJECT_ID", "").strip() != ""
 
 
 def available() -> bool:
-    """True only if a call would plausibly succeed — key present AND not cooling down."""
-    if not os.getenv("GEMINI_API_KEY", "").strip():
+    """True only if a call would plausibly succeed — configured AND not cooling down."""
+    if not _configured():
         return False
     return time.monotonic() >= _degraded_until
 
 
 def status() -> str:
-    """Honest one-liner for /health. Never reports 'gemini' when the quota is spent."""
-    if not os.getenv("GEMINI_API_KEY", "").strip():
-        return "deterministic (no GEMINI_API_KEY)"
+    """Honest one-liner for /health. Never reports a model when it cannot be reached."""
+    if not _configured():
+        return "deterministic (QuickML not configured)"
     if time.monotonic() < _degraded_until:
         return f"deterministic (LLM degraded: {_degraded_reason})"
-    return f"gemini ({MODEL})"
+    return f"quickml ({MODEL})"
 
 
 def _degrade(exc: Exception) -> LLMUnavailable:
@@ -70,58 +91,76 @@ def _degrade(exc: Exception) -> LLMUnavailable:
     global _degraded_until, _degraded_reason
     _degraded_until = time.monotonic() + COOLDOWN_SECONDS
     _degraded_reason = f"{type(exc).__name__}: {str(exc)[:120]}"
+    log.warning("LLM degraded: %s", _degraded_reason)
     return LLMUnavailable(_degraded_reason)
 
 
-@lru_cache(maxsize=1)
-def _client():
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key:
-        raise LLMUnavailable("GEMINI_API_KEY is not set; running in deterministic mode")
-    from google import genai
-    return genai.Client(api_key=key)
+def _chat(messages: list[dict], temperature: float, json_mode: bool) -> str:
+    token = _token()
+    if not token:
+        raise LLMUnavailable("no Catalyst credential — QuickML is only reachable in AppSail")
+
+    body: dict = {"model": MODEL, "messages": messages, "temperature": temperature}
+    if json_mode:
+        body["response_format"] = {"type": "json_object"}
+
+    req = urllib.request.Request(
+        ENDPOINT,
+        data=json.dumps(body).encode(),
+        method="POST",
+        headers={"Authorization": f"Zoho-oauthtoken {token}",
+                 "Content-Type": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+            payload = json.load(resp)
+    except urllib.error.HTTPError as e:
+        raise _degrade(RuntimeError(f"HTTP {e.code}: {e.read()[:200].decode(errors='replace')}"))
+    except Exception as e:
+        raise _degrade(e) from e
+
+    try:
+        return (payload["choices"][0]["message"]["content"] or "").strip()
+    except (KeyError, IndexError, TypeError) as e:
+        raise _degrade(RuntimeError(f"unexpected response shape: {str(payload)[:200]}")) from e
 
 
 def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -> str:
     """Plain text completion. Raises LLMUnavailable on any failure — callers fall back."""
     if not available():
         raise LLMUnavailable(_degraded_reason or "no LLM configured")
-    from google.genai import types
-
-    cfg = types.GenerateContentConfig(temperature=temperature)
-    if system:
-        cfg.system_instruction = system
-    try:
-        resp = _client().models.generate_content(model=MODEL, contents=prompt, config=cfg)
-    except LLMUnavailable:
-        raise
-    except Exception as e:                     # quota, network, 5xx, safety block
-        raise _degrade(e) from e
-    return (resp.text or "").strip()
+    messages = ([{"role": "system", "content": system}] if system else []) + \
+               [{"role": "user", "content": prompt}]
+    return _chat(messages, temperature, json_mode=False)
 
 
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> dict:
-    """Structured output. Returns {} on any failure or unparseable output — callers
-    treat that as 'no LLM opinion' and use their deterministic path."""
+    """Structured output. Returns {} on any failure or unparseable output — callers treat
+    that as 'no LLM opinion' and use their deterministic path.
+
+    The schema is stated in the prompt rather than enforced by the provider: QuickML's
+    OpenAI-compatible surface has `json_object` but no `json_schema`, so the model is told
+    the shape and the result is validated by parsing. An unparseable answer degrades to {},
+    which is the same thing a refusal would have produced.
+    """
     if not available():
         return {}
-    from google.genai import types
-
-    cfg = types.GenerateContentConfig(
-        temperature=0.0,
-        response_mime_type="application/json",
-        response_schema=schema,
+    sys_prompt = (system or "") + (
+        "\n\nRespond with a single JSON object and nothing else. It must match this schema:\n"
+        + json.dumps(schema)
     )
-    if system:
-        cfg.system_instruction = system
     try:
-        resp = _client().models.generate_content(model=MODEL, contents=prompt, config=cfg)
+        raw = _chat([{"role": "system", "content": sys_prompt.strip()},
+                     {"role": "user", "content": prompt}], 0.0, json_mode=True)
     except LLMUnavailable:
         return {}
-    except Exception as e:
-        _degrade(e)
-        return {}
+
+    raw = raw.strip()
+    if raw.startswith("```"):                       # models fence JSON even when told not to
+        raw = raw.strip("`")
+        raw = raw[raw.index("{"):] if "{" in raw else raw
     try:
-        return json.loads(resp.text or "{}")
+        out = json.loads(raw or "{}")
+        return out if isinstance(out, dict) else {}
     except json.JSONDecodeError:
         return {}

@@ -29,9 +29,25 @@ class CatalystUnavailable(RuntimeError):
 
 
 def enabled() -> bool:
-    """Catalyst auth is on when the project is configured. Locally (no project) the
-    service falls back to jwt_auth so the stack still runs and the suite still passes."""
-    return bool(os.getenv("CATALYST_PROJECT_ID") or os.getenv("X_ZOHO_CATALYST_PROJECT_ID"))
+    """Catalyst auth is on when we can actually *do* Catalyst auth.
+
+    Both halves are required. A project id says which project to authenticate against; the
+    SDK is what authenticates. Treating the id alone as "enabled" — which is what this used
+    to do — meant a machine with the project configured but no SDK installed raised
+    CatalystUnavailable on every single request instead of falling back, and that machine is
+    every developer's laptop.
+
+    The fallback is not a hole: jwt_auth refuses to run on a default secret outside dev mode,
+    so a deployment that lost the SDK cannot quietly start accepting self-signed tokens
+    without someone having set a real signing secret.
+    """
+    if not (os.getenv("CATALYST_PROJECT_ID") or os.getenv("X_ZOHO_CATALYST_PROJECT_ID")):
+        return False
+    try:
+        import zcatalyst_sdk  # noqa: F401
+        return True
+    except ImportError:
+        return False
 
 
 @lru_cache(maxsize=1)
@@ -71,25 +87,20 @@ def catalyst_role(user: dict) -> str | None:
 def _officer_by_email(email: str, claimed_role: str | None) -> Officer:
     """Resolve the officer record for a Catalyst identity.
 
-    The record layer, not Catalyst, is authoritative for ps_code/district/role —
-    unchanged from jwt_auth._load_officer, only the lookup key differs (email
-    instead of officer_id, because Catalyst identifies users by email).
+    The record layer, not Catalyst, is authoritative for station/district/role. Catalyst
+    identifies users by email, and the ER's Employee has no email column, so the bridge is
+    vx_officer_identity — see data.officers.
     """
-    from data.db import get_session
-    from sqlalchemy import text
+    from data import officers
 
-    with get_session() as s:
-        row = s.execute(text(
-            "SELECT officer_id, role, ps_code, district_code, badge_no, name "
-            "FROM officer WHERE lower(email) = lower(:e)"), {"e": email}).first()
-    if not row:
+    rec = officers.by_email(email)
+    if not rec:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Catalyst user is not a registered officer")
-    if claimed_role and row.role != claimed_role:
+    if claimed_role and rec.role != claimed_role:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED,
                             "Catalyst role does not match officer record")
-    return Officer(str(row.officer_id), row.role, row.ps_code or "",
-                   row.district_code or "", row.badge_no or "", row.name or "")
+    return Officer(*rec)
 
 
 async def current_officer_catalyst(request: Request) -> Officer:

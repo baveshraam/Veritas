@@ -1,94 +1,161 @@
-"""Fellegi-Sunter linkage model — pure, no database.
+"""Fellegi-Sunter (1969) — the model that makes the organizers' ER answerable at all.
 
-The regressions locked in here each cost a real debugging pass:
-  - EM on a blocked candidate set flips the FS axiom (m_name < u_name).
-  - dob + dob_year as separate binary fields double-counts correlated evidence.
-  - a candidate-set prior against a random-pair u links every name-blocked stranger.
-All three surface as the same visible failure: two different people who happen to
-share a birthday get merged into one identity.
+End-to-end accuracy is measured in `data/tests/test_dataset.py`, against the generator's
+answer key. What is tested here is the *mechanism*: the comparators, the blocking key, the
+three-way decision rule, and the constraints that are easy to get wrong and that silently
+destroy it when you do.
 """
 import random
-from datetime import date
+
+import pytest
 
 from ml_models.entity_resolution.fellegi_sunter import (
-    _FIELDS, _Rec, _compare, _prior_match_prob, estimate_u, score_records,
+    LINK_THRESHOLD,
+    POSSIBLE_THRESHOLD,
+    _jaro_winkler,
+    _norm_key,
+    _Rec,
+    cluster,
+    score_records,
 )
 
-_FIRST = ["Ramesh", "Suresh", "Manjunath", "Lakshmi", "Geetha", "Naveen",
-          "Kavya", "Girish", "Mahesh", "Divya"]
-_LAST = ["Gowda", "Reddy", "Patil", "Shetty", "Kulkarni", "Rao", "Bhat"]
+
+def _rec(aid: int, case: int, name: str, patronym: str = "Bharath",
+         year: int | None = 1985, gender: int = 1,
+         lat: float = 12.97, lng: float = 77.59) -> _Rec:
+    return _Rec(accused_id=aid, case_id=case, name=name, patronym=patronym,
+                birth_year=year, gender=gender, lat=lat, lng=lng)
 
 
-def _population(seed: int = 3, n: int = 120, n_dupes: int = 10):
-    """n distinct people + n_dupes re-registrations under a spelling variant."""
-    rng = random.Random(seed)
+# ------------------------------------------------------------------------- comparators
+def test_jaro_winkler_rewards_a_shared_prefix():
+    """Romanisation drift is overwhelmingly in the tail — Ramesh/Ramesha, Geetha/Geeta —
+    so Winkler's prefix bonus is exactly the right shape for Indian name variants."""
+    assert _jaro_winkler("Ramesh", "Ramesha") > 0.9
+    assert _jaro_winkler("Ramesh", "Ramesha") > _jaro_winkler("Ramesh", "Suresh")
+    assert _jaro_winkler("Ramesh", "Ramesh") == 1.0
+    assert _jaro_winkler("", "Ramesh") == 0.0
+
+
+@pytest.mark.parametrize("a,b", [
+    ("Ramesh", "Ramesha"),
+    ("Geetha", "Geeta"),
+    ("Moorthy", "Murthy"),
+])
+def test_variants_collapse_to_one_blocking_key(a, b):
+    """Blocking sets a *recall ceiling*: a pair whose keys differ is never scored at all. A
+    key that separates two spellings of one man means he can never be recovered — no
+    threshold, no comparator, nothing downstream can repair it."""
+    assert _norm_key(a) == _norm_key(b)
+
+
+def test_the_blocking_key_still_separates_different_names():
+    assert _norm_key("Ramesh") != _norm_key("Suresh")
+
+
+# ---------------------------------------------------------------------- the decision rule
+def test_two_accused_on_the_same_case_are_never_the_same_person():
+    """A hard constraint, not a probability. Two rows on one FIR are two people by
+    definition — the ER numbers them A1 and A2. Without this, the model cheerfully merges
+    two co-accused brothers with similar names into one offender who was actually two.
+    """
+    recs = [_rec(1, case=7, name="Ramesh Gowda"),
+            _rec(2, case=7, name="Ramesha Gowda")]
+    _, links = score_records(recs)
+    assert links == []
+
+
+def test_the_decision_is_three_way_not_a_single_cutoff():
+    """Fellegi-Sunter's actual contribution: link, non-link, and an explicit clerical-review
+    band between them. Collapsing that to one threshold turns a principled model back into
+    fuzzy string matching with extra steps."""
+    assert 0 < POSSIBLE_THRESHOLD < LINK_THRESHOLD < 1
+
+
+# ------------------------------------------------------------------------------ clustering
+def test_clustering_is_transitive():
+    """A links B, B links C -> one person, even if A and C were never directly compared.
+    Union-find is what turns pairwise decisions into people."""
+    recs = [_rec(1, 1, "Ramesh"), _rec(2, 2, "Ramesha"), _rec(3, 3, "Rameshaa")]
+    assert len(set(cluster(recs, links=[(0, 1), (1, 2)]).values())) == 1
+
+
+def test_every_record_gets_a_person_including_singletons():
+    """vx_person must be total over the record layer or half the joins go silently empty.
+    A man seen once is still a man."""
+    recs = [_rec(1, 1, "Ramesh"), _rec(2, 2, "Suresh"), _rec(3, 3, "Mahesh")]
+    uid = cluster(recs, links=[])
+    assert len(uid) == 3 and len(set(uid.values())) == 3
+
+
+def test_the_person_id_is_stable_across_reruns():
+    """PersonUID is the cluster's lowest AccusedMasterID — deterministic, and traceable to a
+    record that actually exists. A random id would change on every rebuild and break every
+    citation that pointed at it. (`_load` returns rows ordered by AccusedMasterID, which is
+    what makes "lowest index" and "lowest id" the same thing.)"""
+    recs = [_rec(4, 1, "Ramesh"), _rec(7, 2, "Ramesha"), _rec(9, 3, "Rameshaa")]
+    assert set(cluster(recs, links=[(0, 1), (1, 2)]).values()) == {4}
+
+
+# ------------------------------------------------------------------- the population effect
+def test_recovers_re_registrations_without_merging_strangers():
+    """The failure that matters is not a missed link — it is a false one.
+
+    A model that links too eagerly produces one enormous "person" accused of everything, and
+    then every downstream feature (priors, co-offending, risk) is nonsense. Assert both
+    directions against a population with a known number of re-registrations.
+
+    This runs over a *population*, not a pair, because that is the only way Fellegi-Sunter
+    can be run at all: the m and u weights are estimated by EM over the candidate set, so a
+    two-record test would be asking the model to calibrate itself on a sample of two. Each
+    person also gets their own coordinates and their variant re-registers near them — a
+    population where everyone shares one location has no location signal to weight, and EM
+    would correctly learn that the field is worthless.
+    """
+    rng = random.Random(3)
+    first = ["Ramesh", "Suresh", "Mahesh", "Ganesh", "Umesh", "Naveen", "Kiran", "Anil"]
+    last = ["Gowda", "Nayak", "Reddy", "Shetty", "Rao", "Patil", "Hegde", "Murthy"]
+
+    people = [{
+        "name": f"{rng.choice(first)} {rng.choice(last)}",
+        "patronym": rng.choice(first),
+        "year": rng.randint(1960, 2000),
+        "lat": 12.0 + rng.uniform(0, 4),
+        "lng": 75.0 + rng.uniform(0, 3),
+    } for _ in range(80)]
+
     recs: list[_Rec] = []
-    for i in range(n):
-        recs.append(_Rec(
-            person_id=f"p{i}",
-            name_en=f"{rng.choice(_FIRST)} {rng.choice(_LAST)}",
-            dob=date(rng.randint(1955, 2000), rng.randint(1, 12), rng.randint(1, 28)),
-            gender=rng.choice("MF"),
-            lat=12.9 + rng.uniform(-0.5, 0.5), lng=77.5 + rng.uniform(-0.5, 0.5)))
+    truth: dict[int, int] = {}
+    aid = case = 0
+    for uid, p in enumerate(people):
+        aid += 1
+        case += 1
+        recs.append(_rec(aid, case, p["name"], p["patronym"], p["year"],
+                         lat=p["lat"], lng=p["lng"]))
+        truth[aid] = uid
 
-    truth: set[frozenset[str]] = set()
-    for i, orig in enumerate(rng.sample(recs, n_dupes)):
-        dup = _Rec(
-            person_id=f"d{i}",
-            name_en=orig.name_en.replace("esh", "esha").replace("Gowda", "Gouda"),
-            dob=orig.dob,
-            gender=orig.gender,
-            lat=orig.lat, lng=orig.lng)          # same address — a re-registration
-        if dup.name_en == orig.name_en:
-            dup.name_en = orig.name_en + "a"
-        recs.append(dup)
-        truth.add(frozenset((dup.person_id, orig.person_id)))
-    return recs, truth
+    for uid in range(15):                     # 15 re-register under a spelling variant
+        p = people[uid]
+        aid += 1
+        case += 1
+        variant = p["name"].replace("sh", "sha", 1) if "sh" in p["name"] else p["name"] + "a"
+        recs.append(_rec(aid, case, variant, p["patronym"], p["year"],
+                         lat=p["lat"] + 0.02, lng=p["lng"] + 0.02))   # offends near home
+        truth[aid] = uid
 
+    _, links = score_records(recs)
+    uid_of = cluster(recs, links)
 
-def test_recovers_duplicates_without_false_positives():
-    recs, truth = _population()
-    results, _ = score_records(recs)
-    links = {frozenset((r.person_id_a, r.person_id_b))
-             for r in results if r.decision == "link"}
-    assert truth <= links, f"missed duplicates: {len(truth - links)}"
-    assert not (links - truth), f"false links: {links - truth}"
+    ids = sorted(truth)
+    tp = fp = fn = 0
+    for i, a in enumerate(ids):
+        for b in ids[i + 1:]:
+            same_truth, same_got = truth[a] == truth[b], uid_of[a] == uid_of[b]
+            tp += same_truth and same_got
+            fp += (not same_truth) and same_got
+            fn += same_truth and (not same_got)
 
-
-def test_same_birthday_strangers_are_not_merged():
-    """The failure every earlier model variant produced: different name, different
-    address, same DOB — must NOT link."""
-    recs, _ = _population()
-    shared = date(1977, 3, 9)
-    recs.append(_Rec("x1", "Ganesh Patil", shared, "M", 14.08, 75.64))
-    recs.append(_Rec("x2", "Venkatesh Deshpande", shared, "M", 15.42, 76.26))
-    results, _ = score_records(recs)
-    verdict = {frozenset((r.person_id_a, r.person_id_b)): r.decision for r in results}
-    assert verdict.get(frozenset(("x1", "x2")), "non_link") != "link"
-
-
-def test_em_respects_the_fellegi_sunter_axiom():
-    recs, _ = _population()
-    from ml_models.entity_resolution.fellegi_sunter import _candidate_pairs, _em
-    pairs = sorted(_candidate_pairs(recs))
-    gammas = [_compare(recs[a], recs[b]) for a, b in pairs]
-    u = estimate_u(recs, random.Random(0))
-    m, u, _ = _em(gammas, u, _prior_match_prob(len(recs)))
-    for i, f in enumerate(_FIELDS):
-        # strongest agreement must be likelier among matches than non-matches
-        assert m[i][0] > u[i][0], f"axiom violated for {f}: m={m[i][0]} u={u[i][0]}"
-
-
-def test_prior_is_a_cross_product_rate_not_a_candidate_rate():
-    # must be tiny — it lives in the same space as the random-sampled u
-    assert _prior_match_prob(600) < 0.01
-    assert _prior_match_prob(1) == 0.0
-
-
-def test_comparison_levels():
-    a = _Rec("a", "Ramesh Gowda", date(1980, 5, 4), "M", 12.9, 77.5)
-    same = _Rec("b", "Ramesha Gowda", date(1980, 5, 4), "M", 12.9, 77.5)
-    assert _compare(a, same) == (0, 0, 0, 0)
-    # transposed day -> DOB partial agreement, not disagreement
-    keyed = _Rec("c", "Ramesh Gowda", date(1980, 5, 40 % 28 + 1), "M", 12.9, 77.5)
-    assert _compare(a, keyed)[1] == 1
+    precision = tp / (tp + fp) if tp + fp else 1.0
+    recall = tp / (tp + fn) if tp + fn else 0.0
+    assert precision >= 0.9, f"{fp} pairs of strangers were merged (precision {precision:.2f})"
+    assert recall >= 0.6, f"recovered only {tp} of the 15 re-registrations"

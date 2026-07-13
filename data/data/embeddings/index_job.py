@@ -1,66 +1,71 @@
-"""Build the vector collections from the loaded Postgres record layer.
+"""Build the vector index from the loaded record layer.
 
-Rerunnable and incremental (upsert on (collection, source_id)). Called at the end
-of a full rebuild and standalone via `python -m data.embeddings.index_job`.
+Two collections:
+  fir_narrative     one document per case, from `CaseMaster.BriefFacts`.
+  criminal_profile  one synthesized document per resolved person — identity plus the
+                    crimes they are accused in. This is what "find similar offenders"
+                    and the Copilot's "cases like this one" retrieve over.
+
+There is no separate `mo` collection any more. The organizers' ER has no modus-operandi
+column — the method of operation is stated inside `BriefFacts`, so MO similarity *is*
+narrative similarity, and a second collection over the same text would only have been two
+names for one index.
+
+The whole index is rebuilt in one pass, never patched: `data.vectors.build_index` writes a
+single Stratus object, and an embedding that outlives the case it was made from is a
+citation to a deleted record.
+
+    python -m data.embeddings.index_job
 """
-from sqlalchemy import text
-
-from ..db import get_session
-from ..vectors import upsert_embeddings
+from .. import ds
+from ..vectors import build_index
 
 
-def index_fir_narratives() -> int:
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT fir_id, narrative FROM fir WHERE narrative IS NOT NULL AND narrative <> ''"
-        )).all()
-    return upsert_embeddings(
-        {"collection": "fir_narrative", "source_id": str(r.fir_id), "content": r.narrative}
-        for r in rows)
+def fir_documents() -> list[dict]:
+    rows = ds.query('SELECT "CaseMasterID", "BriefFacts" FROM "CaseMaster"')
+    return [{"collection": "fir_narrative", "source_id": str(r["CaseMasterID"]),
+             "content": r["BriefFacts"]}
+            for r in rows if (r["BriefFacts"] or "").strip()]
 
 
-def index_mo() -> int:
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT fir_id, modus_operandi FROM fir "
-            "WHERE modus_operandi IS NOT NULL AND modus_operandi <> ''"
-        )).all()
-    return upsert_embeddings(
-        {"collection": "mo", "source_id": str(r.fir_id), "content": r.modus_operandi}
-        for r in rows)
+def profile_documents() -> list[dict]:
+    """One document per person who has been accused of something.
+
+    The join is over `vx_accused_identity`, not `Accused` — that is the whole point. On
+    the raw ER an offender in four cases is four unrelated rows, so a profile built from
+    them would describe four first-timers instead of one habitual offender.
+    """
+    rows = ds.query(
+        'SELECT "vx_person"."PersonUID", "vx_person"."CanonicalName", '
+        '       "vx_person"."GangAffiliation", "CrimeSubHead"."CrimeHeadName" '
+        'FROM "vx_accused_identity" '
+        'JOIN "vx_person" ON "vx_accused_identity"."PersonUID" = "vx_person"."PersonUID" '
+        'JOIN "Accused" ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" '
+        'JOIN "CaseMaster" ON "Accused"."CaseMasterID" = "CaseMaster"."CaseMasterID" '
+        'JOIN "CrimeSubHead" '
+        '  ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID"'
+    )
+    by_person: dict[int, dict] = {}
+    for r in rows:
+        p = by_person.setdefault(r["PersonUID"], {
+            "name": r["CanonicalName"], "gang": r["GangAffiliation"], "crimes": set()})
+        if r["CrimeHeadName"]:
+            p["crimes"].add(r["CrimeHeadName"])
+
+    return [{"collection": "criminal_profile", "source_id": str(uid),
+             "content": _profile_text(p)} for uid, p in by_person.items()]
 
 
-def index_criminal_profiles() -> int:
-    """One synthesized profile per person with a record: identity + the crimes they're
-    accused in + gang. This is what 'find similar offenders' retrieves over."""
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT p.person_id, p.name_en, p.gender, p.gang_affiliation, "
-            "  array_agg(DISTINCT f.crime_type) AS crimes "
-            "FROM person p "
-            "JOIN criminal_record cr ON cr.person_id = p.person_id "
-            "JOIN fir f ON f.fir_id = cr.fir_id "
-            "GROUP BY p.person_id, p.name_en, p.gender, p.gang_affiliation"
-        )).all()
-    return upsert_embeddings(
-        {"collection": "criminal_profile", "source_id": str(r.person_id),
-         "content": _profile_text(r)} for r in rows)
-
-
-def _profile_text(r) -> str:
-    gang = f" Affiliated with {r.gang_affiliation}." if r.gang_affiliation else ""
-    crimes = ", ".join(c for c in (r.crimes or []) if c)
-    return (f"{r.name_en}, {r.gender}. Habitual offender accused in cases of "
-            f"{crimes}.{gang}")
+def _profile_text(p: dict) -> str:
+    crimes = ", ".join(sorted(p["crimes"])) or "unspecified offences"
+    group = f" Associated with {p['gang']}." if p["gang"] else ""
+    return f"{p['name']}. Accused in cases of {crimes}.{group}"
 
 
 def run_all() -> dict[str, int]:
-    counts = {
-        "fir_narrative": index_fir_narratives(),
-        "mo": index_mo(),
-        "criminal_profile": index_criminal_profiles(),
-    }
-    return counts
+    firs, profiles = fir_documents(), profile_documents()
+    build_index(firs + profiles)
+    return {"fir_narrative": len(firs), "criminal_profile": len(profiles)}
 
 
 if __name__ == "__main__":

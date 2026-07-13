@@ -301,13 +301,15 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
 
 
 def _officer_ps(officer_id: str) -> str:
-    from data.db import get_session
-    from sqlalchemy import text
+    """The station an officer belongs to — the IO scope every query is filtered by.
+
+    The ER's Employee.UnitID *is* the station code; there is no separate `ps_code`.
+    """
+    from data import ds
     try:
-        with get_session() as s:
-            r = s.execute(text("SELECT ps_code FROM officer WHERE officer_id = CAST(:o AS uuid)"),
-                          {"o": officer_id}).first()
-        return r.ps_code if r else ""
+        r = ds.one('SELECT "UnitID" FROM "Employee" WHERE "EmployeeID" = :e',
+                   {"e": int(officer_id)})
+        return str(r["UnitID"]) if r else ""
     except Exception:
         return ""
 

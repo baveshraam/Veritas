@@ -11,13 +11,15 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-# Secrets (GEMINI_API_KEY) live in a gitignored `.env` at the repo root — nothing
-# else loads it, so without this line a local uvicorn runs in deterministic mode
-# with a perfectly good key sitting on disk. override=False: an exported shell
-# variable still wins.
+# There are no API keys in the image. Inside AppSail the Catalyst SDK authenticates as the
+# app itself, so the deployed service needs no secret at all. `.env` only carries the local
+# pointers (project id, QuickML endpoint), and nothing else loads it — without this line a
+# local uvicorn would not see them. override=False: an exported shell variable still wins.
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
-from .routers import alerts, auth_routes, chat, copilot, export, records  # noqa: E402
+from .routers import (  # noqa: E402
+    alerts, auth_routes, chat, copilot, export, jobs, records,
+)
 
 app = FastAPI(
     title="Veritas — KSP Crime Intelligence Platform",
@@ -42,24 +44,24 @@ app.include_router(records.router, tags=["records"])
 app.include_router(copilot.router, tags=["copilot"])
 app.include_router(export.router, tags=["export"])
 app.include_router(alerts.router, tags=["alerts"])
+app.include_router(jobs.router, tags=["jobs"])       # driven by Catalyst Cron, not by a user
 
 
 @app.get("/health")
 async def health() -> dict:
     """Reports what is actually reachable, not just that the process is alive."""
     # llm_status() distinguishes "no key" from "key present but quota exhausted" —
-    # reporting a bare "gemini" for a 429'd key is how you debug the wrong thing.
+    # reporting a bare model name for an unreachable endpoint is how you debug the
+    # wrong thing.
     from rag_agent.llm import status as llm_status
 
     status = {"api": "ok", "llm": llm_status()}
     try:
-        from data.db import get_session
-        from sqlalchemy import text
-        with get_session() as s:
-            status["postgres"] = "ok"
-            status["firs"] = s.execute(text("SELECT count(*) FROM fir")).scalar()
+        from data import ds
+        status["datastore"] = ds.backend()
+        status["firs"] = ds.scalar('SELECT COUNT("CaseMasterID") AS c FROM "CaseMaster"')
     except Exception as e:
-        status["postgres"] = f"unavailable: {type(e).__name__}"
+        status["datastore"] = f"unavailable: {type(e).__name__}"
     try:
         from data.graph import load_graph
         g = load_graph()
@@ -68,4 +70,18 @@ async def health() -> dict:
         status["graph_edges"] = g.number_of_edges()
     except Exception as e:
         status["graph"] = f"unavailable: {type(e).__name__}"
+
+    # The vector index lives in a Stratus object. If the bucket is missing, retrieval does
+    # not fail — it silently returns nothing, which is the worst possible failure for a
+    # citation-grounded system: confident, empty, and quiet. So it is reported.
+    try:
+        from data.vectors import load_index
+        n = len(load_index()["source_id"])
+        status["vector_index"] = "ok" if n else "EMPTY — retrieval will find nothing"
+        status["indexed_documents"] = n
+    except Exception as e:
+        status["vector_index"] = f"unavailable: {type(e).__name__}"
+
+    from data.cache import _segment
+    status["cache"] = "catalyst" if _segment() is not None else "in-process"
     return status

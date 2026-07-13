@@ -1,9 +1,7 @@
 """The one schema definition. Everything else is generated from it.
 
 Two consumers:
-  * `emit_iac()`      -> project-template.json, which `catalyst iac:import` turns
-                         into real Catalyst Data Store tables. Data Store has no
-                         CREATE TABLE — IaC is the only programmatic path in.
+  * `data.provision`  -> creates the real Catalyst Data Store tables over the Admin API.
   * `emit_sqlite()`   -> DDL for the offline/test backend in `data.ds`.
 
 Tables 1-27 are the Karnataka Police ER diagram, reproduced verbatim: their names,
@@ -258,6 +256,15 @@ ER_TABLES: dict[str, list[Col]] = {
 # over Accused rows. It is the single most load-bearing thing we add to their data model.
 # --------------------------------------------------------------------------------------
 VX_TABLES: dict[str, list[Col]] = {
+    # Catalyst Authentication identifies a user by email; the ER's Employee has no email
+    # column, and we do not add one — the ER is a hard requirement, not a starting point.
+    # So identity bridges to the record here. Catalyst says *who signed in*; Employee stays
+    # authoritative for what they may see (role, station), which is what packages/policy
+    # reads. A Catalyst account with no row here is not an officer and gets nothing.
+    "vx_officer_identity": [
+        Col("Email", "varchar", unique=True, mandatory=True),
+        Col("EmployeeID", "int", mandatory=True),
+    ],
     "vx_person": [
         Col("PersonUID", "int", unique=True, mandatory=True),
         Col("CanonicalName", "varchar"),
@@ -266,7 +273,12 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("GenderID", "int"),
         Col("RiskScore", "double"),
         Col("IsHabitualOffender", "boolean"),
-        Col("GangAffiliation", "varchar"),
+        # Written by data.gds. The ER records no gang, so we do not invent one: the
+        # "gang" is the Louvain community over co-offending, named as what it is.
+        Col("GangAffiliation", "varchar"),      # "Community 47"
+        Col("PageRank", "double"),
+        Col("CommunityID", "int"),
+        Col("Betweenness", "double"),
     ],
     "vx_accused_identity": [
         Col("AccusedMasterID", "int", unique=True, mandatory=True),
@@ -287,8 +299,15 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("Amount", "double"),
         Col("TxnDate", "datetime"),
         Col("Channel", "varchar"),
-        Col("FlaggedSuspicious", "boolean"),
         Col("CaseMasterID", "int"),
+        # Detector OUTPUT, written by packages/ml_models — never by the generator, or the
+        # AML models would be scoring their own answer key. `Detector` names which one
+        # fired (rule-based structuring / GNN), because a flag a court cannot attribute
+        # to a method is not evidence.
+        Col("FlaggedSuspicious", "boolean"),
+        Col("FlagType", "varchar"),
+        Col("Detector", "varchar"),
+        Col("FlagConfidence", "double"),
     ],
     "vx_graph_edge": [
         Col("EdgeID", "int", unique=True, mandatory=True),
@@ -309,12 +328,18 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("Language", "varchar"),
         Col("UpdatedAt", "datetime"),
     ],
+    # One row per exchange, not per message: the PDF export and multi-turn resumption both
+    # want the question and its answer together. `Payload` is the JSON side-car (citations,
+    # visualization, evidence, agent trace) — see data.sessions for what happens when a
+    # turn's payload exceeds Data Store's 10,000-char text cap.
     "vx_conversation_turn": [
         Col("TurnID", "int", unique=True, mandatory=True),
         Col("SessionID", "varchar", mandatory=True),
         Col("TurnIndex", "int", mandatory=True),
-        Col("Role", "varchar"),                      # officer | assistant
-        Col("Content", "text"),
+        Col("Query", "text"),
+        Col("Language", "varchar"),
+        Col("FinalAnswer", "text"),
+        Col("Payload", "text"),
         Col("CreatedAt", "datetime"),
     ],
     # Data Store has no RULE and no trigger, so the database cannot make the audit log
@@ -326,7 +351,9 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("AuditID", "int", unique=True, mandatory=True),
         Col("EmployeeID", "int", mandatory=True),
         Col("SessionID", "varchar"),
+        Col("Endpoint", "varchar"),
         Col("QueryText", "text"),
+        Col("RequestHash", "varchar"),
         Col("ResponseHash", "varchar"),
         Col("PrevHash", "varchar"),
         Col("ChainHash", "varchar"),
@@ -334,56 +361,24 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("CreatedAt", "datetime"),
     ],
     # Real Census/NSSO ground truth, keyed to the ER's District.DistrictID.
+    # The one table here that is not synthetic: Census of India 2011, PCA, verbatim.
+    # Every column is a ratio of two real published counts. `unemployment` and
+    # `police_per_lakh` are ABSENT on purpose — neither exists at district level in any
+    # real source, and the causal layer would rather name an unmeasured confounder than
+    # adjust for a fabricated one. See data.socioeconomic.
     "vx_district_socioeconomic": [
         Col("DistrictID", "int", unique=True, mandatory=True),
         Col("Year", "int"),
-        Col("LiteracyRate", "double"),
-        Col("Unemployment", "double"),
-        Col("PovertyIndex", "double"),
         Col("Population", "bigint"),
+        Col("LiteracyRate", "double"),
         Col("UrbanRatio", "double"),
-        Col("PolicePerLakh", "double"),
+        Col("PovertyIndex", "double"),
+        Col("MarginalWorkerRate", "double"),
+        Col("YouthRatio", "double"),
     ],
 }
 
 TABLES: dict[str, list[Col]] = {**ER_TABLES, **VX_TABLES}
-
-
-def emit_iac(project_name: str) -> dict:
-    """project-template.json for `catalyst iac:import`.
-
-    Data Store exposes no CREATE TABLE over API, CLI or SDK — the console is the only
-    documented way in. IaC import is the exception, so the whole schema ships as one
-    committed file instead of 36 tables of manual clicking.
-    """
-    datastore: list[dict] = []
-    for table, cols in TABLES.items():
-        datastore.append(
-            {"type": "table", "name": table, "properties": {"table_name": table}, "dependsOn": []}
-        )
-        for c in cols:
-            props: dict = {
-                "column_name": c.name,
-                "data_type": c.type,
-                "is_unique": c.unique,
-                "is_mandatory": c.mandatory,
-            }
-            if c.type in _MAX_LEN:
-                props["max_length"] = _MAX_LEN[c.type]
-            datastore.append(
-                {
-                    "type": "column",
-                    "name": f"{table}-{c.name}",
-                    "properties": props,
-                    "dependsOn": [f"Datastore.table.{table}"],
-                }
-            )
-    return {
-        "name": project_name,
-        "version": "1.0.0",
-        "parameters": {},
-        "components": {"Datastore": datastore},
-    }
 
 
 _SQLITE_TYPE = {
@@ -410,14 +405,8 @@ def emit_sqlite() -> list[str]:
 
 
 if __name__ == "__main__":
-    import json
-    import sys
-
-    n_er, n_vx = len(ER_TABLES), len(VX_TABLES)
     n_cols = sum(len(c) for c in TABLES.values())
-    out = emit_iac(sys.argv[1] if len(sys.argv) > 1 else "Veritas")
-    print(json.dumps(out, indent=2))
     print(
-        f"\n{n_er} ER tables + {n_vx} vx tables = {len(TABLES)}; {n_cols} columns",
-        file=sys.stderr,
+        f"{len(ER_TABLES)} ER tables + {len(VX_TABLES)} vx tables "
+        f"= {len(TABLES)}; {n_cols} columns"
     )

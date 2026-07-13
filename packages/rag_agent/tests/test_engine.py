@@ -59,31 +59,36 @@ def test_corroboration_across_source_types_raises_confidence():
 # (before any data is reached), so an IO still cannot out-traverse their role.
 
 def _money_chain() -> nx.MultiDiGraph:
-    """P owns A0; money flows A0 -> A1 -> A2 -> A3 -> A4, one hop at a time."""
+    """person:1 owns acct:0; money flows acct:0 -> 1 -> 2 -> 3 -> 4, one hop at a time.
+
+    Node ids carry their own kind, exactly as data.graph builds them.
+    """
     g = nx.MultiDiGraph()
-    g.add_node("P", label="Person")
+    g.add_node("person:1", label="Person")
     for i in range(5):
-        g.add_node(f"A{i}", label="Account")
-    g.add_edge("P", "A0", rel="OWNS_ACCOUNT", amount=None)
+        g.add_node(f"acct:{i}", label="Account")
+    g.add_edge("person:1", "acct:0", rel="OWNS_ACCOUNT", amount=None)
     for i in range(4):
-        g.add_edge(f"A{i}", f"A{i+1}", rel="TRANSFERRED_TO", amount=1000.0)
+        g.add_edge(f"acct:{i}", f"acct:{i+1}", rel="TRANSFERRED_TO", amount=1000.0)
     return g
 
 
 @pytest.mark.parametrize("role,expected_depth", [("IO", 2), ("SHO", 2), ("DSP", 4), ("IG", 4)])
 def test_money_trail_depth_is_capped_by_role(monkeypatch, role, expected_depth):
+    """The cap is applied while traversing, not to the result. You cannot un-traverse a
+    graph, so a depth an officer may not reach is a depth we never walk."""
     monkeypatch.setattr(graph_agent, "load_graph", _money_chain)
-    hops = [r["hops"] for r in graph_agent.money_trail("P", role)]
+    hops = [r["hops"] for r in graph_agent.money_trail("1", role)]
     assert hops, "the trail must find something at every role"
     assert max(hops) == expected_depth
 
 
 def test_money_trail_never_walks_a_payment_backwards(monkeypatch):
-    """TRANSFERRED_TO is the one directed relation: following it in reverse would
-    report money that never moved that way."""
+    """TRANSFERRED_TO is the one directed relation: following it in reverse would report
+    money that never moved that way — a transfer the system invented."""
     monkeypatch.setattr(graph_agent, "load_graph", _money_chain)
-    reached = {r["to_account"] for r in graph_agent.money_trail("P", "IG")}
-    assert reached == {"A1", "A2", "A3", "A4"}      # never back to A0, never to P
+    reached = {r["to_account"] for r in graph_agent.money_trail("1", "IG")}
+    assert reached == {"1", "2", "3", "4"}      # never back to acct:0, never to the person
 
 
 # --- intents ----------------------------------------------------------------
@@ -129,9 +134,11 @@ def test_citations_are_1_based_and_aligned_to_evidence():
 def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     from rag_agent import llm
 
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
+    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
     monkeypatch.setattr(llm, "_degraded_reason", "")
+    monkeypatch.setattr(llm, "_token", lambda: "a-token")
 
     class Boom(Exception):
         pass
@@ -139,8 +146,8 @@ def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     def explode(*_a, **_k):
         raise Boom("429 RESOURCE_EXHAUSTED")
 
-    monkeypatch.setattr(llm, "_client", explode)
-    assert llm.available() is True             # key is present, nothing known bad yet
+    monkeypatch.setattr(llm.urllib.request, "urlopen", explode)
+    assert llm.available() is True             # configured, nothing known bad yet
 
     with pytest.raises(llm.LLMUnavailable):    # NOT the raw provider error
         llm.generate("hello")
@@ -150,10 +157,26 @@ def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     assert llm.generate_json("hello", {}) == {}   # returns {}, never raises
 
 
-def test_no_key_is_reported_honestly(monkeypatch):
+def test_an_unconfigured_llm_is_reported_honestly(monkeypatch):
+    """The deployed service authenticates as itself inside AppSail, so "no LLM" locally is
+    the normal case, not an error. It must say so rather than name a model it cannot reach."""
     from rag_agent import llm
 
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.setattr(llm, "ENDPOINT", "")
     assert llm.available() is False
-    assert "no GEMINI_API_KEY" in llm.status()
+    assert "not configured" in llm.status()
     assert llm.generate_json("hello", {}) == {}
+
+
+def test_no_catalyst_credential_means_no_llm(monkeypatch):
+    """QuickML is only reachable with the app's own Catalyst token. Without one — which is
+    every environment that is not AppSail — the engine runs deterministically."""
+    from rag_agent import llm
+
+    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
+    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_token", lambda: None)
+
+    with pytest.raises(llm.LLMUnavailable):
+        llm.generate("hello")

@@ -127,7 +127,7 @@ def _sqlite_conn() -> sqlite3.Connection:
 
 def init_db() -> None:
     """Create the schema in the sqlite backend. On Catalyst the tables already exist —
-    they were provisioned by `catalyst iac:import` from data.schema.emit_iac()."""
+    `python -m data.provision` created them from data.schema.TABLES."""
     if backend() != "sqlite":
         return
     from .schema import emit_sqlite
@@ -165,6 +165,32 @@ def insert(table: str, rows: Sequence[dict]) -> int:
     return len(rows)
 
 
+def update(table: str, key: str, rows: Sequence[dict]) -> int:
+    """Bulk-update rows, matched on the business key `key` (e.g. PersonUID).
+
+    Data Store updates by ROWID, which is its own key, not ours — so on Catalyst this
+    resolves key -> ROWID once and then bulk-writes. Issuing one ZCQL UPDATE per row
+    instead would be ~10k round-trips for a single PageRank pass.
+    """
+    rows = [r for r in rows if r]
+    if not rows:
+        return 0
+    if backend() == "catalyst":
+        rowid_of = {r[key]: r["ROWID"] for r in
+                    query(f'SELECT ROWID, "{key}" FROM "{table}"')}
+        payload = [dict(r, ROWID=rowid_of[r[key]]) for r in rows if r[key] in rowid_of]
+        t = _catalyst_app().datastore().table(table)
+        for i in range(0, len(payload), _INSERT_BATCH):
+            t.update_rows(payload[i : i + _INSERT_BATCH])
+        return len(payload)
+    conn = _sqlite_conn()
+    for r in rows:
+        sets = ", ".join(f'"{c}" = {_lit(v)}' for c, v in r.items() if c != key)
+        conn.execute(f'UPDATE "{table}" SET {sets} WHERE "{key}" = {_lit(r[key])}')
+    conn.commit()
+    return len(rows)
+
+
 def execute(zcql: str, params: dict[str, Any] | None = None) -> None:
     """Run a ZCQL UPDATE/DELETE."""
     sql = render(zcql, params)
@@ -174,6 +200,27 @@ def execute(zcql: str, params: dict[str, Any] | None = None) -> None:
     conn = _sqlite_conn()
     conn.execute(sql)
     conn.commit()
+
+
+def to_dt(v: Any) -> datetime | None:
+    """Coerce a datetime column to a datetime.
+
+    Data Store hands back real datetimes; SQLite hands back the ISO strings it stored. Any
+    caller doing date arithmetic goes through here, or it works on one backend and throws
+    on the other.
+    """
+    if v is None or isinstance(v, datetime):
+        return v
+    if isinstance(v, date):
+        return datetime(v.year, v.month, v.day)
+    s = str(v).strip().replace("T", " ")
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f", "%Y-%m-%d",
+                "%b %d, %Y %I:%M %p"):          # the last is Data Store's display format
+        try:
+            return datetime.strptime(s[:26], fmt)
+        except ValueError:
+            continue
+    raise ValueError(f"cannot parse {v!r} as a datetime")
 
 
 def one(zcql: str, params: dict[str, Any] | None = None) -> dict | None:

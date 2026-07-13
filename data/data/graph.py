@@ -1,38 +1,45 @@
-"""Knowledge-graph access — NetworkX over the `graph_edge` table.
+"""Knowledge-graph access — NetworkX over the `vx_graph_edge` table.
 
-Replaces the Neo4j driver. No Catalyst service corresponds to a graph database, so
-the graph is stored as ordinary edge rows and materialised in memory on demand:
+Replaces the Neo4j driver. No Catalyst service corresponds to a graph database, so the
+graph is stored as ordinary edge rows and materialised in memory on demand:
 
     from data.graph import load_graph, neighbours
-    for rel, node_id, edge in neighbours(person_id): ...
+    for rel, node_id, edge in neighbours("person:412"): ...
 
-Every graph *algorithm* survived the move (see data.gds). What did not survive is
-Cypher itself, and with it the LLM NL->Cypher fallback — there is nothing left for it
-to translate into. The template queries it backstopped are all still here.
+Every graph *algorithm* survived the move (see data.gds). What did not survive is Cypher
+itself, and with it the LLM NL->Cypher fallback — there is nothing left for it to
+translate into. The template queries it backstopped are all still here.
+
+Node ids carry their own type: `person:412`, `case:1043`, `acct:77`, `txn:9001`,
+`gang:Chaddi Gang`, `loc:Kolar`. One varchar column instead of an id + a label column,
+and `node_label()` is a string split. The person ids are *resolved* PersonUIDs from
+`vx_person`, not per-case Accused rows — the ER has no cross-case person, so identity
+is inferred first (packages/ml_models, Fellegi-Sunter) and the graph is built on top of
+it. Without that step every offender would look like a first-timer.
 
 Honest ceiling: this loads the whole graph into memory (~24k nodes / 136k edges at the
 current dataset size — well under a second, tens of MB). That is the right trade,
 because Neo4j's real advantage is traversal at a scale this dataset does not have.
 # ponytail: whole-graph in-memory load. If the edge count outgrows RAM, swap
-# load_graph() for a bounded frontier query (WHERE src_id IN (:frontier)) — every
-# caller goes through this module, so nothing outside it changes.
+# load_graph() for a bounded frontier query (WHERE SrcId IN (:frontier)) — every caller
+# goes through this module, so nothing outside it changes.
 
 Stratus fast path: on Catalyst the row store is the Data Store, whose ZCQL caps a SELECT
 at 300 rows — 136k edges would be ~455 sequential queries on every cold start. So the
 generator pickles the built graph into Stratus (object storage) and `load_graph()` reads
-that single object instead. `graph_edge` stays the record of truth; Stratus is a derived
-cache, and a miss silently falls back to rebuilding from rows, so it can never be the
-reason an answer is wrong — only the reason one is slow.
+that single object instead. `vx_graph_edge` stays the record of truth; Stratus is a
+derived cache, and a miss silently falls back to rebuilding from rows, so it can never be
+the reason an answer is wrong — only the reason one is slow.
 """
+import json
 import logging
 import pickle
 from functools import lru_cache
 from typing import Iterator
 
 import networkx as nx
-from sqlalchemy import text
 
-from .db import get_session
+from . import ds
 
 log = logging.getLogger(__name__)
 
@@ -45,9 +52,16 @@ _GRAPH_KEY = "graph/knowledge_graph.pkl"
 # TRANSFERRED_TO is deliberately absent: money flow is the one genuinely directed
 # relation, and reversing it would invent a payment that never happened.
 _SYMMETRIC = frozenset({
-    "CO_ACCUSED_WITH", "ACCUSED_IN", "VICTIM_IN", "MEMBER_OF", "OWNS_ACCOUNT",
+    "CO_ACCUSED_WITH", "ACCUSED_IN", "MEMBER_OF", "OWNS_ACCOUNT",
     "SAME_AS", "OCCURRED_AT", "INVOLVED_IN", "LINKED_TO",
 })
+
+
+def node_label(node_id: str) -> str:
+    """`person:412` -> `Person`. The id is the label — there is no lookup."""
+    kind = node_id.split(":", 1)[0]
+    return {"person": "Person", "case": "CrimeEvent", "acct": "Account",
+            "txn": "Transaction", "gang": "Gang", "loc": "Location"}.get(kind, kind)
 
 
 def _bucket():
@@ -61,23 +75,17 @@ def _bucket():
 
 def _build_from_rows() -> nx.MultiDiGraph:
     g = nx.MultiDiGraph()
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT edge_type, src_id, src_label, dst_id, dst_label, "
-            "       role, edge_date, amount, strength, confidence FROM graph_edge"
-        )).mappings().all()
+    rows = ds.query("SELECT SrcId, DstId, EdgeType, Weight, Props FROM vx_graph_edge")
 
     for r in rows:
-        g.add_node(r["src_id"], label=r["src_label"])
-        g.add_node(r["dst_id"], label=r["dst_label"])
-        amount = float(r["amount"]) if r["amount"] is not None else None
-        g.add_edge(r["src_id"], r["dst_id"], rel=r["edge_type"], role=r["role"],
-                   date=r["edge_date"], amount=amount,
-                   strength=r["strength"], confidence=r["confidence"])
-        if r["edge_type"] in _SYMMETRIC:
-            g.add_edge(r["dst_id"], r["src_id"], rel=r["edge_type"], role=r["role"],
-                       date=r["edge_date"], amount=amount,
-                       strength=r["strength"], confidence=r["confidence"])
+        src, dst, rel = r["SrcId"], r["DstId"], r["EdgeType"]
+        props = json.loads(r["Props"]) if r.get("Props") else {}
+        attrs = dict(props, rel=rel, weight=float(r["Weight"] or 1.0))
+        g.add_node(src, label=node_label(src))
+        g.add_node(dst, label=node_label(dst))
+        g.add_edge(src, dst, **attrs)
+        if rel in _SYMMETRIC:
+            g.add_edge(dst, src, **attrs)
     return g
 
 
@@ -85,7 +93,7 @@ def _build_from_rows() -> nx.MultiDiGraph:
 def load_graph() -> nx.MultiDiGraph:
     """The whole crime graph. Cached per process — call `reset_graph()` after a write.
 
-    Reads the Stratus pickle when there is one; otherwise rebuilds from `graph_edge`.
+    Reads the Stratus pickle when there is one; otherwise rebuilds from `vx_graph_edge`.
     A cache miss is never fatal — it costs latency, not correctness.
     """
     b = _bucket()
@@ -93,12 +101,12 @@ def load_graph() -> nx.MultiDiGraph:
         try:
             return pickle.loads(b.get_object(_GRAPH_KEY).read())
         except Exception as e:
-            log.warning("Stratus graph cache miss (%s) — rebuilding from graph_edge", e)
+            log.warning("Stratus graph cache miss (%s) — rebuilding from vx_graph_edge", e)
     return _build_from_rows()
 
 
 def publish_graph() -> bool:
-    """Pickle the graph built from `graph_edge` into Stratus. Called by the generator
+    """Pickle the graph built from `vx_graph_edge` into Stratus. Called by the generator
     after the edge list is rewritten. Returns False when Catalyst isn't configured."""
     b = _bucket()
     if b is None:
@@ -117,12 +125,13 @@ def reset_graph() -> None:
 
 def undirected() -> nx.Graph:
     """Simple undirected view for the centrality/community algorithms that need one.
-    Parallel edges collapse; `strength` (shared-FIR count) becomes the edge weight."""
+    Parallel edges collapse; edge weights sum (so a pair co-accused in three cases
+    outweighs a pair sharing one)."""
     g = load_graph()
     u = nx.Graph()
     u.add_nodes_from(g.nodes(data=True))
     for a, b, d in g.edges(data=True):
-        w = float(d.get("strength") or 1)
+        w = float(d.get("weight") or 1.0)
         if u.has_edge(a, b):
             u[a][b]["weight"] += w
         else:
@@ -137,10 +146,6 @@ def neighbours(node_id: str) -> Iterator[tuple[str, str, dict]]:
         return
     for _, dst, data in g.out_edges(node_id, data=True):
         yield data["rel"], dst, data
-
-
-def node_label(node_id: str) -> str | None:
-    return load_graph().nodes.get(node_id, {}).get("label")
 
 
 if __name__ == "__main__":  # `python -m data.graph`

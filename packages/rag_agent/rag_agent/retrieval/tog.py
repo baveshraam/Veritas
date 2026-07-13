@@ -14,10 +14,9 @@ produces real paths, and still terminates — it is just less selective.
 from dataclasses import dataclass, field
 from functools import lru_cache
 
-from data.db import get_session
+from data import ds
 from data.graph import load_graph, neighbours
 from policy import max_traversal_depth
-from sqlalchemy import text
 
 from ..llm import available, generate_json
 from ..state import EvidenceItem
@@ -75,21 +74,27 @@ def _node_meta(node_ids: tuple[str, ...]) -> dict[str, tuple[str, float]]:
     frontier nodes repeatedly, and this was one DB round-trip each time."""
     out: dict[str, tuple[str, float]] = {}
     ids = list(node_ids)
-    with get_session() as s:
-        for row in s.execute(text(
-            "SELECT CAST(person_id AS text) AS id, name_en AS label, "
-            "  COALESCE(pagerank, 0.0) AS pagerank FROM person "
-            "WHERE CAST(person_id AS text) = ANY(:ids)"), {"ids": ids}).mappings():
-            out[row["id"]] = (row["label"] or "?", float(row["pagerank"]))
-        for row in s.execute(text(
-            "SELECT CAST(fir_id AS text) AS id, crime_type AS label FROM fir "
-            "WHERE CAST(fir_id AS text) = ANY(:ids)"), {"ids": ids}).mappings():
-            out[row["id"]] = (row["label"] or "?", 0.0)
-    g = load_graph()
-    for nid in ids:                      # Account/Gang/Location are named by their id
-        out.setdefault(nid, (nid, 0.0))
-        if nid not in g:
-            out[nid] = (nid, 0.0)
+
+    # Node ids carry their own kind ("person:412"), so one query per kind, not per node.
+    persons = [n.split(":", 1)[1] for n in ids if n.startswith("person:")]
+    cases = [n.split(":", 1)[1] for n in ids if n.startswith("case:")]
+
+    if persons:
+        for r in ds.query('SELECT "PersonUID", "CanonicalName", "PageRank" '
+                          'FROM "vx_person" WHERE "PersonUID" IN :ids',
+                          {"ids": [int(p) for p in persons]}):
+            out[f"person:{r['PersonUID']}"] = (r["CanonicalName"] or "?",
+                                               float(r["PageRank"] or 0.0))
+    if cases:
+        for r in ds.query('SELECT "CaseMaster"."CaseMasterID", "CrimeSubHead"."CrimeHeadName" '
+                          'FROM "CaseMaster" LEFT JOIN "CrimeSubHead" '
+                          '  ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID" '
+                          'WHERE "CaseMaster"."CaseMasterID" IN :ids',
+                          {"ids": [int(c) for c in cases]}):
+            out[f"case:{r['CaseMasterID']}"] = (r["CrimeHeadName"] or "?", 0.0)
+
+    for nid in ids:                      # Account/Location nodes are named by their own id
+        out.setdefault(nid, (nid.split(":", 1)[-1], 0.0))
     return out
 
 

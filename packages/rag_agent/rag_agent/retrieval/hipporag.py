@@ -17,12 +17,15 @@ TOP_K = 15
 
 
 def seed_person_ids(person_names: list[str]) -> list[str]:
-    """Resolve query entity names to graph person_ids."""
-    seeds: list[str] = []
-    for name in person_names:
-        for hit in graph_agent.person_by_name(name):
-            seeds.append(hit["person_id"])
-    return seeds
+    """Resolve the query's entity names to graph node ids (`person:<PersonUID>`).
+
+    The names resolve against `vx_person`, i.e. against *reconstructed* people. Seeding from
+    raw `Accused` rows would seed one case's worth of a man and PPR would spread from a
+    stub, not from his actual network.
+    """
+    return [f"person:{hit['person_id']}"
+            for name in person_names
+            for hit in graph_agent.person_by_name(name)]
 
 
 def retrieve(person_names: list[str], top_k: int = TOP_K) -> tuple[list[dict], list[EvidenceItem]]:
@@ -37,7 +40,7 @@ def retrieve(person_names: list[str], top_k: int = TOP_K) -> tuple[list[dict], l
             evidence_id=f"ppr:{r['label']}:{r['id']}",
             source_type="GRAPH_RELATIONSHIP",
             source_id=str(r["id"]),
-            source_query=f"gds.pageRank.stream(sourceNodes={seeds})",
+            source_query=f"personalized PageRank, seeded from {seeds}",
             content=(f"{r['label']} '{r['text']}' is connected to the query entities "
                      f"with personalized-PageRank score {r['score']:.4f}"),
             confidence=min(1.0, float(r["score"]) * 4),   # PPR mass -> rough confidence

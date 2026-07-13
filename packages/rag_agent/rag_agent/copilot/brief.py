@@ -1,158 +1,177 @@
 """Investigation Copilot — the "I'd use this Monday morning" feature.
 
-Given an open FIR: a chronological timeline, the top-5 MO-similar past cases with
-their outcomes, ranked investigative leads, and a paste-ready case-diary paragraph.
+Given an open case: a chronological timeline, the top-5 similar past cases with their
+outcomes, ranked investigative leads, and a paste-ready case-diary paragraph.
 
-Policy is enforced INSIDE this, not on its output: `officer_role` caps the graph
-traversal depth and masks victim-identifying fields *before* they reach
-`draft_summary`. Redacting a name out of already-generated prose is not something
-you can do reliably, so the prose is never allowed to contain it.
+Policy is enforced INSIDE this, not on its output: `officer_role` caps the graph traversal
+and masks victim-identifying fields *before* they reach `_draft_summary`. Redacting a name
+out of already-generated prose is not something you can do reliably, so the prose is never
+allowed to contain it.
+
+Similarity is over the case narrative. The organizers' ER has no modus-operandi column —
+the method is stated inside `BriefFacts` — so MO similarity *is* narrative similarity, and a
+separate MO index would have been two names for one thing.
 """
-from datetime import date
-
-from data.db import get_session
+from data import ds, queries
 from data.vectors import hybrid_search
 from policy import mask_person_fields, max_traversal_depth
-from sqlalchemy import text
 
+from ..agents.sql_agent import fir_by_id
 from ..llm import available, generate
 from ..state import CopilotBrief
 
 
-def _fir(fir_id: str) -> dict | None:
-    with get_session() as s:
-        r = s.execute(text(
-            "SELECT fir_id, fir_number, crime_type, ipc_sections, date_filed, "
-            "       occurrence_from, district, taluk, ps_code, case_status, "
-            "       modus_operandi, narrative "
-            "FROM fir WHERE fir_id = CAST(:f AS uuid)"), {"f": fir_id}).mappings().first()
-    return dict(r) if r else None
+def _case(fir_id: str) -> dict | None:
+    # SHO scope: the copilot is opened from a case the officer already has in hand, so the
+    # station filter is not re-applied here — fir_by_id with an unrestricted role.
+    rows = fir_by_id(fir_id, "SHO", "")
+    return rows[0] if rows else None
 
 
-def _timeline(fir_id: str, fir: dict) -> list[dict]:
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT p.person_id, p.name_en, cr.role, cr.arrest_date, cr.bail_status, "
-            "       cr.conviction "
-            "FROM criminal_record cr JOIN person p ON p.person_id = cr.person_id "
-            "WHERE cr.fir_id = CAST(:f AS uuid)"), {"f": fir_id}).mappings().all()
+def _accused_on_case(fir_id: str) -> list[dict]:
+    """The people accused on this case, resolved to their cross-case identity."""
+    return ds.query(
+        'SELECT "vx_person"."PersonUID", "vx_person"."CanonicalName", '
+        '       "vx_person"."CommunityID", "vx_person"."GangAffiliation", '
+        '       "vx_person"."PageRank", "Accused"."AccusedName" '
+        'FROM "Accused" '
+        'JOIN "vx_accused_identity" '
+        '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
+        'JOIN "vx_person" '
+        '  ON "vx_accused_identity"."PersonUID" = "vx_person"."PersonUID" '
+        'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})
 
+
+def _timeline(fir_id: str, case: dict) -> list[dict]:
+    filed = ds.to_dt(case["date_filed"])
     events: list[dict] = []
-    if fir.get("occurrence_from"):
-        events.append({"date": str(fir["occurrence_from"].date()),
-                       "event": f"Offence occurred ({fir['crime_type']})"})
-    events.append({"date": str(fir["date_filed"].date()),
-                   "event": f"FIR {fir['fir_number']} registered at {fir['ps_code']}"})
-    for r in rows:
-        if r["arrest_date"]:
-            events.append({"date": str(r["arrest_date"]),
-                           "event": f"{r['name_en']} arrested ({r['role']})"})
-        if r["bail_status"] and r["bail_status"] != "Not Applied":
-            events.append({"date": str(r["arrest_date"] or fir["date_filed"].date()),
-                           "event": f"{r['name_en']} — bail {r['bail_status'].lower()}"})
-        if r["conviction"]:
-            events.append({"date": str(fir["date_filed"].date()),
-                           "event": f"{r['name_en']} convicted"})
+    if filed:
+        events.append({"date": str(filed.date()),
+                       "event": f"FIR {case['fir_number']} registered at "
+                                f"{case.get('ps_name') or case['ps_code']}"})
+
+    arrests = ds.query(
+        'SELECT "ArrestSurrender"."ArrestSurrenderDate", '
+        '       "ArrestSurrender"."ArrestSurrenderTypeID", "Accused"."AccusedName" '
+        'FROM "ArrestSurrender" '
+        'JOIN "Accused" '
+        '  ON "ArrestSurrender"."AccusedMasterID" = "Accused"."AccusedMasterID" '
+        'WHERE "ArrestSurrender"."CaseMasterID" = :cid', {"cid": int(fir_id)})
+    for a in arrests:
+        d = ds.to_dt(a["ArrestSurrenderDate"])
+        if not d:
+            continue
+        kind = "surrendered" if a["ArrestSurrenderTypeID"] == 2 else "arrested"
+        events.append({"date": str(d.date()), "event": f"{a['AccusedName']} {kind}"})
+
+    for cs in ds.query('SELECT "csdate", "cstype" FROM "ChargesheetDetails" '
+                       'WHERE "CaseMasterID" = :cid', {"cid": int(fir_id)}):
+        d = ds.to_dt(cs["csdate"])
+        if not d:
+            continue
+        label = {"A": "Chargesheet filed", "B": "Closed as false",
+                 "C": "Closed as undetected"}.get(cs["cstype"], "Final report filed")
+        events.append({"date": str(d.date()), "event": label})
+
     return sorted(events, key=lambda e: e["date"])
 
 
-def _similar_cases(fir: dict, limit: int = 5) -> list[dict]:
-    """MO-similarity over the vector store, each with its recorded outcome."""
-    probe = f"{fir['crime_type']}. {fir.get('modus_operandi') or ''}"
-    hits = hybrid_search(probe, collection="mo", k=limit + 1)
-    ids = [h["source_id"] for h in hits if h["source_id"] != str(fir["fir_id"])][:limit]
+def _similar_cases(case: dict, limit: int = 5) -> list[dict]:
+    """Narrative similarity over the vector index, each with its recorded outcome."""
+    probe = f"{case.get('crime_type') or ''}. {case.get('narrative') or ''}"
+    hits = hybrid_search(probe, collection="fir_narrative", k=limit + 1)
+    ids = [h["source_id"] for h in hits if h["source_id"] != str(case["fir_id"])][:limit]
     if not ids:
         return []
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT fir_id, fir_number, crime_type, district, case_status, "
-            "       modus_operandi, date_filed "
-            "FROM fir WHERE fir_id = ANY(CAST(:ids AS uuid[]))"), {"ids": ids}).mappings().all()
+
     scores = {h["source_id"]: h["score"] for h in hits}
-    return [{**dict(r),
-             "fir_id": str(r["fir_id"]),
-             "date_filed": str(r["date_filed"].date()),
-             "outcome": r["case_status"],
-             "similarity": round(scores.get(str(r["fir_id"]), 0.0), 3)} for r in rows]
+    out = []
+    for cid in ids:
+        rows = fir_by_id(cid, "SHO", "")
+        if not rows:
+            continue
+        r = rows[0]
+        out.append({**r, "outcome": r["case_status"],
+                    "similarity": round(scores.get(cid, 0.0), 3)})
+    return out
 
 
 def _leads(fir_id: str, officer_role: str) -> list[str]:
-    """Investigative leads for the accused on this FIR.
+    """Investigative leads for the accused on this case.
 
-    DIRECT co-accused only — deliberately, and unchanged from the Cypher version. At
-    the 4-hop policy cap this would count most of the connected component ("857
-    associates"), which is true and useless: you cannot canvass 857 people. A lead has
-    to be actionable this week, so it names the people who actually offended alongside
-    them.
+    DIRECT co-accused only — deliberately. At the 4-hop policy cap this would name most of
+    the connected component ("857 associates"), which is true and useless: you cannot canvass
+    857 people. A lead has to be actionable this week, so it names the people who actually
+    offended alongside them. The depth cap is still read, because it is the ceiling this
+    query is allowed to reach even if we choose to stop short of it.
     """
     from data.graph import load_graph
 
-    with get_session() as s:
-        accused = [dict(r) for r in s.execute(text(
-            "SELECT CAST(p.person_id AS text) AS person_id, p.name_en AS name, "
-            "  p.community, p.gang_affiliation AS gang, "
-            "  COALESCE(p.pagerank, 0.0) AS pagerank "
-            "FROM criminal_record cr JOIN person p ON p.person_id = cr.person_id "
-            "WHERE cr.fir_id = CAST(:f AS uuid)"), {"f": fir_id}).mappings().all()]
+    max_traversal_depth(officer_role)          # policy ceiling; this query stays inside it
+    accused = _accused_on_case(fir_id)
     if not accused:
         return []
 
     g = load_graph()
-    rows = []
-    for a in accused:
-        associates = [dst for _, dst, d in g.out_edges(a["person_id"], data=True)
-                      if d["rel"] == "CO_ACCUSED_WITH"] if a["person_id"] in g else []
-        names = _names_of(associates[:3])
-        rows.append({**a, "direct_associates": len(set(associates)), "names": names})
-
     leads: list[str] = []
-    for r in rows:
-        if r["direct_associates"]:
-            named = ", ".join(n for n in r["names"] if n)
-            leads.append(f"{r['name']} has {r['direct_associates']} direct co-accused "
+    for a in accused:
+        node = f"person:{a['PersonUID']}"
+        associates = ([dst for _, dst, d in g.out_edges(node, data=True)
+                       if d["rel"] == "CO_ACCUSED_WITH"] if node in g else [])
+        name = a["CanonicalName"] or a["AccusedName"]
+        pagerank = float(a["PageRank"] or 0.0)
+
+        if associates:
+            names = _names_of([n.split(":", 1)[1] for n in associates[:3]])
+            named = ", ".join(n for n in names if n)
+            leads.append(f"{name} has {len(set(associates))} direct co-accused "
                          f"associate(s) — start with {named}.")
-        if r["gang"]:
-            leads.append(f"{r['name']} is affiliated with {r['gang']}; check that gang's "
-                         f"recent activity in adjoining districts.")
-        if r["community"] is not None:
-            leads.append(f"{r['name']} belongs to network community {r['community']} — "
-                         f"review other members for a linked series.")
-        if r["pagerank"] and r["pagerank"] > 1.0:
-            leads.append(f"{r['name']} ranks high for network influence "
-                         f"(PageRank {r['pagerank']:.2f}) — likely an organiser, not a runner.")
+        if a["CommunityID"] is not None:
+            leads.append(f"{name} belongs to network community {a['CommunityID']} — review "
+                         f"other members for a linked series.")
+        if pagerank > 0 and pagerank * 1000 > 1.0:
+            leads.append(f"{name} ranks high for network influence "
+                         f"(PageRank {pagerank:.4f}) — likely an organiser, not a runner.")
+
+        priors = len(queries.cases_for_person(a["PersonUID"]))
+        if priors > 1:
+            leads.append(f"{name} appears in {priors} cases in total — pull the prior files "
+                         f"before the next interview.")
     return leads[:6]
 
 
-def _names_of(person_ids: list[str]) -> list[str]:
-    if not person_ids:
+def _names_of(person_uids: list[str]) -> list[str]:
+    if not person_uids:
         return []
-    with get_session() as s:
-        return [r[0] for r in s.execute(text(
-            "SELECT name_en FROM person WHERE CAST(person_id AS text) = ANY(:ids)"),
-            {"ids": person_ids}).all() if r[0]]
+    rows = ds.query('SELECT "CanonicalName" FROM "vx_person" WHERE "PersonUID" IN :ids',
+                    {"ids": [int(p) for p in person_uids]})
+    return [r["CanonicalName"] for r in rows if r["CanonicalName"]]
 
 
-def _draft_summary(fir: dict, timeline: list[dict], similar: list[dict],
+def _draft_summary(case: dict, timeline: list[dict], similar: list[dict],
                    officer_role: str) -> str:
     # Mask BEFORE generation. Post-hoc redaction of generated prose is unreliable.
-    safe = mask_person_fields(officer_role, dict(fir))
+    safe = mask_person_fields(officer_role, dict(case))
     convicted = sum(1 for s in similar if s["outcome"] == "Convicted")
+    filed = ds.to_dt(safe.get("date_filed"))
 
     facts = (
-        f"FIR {safe['fir_number']}, {safe['crime_type']} under IPC "
-        f"{', '.join(safe.get('ipc_sections') or [])}, registered at {safe['ps_code']} "
-        f"({safe['district']}) on {safe['date_filed']:%d %b %Y}. "
-        f"Current status: {safe['case_status']}. "
-        f"Modus operandi: {safe.get('modus_operandi') or 'not recorded'}. "
+        f"FIR {safe['fir_number']}, {safe.get('crime_type') or 'offence'}, registered at "
+        f"{safe.get('ps_name') or safe['ps_code']} ({safe.get('district')}) on "
+        f"{filed:%d %b %Y}. " if filed else
+        f"FIR {safe['fir_number']}, {safe.get('crime_type') or 'offence'}, registered at "
+        f"{safe.get('ps_name') or safe['ps_code']} ({safe.get('district')}). ")
+    facts += (
+        f"Current status: {safe.get('case_status')}. "
         f"{len(timeline)} recorded events in the case timeline. "
-        f"{len(similar)} past cases share this MO; {convicted} ended in conviction."
+        f"{len(similar)} past cases share this pattern; {convicted} ended in conviction."
     )
 
     if available():
         try:
             out = generate(
-                f"Write one paste-ready case-diary paragraph for an Investigating "
-                f"Officer, using only these facts:\n{facts}\n"
+                f"Write one paste-ready case-diary paragraph for an Investigating Officer, "
+                f"using only these facts:\n{facts}\n"
                 f"Formal Indian police register style. No speculation about guilt.",
                 system="You draft factual case-diary entries. Never invent details.",
             )
@@ -164,17 +183,17 @@ def _draft_summary(fir: dict, timeline: list[dict], similar: list[dict],
 
 
 def generate_copilot_brief(fir_id: str, officer_role: str) -> CopilotBrief:
-    fir = _fir(fir_id)
-    if not fir:
-        raise KeyError(f"FIR {fir_id} not found")
+    case = _case(fir_id)
+    if not case:
+        raise KeyError(f"Case {fir_id} not found")
 
-    timeline = _timeline(fir_id, fir)
-    similar = _similar_cases(fir)
+    timeline = _timeline(fir_id, case)
+    similar = _similar_cases(case)
     leads = _leads(fir_id, officer_role)
     return CopilotBrief(
         fir_id=fir_id,
         timeline=timeline,
         similar_cases=similar,
         leads=leads,
-        draft_summary=_draft_summary(fir, timeline, similar, officer_role),
+        draft_summary=_draft_summary(case, timeline, similar, officer_role),
     )

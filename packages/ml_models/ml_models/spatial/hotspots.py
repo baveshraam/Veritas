@@ -15,9 +15,8 @@ import numpy as np
 from scipy.spatial import ConvexHull
 from scipy.stats import gaussian_kde
 from sklearn.cluster import DBSCAN
-from sqlalchemy import text
 
-from data.db import get_session
+from data import queries
 
 from ..types import HotspotPolygon
 
@@ -26,14 +25,13 @@ EPS_METRES = 500          # per the architecture: eps=500m
 MIN_SAMPLES = 10
 
 
-def _fetch_points(district_code: str, date_range: tuple[date, date]) -> np.ndarray:
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT latitude AS lat, longitude AS lng "
-            "FROM fir WHERE district_code = :dc AND latitude IS NOT NULL "
-            "  AND date_filed >= :d0 AND date_filed < :d1"
-        ), {"dc": district_code, "d0": date_range[0], "d1": date_range[1]}).all()
-    return np.array([[r.lat, r.lng] for r in rows], dtype=float)
+def _fetch_points(district_id: int, date_range: tuple[date, date]) -> np.ndarray:
+    """Incident coordinates. The ER puts lat/long on CaseMaster itself, so no PostGIS
+    geometry type is needed — and KDE/DBSCAN never used one, only the two numbers."""
+    rows = queries.cases_in_district(district_id, date_range)
+    return np.array([[r["latitude"], r["longitude"]] for r in rows
+                     if r["latitude"] is not None and r["longitude"] is not None],
+                    dtype=float)
 
 
 def _cluster(points: np.ndarray) -> np.ndarray:
@@ -76,7 +74,8 @@ def _ring(cluster_pts: np.ndarray) -> list[tuple[float, float]]:
 
 
 def detect_hotspots(district_code: str, date_range: tuple) -> list[HotspotPolygon]:
-    points = _fetch_points(district_code, (date_range[0], date_range[1]))
+    points = _fetch_points(queries.district_id(district_code),
+                           (date_range[0], date_range[1]))
     if len(points) < MIN_SAMPLES:
         return []
 

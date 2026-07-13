@@ -1,7 +1,7 @@
 """Translation — self-hosted. FIR text never leaves the network.
 
 Deliberately NOT routed to a cloud LLM: the architecture requires record content stay
-inside the network, and Gemini is used only for reasoning/synthesis over evidence the
+inside the network, and QuickML is used only for reasoning/synthesis over evidence the
 caller already holds, never as a translation service for record text.
 
 ## Which model, and why two

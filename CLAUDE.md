@@ -1,362 +1,507 @@
-# KSP Datathon 2026 — Crime Intelligence Platform (Challenge 01)
+# Veritas — KSP Datathon 2026, Challenge 01
 
-**Status**: v4.1 — implemented and integrated end-to-end (see [`README.md`](./README.md) to run it; [`docs/implementation/`](./docs/implementation/) for verified current state). This file is the single current-state record of the project — keep it current; append deltas to the changelog instead of rewriting history; do not let stale backlog/todo/open-question items accumulate here — that's what git issues are for.
-**Scope**: Challenge 01 (Conversational AI), architected to also cover Challenge 02's analytics.
-**Ground rule for this doc**: choices are justified by "is this the best solution to the actual problem," never by "what's fast to build." Where something is simple (e.g. batch pipeline, single API service), that's because the problem has no real-time/multi-tenant nature to justify otherwise — not because building the complex version would take too long.
+**The single source of truth for this repo.** There are no other design docs. Keep this
+current; append deltas to the changelog rather than rewriting history.
 
-## Changelog
-- **v1**: LLM-generated "enterprise fantasy" stack (Kafka/Flink/Iceberg/K8s/Keycloak/OPA/Kong/MLflow/Airflow). Wrong optimization target — infra with no demo-visible payoff.
-- **v2**: Cut infra cosplay, kept reasoning/UX substance. Added financial-crime graph, session entity memory, Investigation Copilot, Command Console UI, requirement traceability matrix, responsible-AI section. Grounded in CrimeKGQA, COPLINK/CrimeNet Explorer, Palantir Gotham, LangGraph citation-grounding pattern.
-- **v3 (this pass)**: Reframed design philosophy to be effort-agnostic (best solution, not least effort). Upgraded graph reasoning with HippoRAG + Think-on-Graph. Upgraded evidence verification with a CRAG-style evaluator. Added MinT hierarchical forecast reconciliation. Added GNN-based AML detection alongside the rule-based structuring detector. Added Fellegi-Sunter probabilistic entity resolution (real fix for Indian-name/alias duplication). Added Aequitas as the named bias-audit methodology. Replaced the "dense command-console" UI direction with a futuristic glassmorphic/spatial design language per explicit direction.
-- **v3.1**: Scaffolded the repo into 5 parallel-work folders (`apps/web`, `apps/api`, `packages/rag_agent`, `packages/ml_models`, `data/`), each with its own README mapping to the layers below — see Repository Structure. Dropped the Open Questions/backlog section: this file tracks current architecture only, not todos.
-- **v4 (implementation)**: All five tracks built and integrated end-to-end against the live stack (see [`README.md`](./README.md) to run it). The architecture held; implementation forced exactly four contract changes, each recorded in the owning README:
-  1. **`SessionFocus` moved to `data`** (from `packages/rag_agent`). It maps 1:1 to the `session` table's `active_*` columns and `data`'s write helpers take/return it — with `rag_agent` already importing `data`, the original placement was a circular import. `rag_agent` re-exports it.
-  2. **GDS scripts live at `data.gds`**, not `data/graph/` — `data.graph` is already the driver module and a `graph/` package would shadow it. The `.cypher` files stay in `data/graph/` as resources.
-  3. **LLM is Gemini**, not Claude/GPT-4o: `GEMINI_API_KEY` is the credential that exists. It is *sensitive* in Vercel (unreadable locally), so the engine runs fully without it — deterministic intent templates + extractive synthesis produce grounded, cited answers, and the LLM only makes them fluent. Cypher/SQL are template-first with LLM generation as the long-tail fallback (EXPLAIN-validated, write-blocked, depth-capped) — safer than model-authored SQL against an evidence store.
-  4. **`document_embedding` is wiped with the record layer.** It is derived data; embeddings surviving a rebuild point at deleted FIRs, and a dangling citation is the one failure a citation-grounded system must not have.
-  Two generator defects the models exposed, both fixed in `data/`: incidents were placed uniformly within a district (so KDE/DBSCAN could find no hotspot at all), and accused were sampled uniformly (so a prior record predicted nothing and the recidivism model correctly learned there was no signal). Placement now clusters around activity centres; accused are drawn by preferential attachment in chronological order.
-- **v3.2**: Cross-README integration audit. Closed real gaps found by treating the 5 READMEs as one system: added `officer`/`session`/`conversation_turn` tables (audit_log was hash-only and had no plaintext conversation store — broke PDF export and multi-turn resumption); added the missing `visualization` + full `evidence_items` fields to the chat response (the "context view swaps by query type" and citation-drawer features had no wire contract); defined all 9 previously-untyped `ml_models` return types; fixed `resolve_entities` (was documented as a live per-query call, corrected to the batch job it actually is, run from `data/`'s generator); wired the previously-orphaned `estimate_causal_effect` and Investigation Copilot (`generate_copilot_brief`) to actual callers; extracted `packages/policy` as the one deliberate shared module, since depth-capping/masking can't be enforced post-hoc alone. Full findings in the audit that produced this pass.
-- **v4.1 (Console completeness pass)**: `apps/api` had three backend capabilities (`audio`/`respond_with_voice` on `/chat`, `GET /copilot/{fir_id}`, `WS /alerts`) with no UI ever built against them — `apps/web` had zero mic capture, no Copilot view, no alert surface, despite all three being Core/Differentiator rows in the requirement matrix. Closed all three in `apps/web/components/`: push-to-talk mic capture + live waveform (`ChatPane.tsx`, native `MediaRecorder`/`AnalyserNode`, no new dependency) with a voice-reply toggle that plays back the SSE `audio` frame; an Investigation Copilot overlay (`Copilot.tsx`) opened from any `FIR_RECORD` citation in the evidence rail; a live alert-toast stack (`AlertToasts.tsx`) off the `/alerts` WebSocket. Also gave the ASR trace step the actual transcript (`voice_agent.py`) instead of a byte count — the reasoning trace is supposed to be readable, and "Transcribed 41823 bytes" isn't. Verified: `tsc --noEmit` and `next build` clean; all three endpoints exercised live (`/copilot/{fir_id}`, `POST /chat` SSE, `WS /alerts`) against the running stack with real data — see [`docs/implementation/03-kannada-and-voice.md`](./docs/implementation/03-kannada-and-voice.md). Also fixed a genuine test hang: `data/tests/test_nlp.py`'s translation test assumed torch/transformers were absent to get a deterministic `TranslationUnavailable`; once the Kannada/voice work installed them, the test instead attempted a real network model load and stalled indefinitely — made hermetic with `monkeypatch`. Full suite: 76/76 passing. **Not verified**: actual microphone capture/playback in a real browser — no browser-automation tool was available this pass; the code path is exercised end-to-end on the backend only (see the doc above for exactly what that does and doesn't cover).
+A conversational crime-intelligence platform for the Karnataka State Police: ask a question
+in English or Kannada, get an answer where every claim traces to a specific record.
 
-- **v5 (Zoho Catalyst migration)**: Competition rule — deployment on Catalyst is mandatory, and using a third-party service *where a Catalyst equivalent exists* can invalidate the submission. Infrastructure was replaced; features, algorithms and UI were not. Done: FastAPI → **AppSail custom OCI runtime** (root `Dockerfile`, no backend rewrite); Next.js → **Slate/Web Client Hosting** (`output: "export"` — legal because every component is already `"use client"`; UI byte-identical); self-signed JWT → **Catalyst Authentication** (`apps/api/api/auth/catalyst_auth.py`; `packages/policy` untouched — Catalyst says *who*, policy still says *what they may see*; the officer record stays authoritative for role/ps_code); headless-Chrome PDF → **SmartBrowz** (`_smartbrowz_pdf`, local renderer demoted to offline fallback); **PostGIS deleted** — `location_geom`/`address_geom` → `latitude`/`longitude` DECIMAL per the organizers' ER diagram (KDE/DBSCAN never used PostGIS functions, only its storage, so no method changed); **Neo4j + GDS deleted** — the graph is now a flat `graph_edge` table traversed with **NetworkX** (`data/data/graph.py`, `data/data/gds.py`), because no Catalyst service corresponds to a graph database. Every algorithm ported exactly: PageRank, Louvain, betweenness (pivot-sampled), HippoRAG personalized PageRank (`nx.pagerank(personalization=…)` is the same computation as GDS `sourceNodes`), ToG beam search, and the role-capped bounded traversal. Account/Transaction had lived *only* in Neo4j and now have real tables. **One capability was lost, not migrated**: the LLM NL→Cypher long-tail fallback in the old Cypher Agent — with no Cypher to generate, there is nothing to translate into, and the SQL Agent is template-only. Verified: 80/80 tests, full generator rebuild (24.5K nodes / 136K edges), and the live stack driven end-to-end (`/health`, `/auth/token`, `/chat` SSE producing real ToG reasoning paths, `/copilot`).
-  **Not migrated, deliberately** — no Catalyst equivalent exists, documented as no-matching-service rather than silently swapped: Kannada NER/translation/ASR/TTS (Catalyst Zia offers **no** speech-to-text, **no** text-to-speech and **no** translation service at all — its catalog is Face Analytics, OCR, Identity Scanner, Image Moderation, Object Recognition, Barcode, Text Analytics; Zoho's STT models are English+Hindi and not exposed as a Catalyst service, so a swap would have *deleted* working Kannada voice input); the pgvector HippoRAG index (QuickML's RAG is a managed upload-documents pipeline with no arbitrary-embedding store and no custom retrieval hook); the hand-built explainable models (Zia AutoML is a black-box trainer and contradicts Layer 10).
-  **Still open**: audit-log immutability. `RULE … DO INSTEAD NOTHING` has no Catalyst Data Store equivalent (no rules, no triggers), and app-layer append-only is enforced by the same code that could bypass it. Not weakened silently — see the migration report.
-- **v5.1 (organizer ruling applied; AppSail deployed)**: The organizers ruled that **where no listed Catalyst service exists for a capability, an external or self-hosted alternative is permitted; where a Catalyst service does exist, it must be used.** That closes three items that were open in v5 as *permanently settled*, not pending: Kannada voice/NLP stays on self-hosted faster-whisper/NLLB (Zia has no speech or translation service at all), the HippoRAG index stays on pgvector (QuickML's RAG is managed-only), and audit-log immutability stays on the Postgres `RULE` mechanism (Data Store has no rules or triggers). Each is now justified as *no matching service exists, per organizer clarification* — not as a preference. The ruling explicitly does **not** exempt the relational store: Data Store *is* Catalyst's matching service for relational storage, so that migration remains mandatory and is the largest piece of work left. Also this pass: the backend was actually deployed (AppSail custom OCI, image on Docker Hub, real project `Veritas`), and the Technology Reference table below was rewritten to name which Catalyst service backs which layer.
+- **Repo**: `github.com/baveshraam/Veritas`
+- **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
+- **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
+- **Tests**: `python -m pytest` — 185 green, no database or Docker required
+
+**Ground rule for this document**: choices are justified by "is this the best solution to the
+actual problem", never by "what was fast to build". Where something is simple, that is
+because the problem has no complexity to justify — not because the complex version was too
+much work.
 
 ---
 
-## Design Philosophy
+## 0. The two constraints that shaped everything
 
-- **Graph-native.** Crime data is relational at its core (people↔events↔locations↔money↔behavior). Property graph (Neo4j) is the primary model, not a relational afterthought. Validated by COPLINK/CrimeNet Explorer (NIJ/Univ. of Arizona) and Palantir Gotham.
-- **Agentic reasoning, not retrieval.** Decompose → plan multi-step investigation across graph/vector/geospatial/relational stores → synthesize → verify → answer with a citation chain. Mirrors the LangGraph citation-grounding pattern (structured output + deterministic verification loop).
-- **Evidence-grounded.** Every claim traces to an exact FIR record, graph query, or model run. No answer without evidence; no evidence without a source. Academic precedent: CrimeKGQA (2025, Neo4j+Cypher-gen RAG for crime investigation).
-- **Best available method, not least effort.** Where the literature has a better-validated technique than a naive approach, use it (HippoRAG over ad hoc embedding search, MinT over independent per-level forecasts, Fellegi-Sunter over fuzzy string matching). Complexity is justified by the problem, never rationed by team size.
-- **Responsible by design.** Predictive policing has a documented history of laundering historical bias into "objective" scores. Every prediction is decision-support, audited (Aequitas), never an automated trigger.
+### The competition rule
+Deployment on Catalyst is mandatory, and using a third-party service **where a Catalyst
+equivalent exists** can invalidate the submission. The organizers further clarified: *where
+no listed Catalyst service exists for a capability, an external or self-hosted alternative is
+permitted.*
+
+The rule targets **services**, not **libraries**. NetworkX, LangGraph, XGBoost, DoWhy,
+faster-whisper and NLLB all run *inside our own AppSail container*, on Catalyst compute. They
+are the product, not the platform. What had to go were the genuinely external *services*:
+PostgreSQL, PostGIS, Neo4j, pgvector, the Gemini API, and any runtime download from
+huggingface.co.
+
+### The ER has no person
+This is the single most important fact about the data, and most of the system is built around
+it.
+
+The organizers' schema has an `Accused` table. Each row belongs to **exactly one case**, and
+its `PersonID` column is a *per-case sort label* — "A1", "A2" — not an identity. Nothing in
+the schema says the "Ramesh Gowda" on case 412 and the "Ramesha Gouda" on case 908 are the
+same man. On the raw ER:
+
+- every offender is a first-timer, so *"does he have priors?"* has no answer;
+- nobody co-offends with anybody, so there is no criminal network to analyse;
+- a bank account cannot belong to a human, so the money-laundering layer is meaningless;
+- a "person" endpoint could only ever show one case.
+
+So identity has to be **inferred**, and that inference (Fellegi-Sunter, `packages/ml_models`)
+is the load-bearing centrepiece of the platform rather than a nice-to-have. It runs as a
+batch pass immediately after the records load, and *everything* downstream depends on it. It
+is the answer to "what did you build that a team who just wrote SQL against the ER could
+not?".
+
+Measured: **F1 0.989** (precision 0.997, recall 0.981) against the generator's answer key.
 
 ---
 
-## System Overview
+## 1. Architecture
 
 ```
-   KSP OFFICERS (web + mobile)
+   KSP OFFICERS (browser)
             │
-   COMMAND CONSOLE — glassmorphic spatial UI (chat / map+graph+Sankey / case rail)
+   COMMAND CONSOLE — glassmorphic spatial UI (chat / map+graph+Sankey / evidence rail)
+   Catalyst Web Client Hosting (Slate) · Next.js `output: "export"`
             │
-   FASTAPI (async, JWT + in-process policy)
+   FASTAPI — Catalyst AppSail, custom OCI runtime
+   auth (Catalyst Authentication) · policy · SSE + WebSocket · audit hash chain
             │
    LANGGRAPH MULTI-AGENT ENGINE
-   Orchestrator → HippoRAG retrieval → [ToG deep-dive if confidence low] →
+   Orchestrator → HippoRAG retrieval → [Think-on-Graph deep-dive if confidence low] →
    specialist agents → CRAG-style evidence evaluator → synthesis
             │
-   ┌────────┼──────────┬─────────────┬───────────┬──────────┐
- NEO4J    QDRANT/    POSTGRES+    ML MODELS   AUDIT LOG (append-only,
- (graph + PGVECTOR   POSTGIS      (KDE,DBSCAN, SHA-256, JSONB agent trace)
- GNN-AML) (HippoRAG  (FIR/person/ Prophet+MinT,
-          index)     socioecon)   XGB+SHAP,GNN)
+   ┌────────┴────────┬──────────────┬─────────────┬──────────────┐
+ DATA STORE      STRATUS         CACHE        QUICKML          CRON
+ (36 ZCQL        (graph blob +   (session     (GLM-4.7-Flash)  (refresh 6h,
+  tables)         vector index)   focus)                        audit-verify 12h)
             │
-   SYNTHETIC DATA GENERATOR — Faker + real NCRB/Census/NSSO/KA-GIS ground truth
+   IN-PROCESS: NetworkX graph · numpy vector search · XGBoost / LightGBM / Prophet / DoWhy
+               faster-whisper + NLLB (Kannada) · Fellegi-Sunter
+            │
+   SYNTHETIC DATA GENERATOR — Faker + real NCRB / Census 2011 / KA-GIS ground truth
 ```
 
-No Kafka/Flink/Iceberg/K8s/Keycloak/OPA/Kong/MLflow/Airflow in the build — there is no real-time source or multi-tenant deployment to justify them here. Described as the production path in **Appendix A**.
+**The order of the pipeline is the architecture:**
 
----
-
-## Requirement Traceability Matrix
-
-| Brief requirement | Section | Status |
-|---|---|---|
-| NL chatbot, EN + Kannada | §6 NLP | Core |
-| Retrieve FIR/accused/victim/location/status/history | §2 Graph, §3 agents | Core |
-| Context-aware conversation | §3.2 Session Entity Memory | Fixed in v2 |
-| Save conversation as PDF | §9 UI | Core |
-| Multi-language | §6 NLP | Core |
-| Voice interaction | §3.4 Voice Agent | Core |
-| Crime pattern discovery | §4 Predictive Models | Core |
-| Criminal network analysis | §2 Graph + GDS | Core |
-| Organized-crime/repeat-offender detection | §2.2 Louvain+PageRank | Core |
-| Socio-demographic insights | §4 Risk model + district data | Core |
-| Causal social risk correlation | §4 DoWhy | Differentiator |
-| Behavioral/offender profiling | §4 Risk+recidivism | Core |
-| Financial crime & transaction link analysis | §2.4 Financial graph + GNN-AML | New in v2, upgraded v3 |
-| Investigator decision support | §3.3 Investigation Copilot | Fleshed out v2 |
-| Crime forecasting & early warning | §4 Prophet+MinT, Isolation Forest | Core, upgraded v3 |
-| Explainable AI, audit trail | §5 Evidence Chain, §9 Reasoning Trace | Core |
-| Secure RBAC | §8 Security | Core |
-
----
-
-## Layer 1: Data Foundation
-
-```sql
-CREATE TABLE officer (
-    officer_id UUID PRIMARY KEY, badge_no VARCHAR(20) UNIQUE, name VARCHAR(200),
-    ps_code VARCHAR(10), district_code VARCHAR(5), role VARCHAR(20)
-);
-
-CREATE TABLE fir (
-    fir_id UUID PRIMARY KEY, ps_code VARCHAR(10), district_code VARCHAR(5),
-    fir_number VARCHAR(20), date_filed TIMESTAMPTZ, ipc_sections TEXT[],
-    crime_type VARCHAR(100), occurrence_from TIMESTAMPTZ, occurrence_to TIMESTAMPTZ,
-    location_geom GEOMETRY(Point,4326), district VARCHAR(50), taluk VARCHAR(50),
-    complainant_id UUID REFERENCES person(person_id), io_id UUID REFERENCES officer(officer_id),
-    case_status VARCHAR(30), modus_operandi TEXT, narrative TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE person (
-    person_id UUID PRIMARY KEY, scrb_id VARCHAR(20) UNIQUE,
-    name_en VARCHAR(200), name_kn VARCHAR(200), dob DATE, gender VARCHAR(10),
-    address_geom GEOMETRY(Point,4326), aadhaar_hash VARCHAR(64),
-    criminal_history BOOLEAN DEFAULT FALSE, risk_score FLOAT, gang_affiliation VARCHAR(100),
-    canonical_entity_id UUID  -- NEW: Fellegi-Sunter linkage target, see §6.2
-);
-
-CREATE TABLE criminal_record (
-    record_id UUID PRIMARY KEY, person_id UUID REFERENCES person(person_id),
-    fir_id UUID REFERENCES fir(fir_id), role VARCHAR(50),
-    arrest_date DATE, bail_status VARCHAR(30), conviction BOOLEAN
-);
-
--- Real data, not simulated: Census/data.gov.in/NSSO
-CREATE TABLE district_socioeconomic (
-    district_code VARCHAR(5) PRIMARY KEY, year INT, literacy_rate FLOAT,
-    unemployment FLOAT, poverty_index FLOAT, population BIGINT,
-    urban_ratio FLOAT, police_per_lakh FLOAT
-);
+```
+schema → real Census ground truth → generate → load records
+       → RESOLVE IDENTITIES → financial layer → graph edges → graph algorithms → embeddings
 ```
 
-**Grounding**: crime records are synthetic (no real FIR data available to us) but IPC-section distributions are weighted by real published NCRB Karnataka statistics, joined to real district socioeconomic data and real KA-GIS district/taluk boundaries. Pitch: "synthetic crime layer on real socio-demographic ground truth." 10-50K FIR records is enough for every demo scenario.
-
-**Pipeline**: one Python job (re)builds Postgres, syncs Neo4j, re-embeds narratives. Functionally identical to a streaming pipeline here because there is no real-time source — not a shortcut, a correct read of the problem.
-
-**Session/conversation/audit schema** (`session`, `conversation_turn`, `audit_log` — full DDL in `data/README.md`): `apps/api` is stateless between requests, so multi-turn conversation, PDF export, and the tamper-evident trail each need their own table — `audit_log` stores only a SHA-256 hash (tamper-evidence), not plaintext, so it cannot double as the conversation store.
+Each step genuinely depends on the last. Identity cannot move.
 
 ---
 
-## Layer 2: Knowledge Graph
-
-**Nodes**: `Person, CrimeEvent, Location, Gang, MethodOfOperation, Vehicle, Account, Transaction`
-
-```cypher
-(:Person {person_id, scrb_id, name_en, name_kn, dob, gender, risk_score,
-          gang_affiliation, is_habitual_offender, canonical_entity_id})
-(:CrimeEvent {fir_id, crime_type, ipc_sections, date_occurred, location, district,
-              modus_operandi, case_status})
-(:Account {account_id, bank, account_type, opened_date})
-(:Transaction {txn_id, amount, date, channel, flagged_suspicious: Boolean})
-```
-
-**Edges**:
-
-```cypher
-(:Person)-[:ACCUSED_IN {role, arrest_date}]->(:CrimeEvent)
-(:Person)-[:VICTIM_IN]->(:CrimeEvent)
-(:Person)-[:CO_ACCUSED_WITH {fir_ids, strength}]->(:Person)
-(:Person)-[:MEMBER_OF {since, role}]->(:Gang)
-(:CrimeEvent)-[:OCCURRED_AT]->(:Location)
-(:Person)-[:USES_METHOD]->(:MethodOfOperation)
-(:Person)-[:OWNS_ACCOUNT]->(:Account)
-(:Account)-[:TRANSFERRED_TO {amount, date}]->(:Account)
-(:Transaction)-[:LINKED_TO]->(:CrimeEvent)
-(:Account)-[:INVOLVED_IN]->(:Transaction)
-(:Person)-[:SAME_AS {confidence}]->(:Person)   -- NEW: Fellegi-Sunter linkage edge
-```
-
-### 2.2 Graph Algorithms (Neo4j GDS, on-demand)
-PageRank (influence), Betweenness (brokers between gangs), Louvain (communities/gangs), Node Similarity (shared MO).
-
-### 2.3 GraphRAG Retrieval — HippoRAG + Think-on-Graph
-
-Two published, complementary methods replace ad hoc "embed and cosine-search":
-
-- **HippoRAG** (Gutiérrez et al., NeurIPS 2024): extract query entities → seed **Personalized PageRank** over the KG → single-step multi-hop retrieval. 10-20x cheaper than iterative retrieval, and it's literally what our GDS PageRank layer is for — this names and formalizes what was previously an ad hoc heuristic.
-- **Think-on-Graph / ToG** (Sun et al., ICLR 2024): for deep multi-hop investigative questions ("how are these three gangs financially connected over the last year"), the LLM agent iteratively beam-searches entity/relation paths on the graph instead of trusting one generated Cypher query. Used when HippoRAG's confidence is low or the question is explicitly relational/multi-hop; produces a traceable reasoning path, not just an answer.
-- Louvain community summaries (CrimeKGQA pattern) remain the global-context layer underneath both.
-
-### 2.4 Financial Crime Graph
-
-- Bounded-depth traversal for money trails: `(:Account)-[:TRANSFERRED_TO*1..4]->(:Account)`
-- **Rule-based structuring detector** (many sub-threshold transactions) — kept as the explainable first line judges and courts can audit line-by-line.
-- **GNN suspicious-subgraph classifier** (heterogeneous/temporal graph neural network, per current AML literature — e.g. group-aware deep graph learning, temporal motif detection over transaction graphs) trained on the synthetic graph with injected structuring/layering patterns as ground truth. Catches coordinated multi-account laundering patterns the rule-based detector structurally cannot see. Explained per-flag via attention-weight/subgraph highlighting, not a bare score.
-- Visualized as a Sankey money-flow diagram, distinct from the criminal-network view.
-
----
-
-## Layer 3: Multi-Agent Orchestration (LangGraph)
-
-```python
-class InvestigationState(BaseModel):
-    session_id: str; officer_id: str; officer_role: str
-    original_query: str; language: Literal["en", "kn"]
-    active_entities: SessionFocus
-    decomposed_subqueries: List[str]
-    evidence_items: List[EvidenceItem]
-    graph_query_results: List[dict]; sql_query_results: List[dict]
-    vector_search_results: List[dict]; prediction_results: Optional[dict]
-    final_answer: Optional[str]; citations: List[Citation]
-    confidence_score: float; requires_escalation: bool
-    agent_trace: List[AgentTraceEntry]   # rendered in UI, not just logged
-```
-(Sketch only — the canonical, complete version, including `visualization`/voice fields and exactly what's session-persistent vs per-turn, lives in `packages/rag_agent/README.md`. Edit that one; this block is illustrative.)
-
-### 3.2 Session Entity Memory
-```python
-class SessionFocus(BaseModel):
-    active_person: Optional[str]; active_fir: Optional[str]
-    active_location: Optional[str]; active_date_range: Optional[tuple]
-```
-Orchestrator resolves pronouns/references ("does **he** have priors") against this focus stack before routing, updating it every turn. Strong, honest live-demo moment: ask a deliberately ambiguous follow-up on stage.
-
-### 3.3 Investigation Copilot
-Given an open FIR, auto-generate: (1) chronological timeline, (2) top-5 MO-similar past cases with outcomes, (3) ranked investigative leads (e.g. "matches Community 47; 3 associates in adjoining districts"), (4) draft case-summary paragraph for the case diary. This is the "I'd use this Monday morning" feature.
-
-### 3.4 Agent Roster
-Orchestrator · HippoRAG/ToG Retrieval Agent · SQL Agent (text-to-SQL) · Vector Search Agent (hybrid dense+BM25, RRF) · Geospatial Agent (PostGIS) · Prediction Agent (calls model endpoints, never predicts inline) · Evidence Synthesis Agent · Translation Agent (IndicTrans2) · Voice Agent (ASR/TTS).
-
----
-
-## Layer 4: Predictive Analytics
-
-- **KDE** (Gaussian, Scott's rule) — continuous hotspot density
-- **DBSCAN** (`eps=500m, min_samples=10`) — discrete hotspot polygons; **ST-DBSCAN** for spatio-temporal series linking
-- **Prophet + MinT reconciliation**: forecast independently at PS / taluk / district / state level, then reconcile with **Minimum Trace (MinT)** (Wickramasuriya, Athanasopoulos & Hyndman, 2019, *JASA*) so a district's forecast always equals the coherent sum of its taluks — statistically optimal, not just "close enough." Formal upgrade over unreconciled independent forecasts.
-- **XGBoost + SHAP** risk scoring; **LightGBM** recidivism (180-day re-offense, calibrated probabilities); **Isolation Forest** district-level spike anomaly alerts
-- **DoWhy** causal layer for socioeconomic claims — causal effect estimate with confounding adjustment, not bare correlation
-
-Return-type shapes for every model above (`RiskResult`, `ForecastResult`, `HotspotPolygon`, etc.) and exactly who calls each: `packages/ml_models/README.md`.
-
----
-
-## Layer 5: Retrieval & Evidence Chain
-
-```python
-class EvidenceItem(BaseModel):
-    evidence_id: str
-    source_type: Literal["FIR_RECORD","CRIMINAL_RECORD","GRAPH_RELATIONSHIP",
-                          "COMMUNITY_SUMMARY","ML_PREDICTION","GEOSPATIAL_ANALYSIS"]
-    source_id: str; source_query: Optional[str]
-    content: str; confidence: float; timestamp: datetime
-```
-
-Citations render as `[1] FIR/BLR/2024/KGF/001234 — Filed 12 Mar 2024, Kolar PS, IPC 302` (1-based index). Full `EvidenceItem`/`Citation`/`VisualizationPayload` shapes and the exact SSE wire contract: `packages/rag_agent/README.md` and `apps/api/README.md`.
-
-**Verification loop — CRAG-style evaluator**: a lightweight relevance/confidence evaluator scores each retrieval batch (per Corrective-RAG, Yan et al. 2024) and triggers one of: accept → widen query/retry → explicitly state "not found in available records." Never fabricates on empty evidence. This is the strongest "trustworthy for law enforcement" beat in a live demo — it's a named, published pattern, not an improvised safeguard.
-
----
-
-## Layer 6: NLP, Language & Entity Resolution
-
-- **NER**: AI4Bharat IndicNER — native Kannada entity extraction (PERSON, LOCATION, GANG, VEHICLE, IPC_SECTION)
-- **Transliteration**: AI4Bharat IndicXlit — merges "Ramesh"/"ರಮೇಶ್" as candidate variants
-- **Translation**: AI4Bharat IndicTrans2, self-hosted (FIR data never leaves the network)
-- **ASR**: Vakyansh (Kannada) / Whisper (English fallback), self-hosted
-- **TTS**: AI4Bharat IndicTTS (Kannada) / Kokoro-TTS (English), self-hosted
-
-### 6.2 Entity Resolution — Fellegi-Sunter probabilistic linkage
-Real crime databases accumulate duplicate person records under name/spelling/transliteration variants — a genuine data-quality problem no other team will address. Formalize it: the **Fellegi-Sunter model** (1969; foundational, unsupervised, still the basis of modern record linkage) scores candidate pairs by weighted field agreement (name similarity post-IndicXlit, DOB, address proximity, phone) into link / possible-link / non-link decisions with explicit error-rate thresholds. Matches feed the `SAME_AS {confidence}` graph edge and `canonical_entity_id` column — so "has this person been arrested before under a different name spelling" gets a real, statistically grounded answer instead of silent duplication.
-
----
-
-## Layer 7: API Layer
-
-Single **FastAPI** service — async, Pydantic v2, SSE/WebSocket for streaming chat and live alerts. No separate gateway or graph microservice: one well-bounded service is functionally indistinguishable from a decomposed one at this scale and has no split-brain failure modes. Service decomposition path described in Appendix A.
-
----
-
-## Layer 8: Security
-
-- **Auth**: JWT with `role` claim (`IO, SHO, DSP, SP, IG, SCRB_Analyst`)
-- **Policy**: versioned, unit-tested Python policy module (`packages/policy`, functionally what OPA/Rego expresses) — e.g. "IO sees only their PS's FIRs," "victim identity masked below DSP rank," "graph traversal depth capped by role." Enforced in two places, not one: `apps/api` middleware for structured responses (post-hoc masking is fine there); `packages/rag_agent`'s Cypher/SQL Agents at query-construction time for depth-capping and anything feeding a free-text answer (post-hoc is not fine there — you can't un-traverse a graph or reliably redact generated prose)
-- **Audit**: append-only Postgres table, SHA-256 response hash, full agent trace as JSONB, `RULE ... DO INSTEAD NOTHING` on UPDATE/DELETE for immutability
-
----
-
-## Layer 9: UI/UX — Command Console (glassmorphic spatial design)
-
-**Direction**: futuristic minimalist, glassmorphism with subtle acrylic blur layers, soft elevation shadows, floating components, smooth natural-easing microinteractions. Clean spatial layout, generous spacing, light depth layering, restrained gradient-mesh background. Modern crisp legible typography. Soft neon/pastel accents used sparingly for emphasis only. Calm, premium, spatial — next-gen Apple-style with a subtle sci-fi undertone, rendered in **dark glass** (frosted dark-acrylic panels over a deep gradient-mesh background) so it stays legible for dense command-console work while keeping the calm/premium feel — light-glass-on-white would wash out map/graph density.
-
-**Layout — three floating panes, not hard-edged panels:**
-- **Left — Chat**: streaming SSE conversation, voice push-to-talk with a live waveform, EN/KN toggle. Frosted glass card floating over the background, soft shadow, rounded generously.
-- **Center — Context view**: swaps automatically by query type — map (Deck.gl/MapLibre, KDE heatmap + FIR points) for geospatial, force-directed network graph (Sigma.js/Cytoscape) for relationships, Sankey for financial trails, ECharts trend lines with confidence bands for forecasts. Each transition uses a soft cross-fade/morph, not a hard cut.
-- **Right — Case/evidence rail**: current FIR/person always visible; every citation chip renders as its 1-based `[index]` (e.g. `[1]`, `[2]`) and opens the matching evidence item here as a floating glass drawer.
-
-**Reasoning Trace panel** (expandable, off by default): renders the LangGraph agent trace in plain language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) → Evidence Evaluator: 3 corroborating records → Synthesis."* Makes explainability visible, not just logged. Likely the strongest 30-second differentiation moment.
-
-**Color language**: one consistent severity/threat palette (soft neon amber/rose accents on dark glass, used sparingly) across map, graph nodes, citation chips, and Sankey flows — reads as one coherent instrument, not stitched-together widgets.
-
-**Investigation Copilot workspace**: separate view — case file panel, drag-and-drop evidence board, auto-generated timeline, "these cases may be linked" suggestions, one-click charge-sheet-support report generation. Same glass-panel language, denser information layout for working investigators.
-
-**PDF export**: headless-Chrome render of conversation + charts, KSP letterhead.
-
----
-
-## Layer 10: Responsible AI & Fairness
-
-Predictive policing has a documented history of laundering historical policing bias (over-policing → more recorded crime → "predicted" crime in the same area) into an apparently-objective score. A government panel evaluating a system meant to influence real policing will expect this addressed.
-
-- **No protected/proxy attributes** (caste, religion, or direct proxies) as model features
-- **Aequitas bias audit** (Saleiro et al. 2018, Univ. of Chicago Center for Data Science & Public Policy — the standard toolkit for auditing criminal-justice risk tools, applied publicly to COMPAS): run disparate-impact, FPR/FNR-parity, and other Aequitas metrics across demographic/geographic subgroups on the risk and recidivism models, and show the audit report in the pitch. Naming a specific, real, criminal-justice-purpose-built audit methodology is far more credible than a generic "we care about fairness" slide.
-- **Human-in-the-loop by design** — every prediction is decision-support only, never an automated trigger
-- **Explicit uncertainty communication** — confidence intervals, SHAP explanations, UI distinguishes "the model suggests" from "the record shows"
-
----
-
-## Technology Reference
-
-Deployment is on **Zoho Catalyst**, and where Catalyst has a matching service, that service is used — the competition rule is that using a third-party alternative *where a Catalyst equivalent exists* can invalidate the submission.
-
-**Catalyst services in use:**
+## 2. Catalyst services in use
 
 | Component | Catalyst service | Replaced | Notes |
 |---|---|---|---|
-| API runtime | **AppSail** (custom OCI runtime) | self-hosted uvicorn | Root `Dockerfile`; no backend rewrite — FastAPI runs as-is |
-| Console hosting | **Web Client Hosting** (Slate) | Next.js dev/Vercel | `output: "export"`; every component was already `"use client"` |
-| Identity | **Catalyst Authentication** | self-signed JWT | Catalyst says *who*; `packages/policy` still says *what they may see*. The `officer` record stays authoritative for role/ps_code |
-| PDF export | **SmartBrowz** | headless-Chrome subprocess | Local renderer demoted to offline fallback |
-| Relational store | **Data Store** | PostgreSQL | *In progress* — see changelog |
+| API runtime | **AppSail** (custom OCI) | self-hosted uvicorn | Root `Dockerfile`; FastAPI runs as-is |
+| Console hosting | **Web Client Hosting** (Slate) | Next.js dev server | `output: "export"`; every component was already `"use client"` |
+| Identity | **Catalyst Authentication** | self-signed JWT | Catalyst says *who*; the `Employee` record still says *what they may see* |
+| Relational store | **Data Store** (ZCQL) | PostgreSQL + PostGIS | 36 tables — §3 |
+| Object storage | **Stratus** | filesystem | Graph pickle + vector index |
+| Cache | **Cache** | none | Session focus, read on every turn |
+| LLM | **QuickML LLM Serving** | Google Gemini | GLM-4.7-Flash. No API key in the image |
+| Scheduling | **Cron** | none | `veritas_refresh` (6h), `veritas_audit_verify` (12h) |
+| PDF export | **SmartBrowz** | headless Chrome | Local renderer demoted to offline fallback |
 
-**Application logic — not a Catalyst service, unchanged by the migration:** LangGraph, HippoRAG/ToG, Prophet+MinT, XGBoost+SHAP, LightGBM, Isolation Forest, DoWhy, Fellegi-Sunter, the AML GNN, Aequitas, Deck.gl/MapLibre, Sigma.js/Cytoscape, ECharts, Faker/Mimesis. Catalyst has no service that corresponds to any of these; they are the product, not the platform.
-
-**The three documented exceptions** — capabilities kept on external/self-hosted implementations. Each is permitted under the organizers' clarification that *where no listed Catalyst service exists for a capability, an external or self-hosted alternative is allowed*; where one does exist, it must be used. These are not preferences, they are absences:
+### The four documented exceptions
+Each is permitted under the organizers' clarification. These are **absences, not
+preferences** — for each, no Catalyst service exists.
 
 | Capability | Kept on | Why no Catalyst service exists |
 |---|---|---|
-| Kannada ASR / TTS / translation | faster-whisper, NLLB-200, IndicTTS (self-hosted) | Zia has **no** speech-to-text, **no** text-to-speech and **no** translation service. Its catalog is Face Analytics, OCR, Identity Scanner, Image Moderation, Object Recognition, Barcode, Text Analytics. Swapping would have *deleted* working Kannada voice input |
-| HippoRAG vector index | pgvector | QuickML's RAG is a managed upload-documents pipeline — no arbitrary-embedding store, no custom retrieval hook. Personalized-PageRank seeding cannot run inside it |
-| Knowledge graph | NetworkX over a `graph_edge` table | No Catalyst service is a graph database. Every GDS algorithm was ported exactly (PageRank, Louvain, betweenness, personalized PageRank, bounded traversal) |
-| Audit-log immutability | Postgres `RULE … DO INSTEAD NOTHING` | Data Store has no rules and no triggers. App-layer append-only would be enforced by the same code that could bypass it — strictly weaker, so it was not silently swapped |
+| Kannada ASR / TTS / translation | faster-whisper, NLLB-200 (in-container) | Zia has **no** speech-to-text, **no** text-to-speech and **no** translation service. Its catalog is Face Analytics, OCR, Identity Scanner, Image Moderation, Object Recognition, Barcode, Text Analytics. Swapping would have *deleted* working Kannada voice input |
+| Vector index | numpy over a Stratus blob | QuickML's RAG is a managed upload-documents pipeline — no arbitrary-embedding store, no custom retrieval hook. HippoRAG's Personalized-PageRank seeding cannot run inside it |
+| Knowledge graph | NetworkX over `vx_graph_edge` | No Catalyst service is a graph database. Every GDS algorithm was ported exactly |
+| Audit-log immutability | SHA-256 hash chain | Data Store has no `RULE` and no triggers. App-layer append-only, enforced by the same code that could bypass it, is strictly weaker — so it was rebuilt in the data instead (§7) |
 
-**Not built** (described only, Appendix A): Kafka, Flink, Iceberg/MinIO, Kubernetes/Helm/ArgoCD, Keycloak, OPA, Kong, MLflow, Airflow, separate TimescaleDB, Trino/DuckDB.
-
----
-
-## Appendix A: Production Scaling Path (describe, don't build)
-
-- Real-time CCTNS ingestion → Kafka topics per event type → Flink for enrichment/entity-resolution/graph-edge-extraction
-- Iceberg/MinIO lakehouse once volume and audit/time-travel needs exceed Postgres
-- Keycloak for HR-federated identity, OPA/Rego once the policy set outgrows a Python module, Kong once there are multiple client apps
-- Kubernetes + GitOps once there's a real multi-environment deployment lifecycle
-- MLflow registry once model/version count outgrows ad hoc FastAPI endpoints
-- Spatio-temporal GNN forecasting (ST-GNN / mixture-of-graph-experts literature) as a research-grade upgrade path beyond Prophet+MinT, once historical volume justifies the training cost
+**Not built** (described only — Appendix A): Kafka, Flink, Iceberg, Kubernetes, Keycloak,
+OPA, Kong, MLflow, Airflow.
 
 ---
 
-## Repository Structure
+## 3. Data foundation — `data/`
 
-Repo: `github.com/baveshraam/Veritas`. Runs locally: docker-compose for the databases, uvicorn for `apps/api`, `next dev` for `apps/web` — there is no cloud deploy target.
+### The schema — `data/data/schema.py`
+One Python file defines all 36 tables and generates both backends.
 
-Monorepo, 5 folders, one per concurrent work track. Each folder has its own dependency manifest and its own `README.md` with the full spec for that folder — cross-folder coordination happens through documented contracts (schemas, typed function signatures), never through shared files, so parallel pushes don't collide.
+**27 tables are the organizers' ER, verbatim** — their names, their columns, their spelling
+(`caste_master_id`, `csdate`, `CrimeHeadName`, `inv_arrestsurrenderaccused`). Do not
+"improve" them: conformance is a hard requirement, and `data/tests/test_schema.py` fails
+loudly if anyone tries.
 
-| Folder | Track | Root doc layers owned |
-|---|---|---|
-| `apps/web/` | Frontend — Command Console UI | §9 |
-| `apps/api/` | Backend platform — FastAPI, auth, policy, audit, session transport | §7, §8 |
-| `packages/rag_agent/` | RAG / graph reasoning — LangGraph, HippoRAG, ToG, evidence chain, Investigation Copilot | §2 (reasoning), §3, §5 |
-| `packages/ml_models/` | ML — predictive analytics, financial-crime GNN, entity resolution, fairness audit | §4, §2.4 (models), §6.2, §10 |
-| `data/` | Data engineering — schemas, synthetic data pipeline, vector index, Kannada NLP/ASR/TTS | §1, §2 (schema), §6 |
+**9 tables are ours**, all prefixed `vx_` so nobody can ever mistake an addition for the
+organizers' schema:
 
-`apps/api` is still the one deployable service (Layer 7) — `packages/rag_agent` and `packages/ml_models` are Python packages it imports, not separately deployed microservices. The folder split is for parallel *development*, not a change to the runtime architecture.
+| Table | What it is |
+|---|---|
+| `vx_person` | The people reconstructed from `Accused` rows. The ER has none |
+| `vx_accused_identity` | `AccusedMasterID` → `PersonUID`, with match confidence |
+| `vx_officer_identity` | Email → `EmployeeID`. Catalyst Auth identifies by email; the ER's `Employee` has no email column, and we do not add one to it |
+| `vx_account`, `vx_txn` | The financial-crime layer |
+| `vx_graph_edge` | The traversal projection of the records |
+| `vx_session`, `vx_conversation_turn` | Multi-turn memory and PDF export |
+| `vx_audit_log` | The tamper-evident trail (§7) |
+| `vx_district_socioeconomic` | Real Census 2011 ground truth |
 
-**One deliberate exception**: `packages/policy` is a 6th, small shared package (RBAC rule definitions) imported by both `apps/api` and `packages/rag_agent` — not a 6th track, and not owned by one person. RBAC is cross-cutting by nature: duplicating the rules risks drift, and it can't be enforced entirely post-hoc (see Layer 8), so it can't be cleanly isolated inside a single folder the way everything else is. Whoever touches auth/RBAC on either side edits it.
+### Provisioning — `data/data/provision.py`
+Data Store has no `CREATE TABLE` in any documented route: the console is the only way in, and
+IaC import *forks a new project*, which would have orphaned the AppSail and QuickML
+deployments already living in this one. But the Admin API the console itself calls is
+reachable:
+
+```
+POST /baas/v1/project/{id}/table               {"table_name": "X"}   -> table_id
+POST /baas/v1/project/{id}/table/{tid}/column  [ {column spec}, … ]
+```
+
+So the 36 tables are created from `schema.py` in one idempotent command, with no clicking:
+
+```bash
+CATALYST_ACCESS_TOKEN=$(node scripts/catalyst-token.js) python -m data.provision
+```
+
+`scripts/catalyst-token.js` mints a token from the `catalyst login` the CLI already stores,
+so provisioning needs no OAuth client of its own.
+
+### The client — `data/data/ds.py`
+`query()` / `insert()` / `update()` / `execute()` are the only ways into the database. Two
+backends, one query language:
+
+- **catalyst** — the real Data Store, via the SDK. Inside AppSail the SDK authenticates as
+  the app itself: no keys, no secrets, nothing to leak.
+- **sqlite** — the *same ZCQL strings* against a local file. Used by the tests, the
+  generator, and offline development.
+
+**The second backend is not a mock.** ZCQL is a subset of SQL, so SQLite executes exactly the
+query strings the deployed service sends to Data Store. A query that passes the test suite is
+a query Data Store will accept. This is why the RBAC rules — the part a government panel will
+actually poke at — now run on every commit instead of being skipped for want of a database.
+
+Three Data Store facts every caller is protected from:
+
+- **A SELECT returns at most 300 rows.** `query()` pages transparently.
+- **There are no bind parameters.** A query is a string, so `_lit()` is the single injection
+  boundary in the system — and it is tested as one.
+- **No `UPSERT`, no `date_trunc`, no CTE, no correlated subquery, at most 4 JOINs.**
+  Aggregation that cannot be expressed server-side happens in Python
+  (`data/data/queries.py`). At tens of thousands of rows, that is the same answer.
+
+### The generator — `data/data/generator/`
+Crime records are synthetic (no real FIR data exists for us) but they sit on **real ground
+truth**: IPC-section distributions weighted by published NCRB Karnataka statistics, real
+Census 2011 district socioeconomics, real KA-GIS boundaries.
+
+Four properties are load-bearing. Each was a real bug, and in each case a model found it by
+correctly learning that there was no signal to find:
+
+1. **Incidents cluster around activity centres**, not uniformly within a district. Uniform
+   placement leaves KDE/DBSCAN no hotspot to find, and the model honestly reports none.
+2. **Accused are drawn by preferential attachment on priors, in chronological order.**
+   Uniform sampling means a prior record predicts nothing, and the recidivism model correctly
+   learns there is no signal.
+3. **Offenders form crews.** Drawing each co-accused independently makes co-offending a
+   *random graph*, and a random graph has no community structure — Louvain duly put 254 of
+   255 people into one community. Real offenders reoffend with the people they already
+   offended with, so each additional accused is weighted towards the lead's known associates.
+   This is precisely what Louvain exists to recover, and it now finds 12 communities of
+   realistic size.
+4. **Names drift.** 35% of accused rows are recorded under a romanisation variant. Not
+   decoration — it is the problem entity resolution exists to solve.
+
+```bash
+python -m data.generator.run --cases 10000
+```
 
 ---
 
+## 4. Knowledge graph — `data/data/graph.py`, `data/data/gds.py`
+
+Neo4j is gone; no Catalyst service is a graph database. The graph is `vx_graph_edge`, a flat
+edge table, materialised into NetworkX on demand.
+
+Node ids carry their own type: `person:412`, `case:1043`, `acct:77`, `txn:9001`, `loc:Kolar`
+— one varchar column instead of an id plus a label column.
+
+**Person nodes are resolved `PersonUID`s, not `Accused` rows.** That is what makes a
+co-offending graph exist at all.
+
+| Edge | Direction |
+|---|---|
+| `ACCUSED_IN` (person → case) | symmetric |
+| `CO_ACCUSED_WITH` (person ↔ person, weight = shared cases) | symmetric |
+| `OCCURRED_AT` (case → location) | symmetric |
+| `OWNS_ACCOUNT` (person → account) | symmetric |
+| `INVOLVED_IN`, `LINKED_TO` | symmetric |
+| `TRANSFERRED_TO` (account → account) | **directed** |
+
+`TRANSFERRED_TO` is deliberately *not* symmetric. Money moves one way, and reversing it would
+invent a payment that never happened.
+
+### Algorithms — every GDS procedure ported exactly
+| Neo4j GDS | NetworkX |
+|---|---|
+| `gds.pageRank.write` | `nx.pagerank` |
+| `gds.louvain.write` | `nx.community.louvain_communities` |
+| `gds.betweenness.write` | `nx.betweenness_centrality` (pivot-sampled — Brandes & Pich) |
+| `gds.pageRank(sourceNodes=…)` | `nx.pagerank(personalization=…)` ← this *is* HippoRAG |
+
+**They run on the co-offending projection, not the whole graph.** Over the whole graph every
+case joins to its district, so `loc:Bengaluru Urban` is a hub that transitively connects every
+offender in the state — and Louvain correctly puts them all in one community. That is a true
+statement about the graph and a useless one about crime. GDS called this a graph projection;
+same thing, same reason.
+
+### There are no gangs
+The ER records no gang, so we do not invent one. Organised-crime grouping is *derived*, by
+Louvain over co-offending, and labelled honestly as what it is — `"Community 47"`, not
+`"the Chaddi Gang"`. That is also the stronger claim: the grouping is evidence *from* the
+record layer, not an input to it. (The NER has no `GANG` label, for the same reason.)
+
+### Honest ceiling
+`load_graph()` pulls the whole graph into memory — ~24k nodes / 136k edges, tens of MB, well
+under a second. That is the right trade: Neo4j's real advantage is traversal at a scale this
+dataset does not have. On Catalyst the generator pickles the built graph into **Stratus**, so
+a cold container reads one object instead of paginating 136k edges through ZCQL's 300-row
+cap. `vx_graph_edge` stays the record of truth; Stratus is a cache, and a miss costs latency,
+never correctness.
+
+---
+
+## 5. Reasoning engine — `packages/rag_agent/`
+
+LangGraph. Decompose → plan → retrieve across graph / vector / relational → synthesise →
+verify → answer with a citation chain.
+
+### Retrieval — two published methods, not ad-hoc embedding search
+- **HippoRAG** (Gutiérrez et al., NeurIPS 2024): extract the query's entities, seed
+  **Personalized PageRank** from them, read off the highest-scoring nodes. One graph pass
+  gives multi-hop retrieval — no iterative LLM-in-the-loop, which is where the 10–20× cost
+  saving over agentic retrieval comes from.
+- **Think-on-Graph** (Sun et al., ICLR 2024): for deep multi-hop questions, beam-search
+  entity/relation paths over the graph. Produces a *traceable reasoning path*, not just an
+  answer. Used when HippoRAG's confidence is low.
+
+### Verification — CRAG-style evaluator
+A relevance/confidence evaluator scores each retrieval batch (Corrective-RAG, Yan et al.
+2024) and triggers one of: **accept** → **widen and retry** → **explicitly state "not found in
+the available records"**. It never fabricates on empty evidence. This is the strongest
+trustworthy-for-law-enforcement property in the system, and it is a named, published pattern
+rather than an improvised safeguard.
+
+### Agents
+Orchestrator · HippoRAG/ToG retrieval · SQL Agent (templates) · Graph Agent · Vector Agent
+(hybrid dense + lexical) · Prediction Agent · Evidence Synthesis · Translation · Voice.
+
+**There is no LLM text-to-SQL or text-to-Cypher fallback, and that is not a gap left by the
+migration.** With Neo4j gone there is no Cypher to generate. And ZCQL has no bind parameters,
+so a model-authored query against an evidence store would be the one place in the system where
+user text reaches the database uninterpolated. The long tail those generators served is now
+served by Think-on-Graph, which *reasons over* the graph instead of writing code against it.
+
+### The LLM is not what makes an answer true
+`rag_agent/llm.py` — QuickML LLM Serving, GLM-4.7-Flash. Inside AppSail the SDK authenticates
+as the app, so **there is no API key in the image**.
+
+Every provider failure — quota, network, 5xx, bad credentials — degrades into one signal:
+`generate()` raises `LLMUnavailable`, `generate_json()` returns `{}`, and the deterministic
+paths (intent templates + extractive synthesis) take over. Those paths produce grounded, cited
+answers on their own. **The LLM makes them fluent; it never makes them true.** It also never
+sees Kannada: a Kannada query is translated to English *inside our own container* before the
+model is called, and the answer is translated back.
+
+### Investigation Copilot
+Given an open case: a chronological timeline, the top-5 similar past cases with their
+outcomes, ranked investigative leads, and a paste-ready case-diary paragraph.
+
+Leads are **direct co-accused only**. At the 4-hop policy cap this would name most of the
+connected component ("857 associates") — true, and useless. A lead has to be actionable this
+week.
+
+---
+
+## 6. Predictive analytics — `packages/ml_models/`
+
+- **Fellegi-Sunter** probabilistic record linkage (1969) — §0. The centrepiece.
+- **KDE** (Gaussian, Scott's rule) + **DBSCAN** (`eps=500m, min_samples=10`) — hotspots.
+  These never used PostGIS *functions*, only its storage, so dropping PostGIS changed no
+  method.
+- **Prophet + MinT reconciliation** (Wickramasuriya, Athanasopoulos & Hyndman, 2019, *JASA*) —
+  a district's forecast always equals the coherent sum of its stations. Statistically optimal,
+  not merely "close enough".
+- **XGBoost + SHAP** risk scoring; **LightGBM** 180-day recidivism, calibrated.
+- **Isolation Forest** district spike alerts → the `/alerts` WebSocket.
+- **DoWhy** causal layer over real Census 2011 data.
+- **GNN** suspicious-subgraph AML classifier, alongside the explainable rule-based structuring
+  detector — the GNN catches coordinated multi-account layering the rule structurally cannot
+  see; the rule is what a court can audit line by line.
+- **Aequitas** bias audit (Saleiro et al. 2018) — the toolkit built for criminal-justice risk
+  tools and applied publicly to COMPAS.
+
+### Two rules that are enforced, not merely stated
+**Detector output is never the generator's input.** `vx_txn.FlaggedSuspicious` is written by
+the models. The injected laundering patterns — the training ground truth — are written to a
+*file*, never to the table the detectors read. A classifier trained on a label sitting in the
+column it scores is measuring nothing.
+
+**No protected attribute reaches a model.** The ER declares `CasteID` and `ReligionID`, so
+they are stored — conformance is a hard requirement. **No model reads them.** Storing is not
+scoring. Gender is kept only as a *subgroup label*, so the Aequitas audit has an axis to test
+disparate impact against. Both rules have tests.
+
+---
+
+## 7. Security & audit — `apps/api/`, `packages/policy/`
+
+**Auth.** Catalyst Authentication in every deployed environment; a self-signed JWT is the
+local path, and it refuses to run on a default secret outside dev mode. Catalyst says *who
+signed in*; the ER's `Employee` row stays authoritative for **role and station**, which is
+what policy reads. A Catalyst account with no `Employee` row is not an officer.
+
+**Policy** (`packages/policy`) is enforced in **two places, not one**:
+
+- `apps/api` middleware, for structured responses — post-hoc masking is fine when the shape is
+  known.
+- `packages/rag_agent`, at *query-construction time*, for depth-capping and anything feeding a
+  free-text answer. **You cannot un-traverse a graph, and you cannot reliably redact a name
+  out of generated prose.** So an IO's station filter is a `WHERE` clause *inside* the query,
+  and the role's traversal depth cap bounds the walk *before* it runs.
+
+**The audit chain.** Postgres made the log physically immutable with
+`RULE … DO INSTEAD NOTHING`. Data Store has **no rules and no triggers**, and app-layer
+"append-only" enforced by the same code that could bypass it is not a guarantee at all.
+
+So immutability moved into the data. Every row carries the hash of the row before it:
+
+```
+ChainHash = sha256(PrevHash ‖ ResponseHash)
+```
+
+Editing or deleting any row breaks every hash after it, and repairing that means rewriting the
+entire tail of the log. The database cannot make tampering *impossible*; the chain makes it
+**undeniable**. `verify_chain()` is what an auditor runs — and a Catalyst Cron job runs it
+every 12 hours, because a tamper check nobody runs is not a tamper check.
+
+---
+
+## 8. Console — `apps/web/`
+
+Futuristic minimalist: glassmorphism over a deep gradient mesh, rendered in **dark glass** so
+it stays legible for dense command-console work. Three floating panes:
+
+- **Left — chat**: streaming SSE, push-to-talk with a live waveform, EN/KN toggle.
+- **Centre — context view**: swaps by query type — map (MapLibre, KDE heatmap + case points),
+  force-directed network graph, Sankey money flow, ECharts forecast bands. Soft cross-fade
+  between them, never a hard cut.
+- **Right — evidence rail**: every citation chip renders as its 1-based `[index]` and opens
+  the matching evidence item as a floating glass drawer.
+
+**Reasoning Trace panel** (expandable, off by default) renders the agent trace in plain
+language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) →
+Evidence Evaluator: 3 corroborating records → Synthesis."* Explainability made visible rather
+than merely logged.
+
+The basemap is a self-drawn dark canvas, **not a tile service** — FIR coordinates must never
+leave the network inside a third-party tile request URL.
+
+---
+
+## 9. Responsible AI
+
+Predictive policing has a documented history of laundering historical bias (over-policing →
+more recorded crime → "predicted" crime in the same area) into an apparently-objective score.
+A panel evaluating a system meant to influence real policing will expect this addressed.
+
+- **No protected or proxy attributes as model features** (§6).
+- **Aequitas** disparate-impact and FPR/FNR-parity metrics across demographic **and
+  geographic** subgroups. Geography is the axis that catches the over-policing feedback loop,
+  and it is the one a naive audit omits.
+- **Human-in-the-loop by design.** Every prediction is decision-support. Nothing is an
+  automated trigger.
+- **Explicit uncertainty.** Confidence intervals, SHAP explanations, and a UI that
+  distinguishes *"the model suggests"* from *"the record shows"*.
+- The causal layer **names its unmeasured confounder** — police strength is not published per
+  district in India — rather than adjusting for a fabricated column.
+
+---
+
+## 10. Repository
+
+| Folder | Owns |
+|---|---|
+| `apps/web/` | Command Console UI (§8) |
+| `apps/api/` | FastAPI, auth, policy enforcement, transport, audit (§7) |
+| `packages/rag_agent/` | LangGraph, HippoRAG, ToG, evidence chain, Copilot (§5) |
+| `packages/ml_models/` | Predictive analytics, AML, entity resolution, fairness (§6) |
+| `packages/policy/` | RBAC rules. Shared, because they are enforced in two places (§7) |
+| `data/` | Schema, Data Store client, generator, graph, vectors, Kannada NLP (§3, §4) |
+
+`apps/api` is the one deployable service; the packages are imports it makes, not
+microservices.
+
+### Run it
+```bash
+python -m pytest                                     # 184 tests, no stack needed
+cd data && python -m data.generator.run --cases 10000
+cd apps/api && uvicorn api.main:app --reload
+cd apps/web && npm run dev
+```
+
+### Deploy it
+```bash
+CATALYST_ACCESS_TOKEN=$(node scripts/catalyst-token.js) python -m data.provision
+docker build --platform linux/amd64 -t baveshraam/veritas-api:latest . && docker push baveshraam/veritas-api:latest
+catalyst deploy
+```
+
+---
+
+## Appendix A: production scaling path (describe, don't build)
+
+Real-time CCTNS ingestion → Kafka topics per event type → Flink for enrichment and
+entity-resolution. Iceberg/MinIO once volume and time-travel needs exceed the Data Store.
+Keycloak for HR-federated identity; OPA/Rego once the policy set outgrows a Python module.
+Kubernetes + GitOps once there is a real multi-environment lifecycle. MLflow once model count
+outgrows ad-hoc endpoints. Spatio-temporal GNN forecasting beyond Prophet+MinT once historical
+volume justifies the training cost.
+
+---
+
+## Changelog
+
+- **v1–v4**: Postgres + PostGIS + Neo4j + pgvector + Gemini, on a schema of our own design.
+  Built and integrated end-to-end.
+- **v5 (Catalyst migration)**: infrastructure replaced, features and algorithms preserved.
+  FastAPI → AppSail; Next.js → Slate; JWT → Catalyst Auth; headless Chrome → SmartBrowz;
+  PostGIS deleted (KDE/DBSCAN never used its functions, only its storage); Neo4j + GDS deleted
+  → NetworkX over an edge table, every algorithm ported exactly.
+- **v6 (this pass) — the organizers' ER, and the last of the third-party services.**
+  - **Reshaped the entire schema to the organizers' ER**, verbatim: 27 of their tables plus 9
+    `vx_`-prefixed additions. The old self-designed schema is gone.
+  - **The ER has no person** (§0). Rebuilt Fellegi-Sunter to *reconstruct* people from
+    `Accused` rows — F1 0.989 — and made it a hard dependency of the graph, the financial
+    layer, the risk features, and every "does he have priors" answer.
+  - **PostgreSQL → Data Store.** Provisioned the 36 tables over the Admin API (IaC forks a new
+    project, so it was the wrong tool); ported all ~30 SQL call sites to ZCQL. SQLAlchemy is
+    gone from the repo.
+  - **pgvector → Stratus + numpy.** Exact brute-force cosine over one blob, with an
+    IDF-weighted lexical half so an officer can still find "IPC 457" — which is exactly what
+    an investigator types and exactly what a dense model cannot represent.
+  - **Gemini → QuickML (GLM-4.7-Flash).** No API key in the image.
+  - **Added Cache** (session focus — read on every turn, before the orchestrator can route
+    anything) and **Cron** (`veritas_refresh` 6h; `veritas_audit_verify` 12h).
+  - **Baked the model weights into the image.** A container that reaches huggingface.co at
+    request time is a third-party runtime dependency — and a cold container downloading 2.4GB
+    of NLLB is not a slow answer, it is a timeout.
+  - **Fixed the co-offending generator.** Accused were drawn independently, making the network
+    a random graph with no community structure; Louvain found one community holding 254 of 255
+    people. Offenders now form crews, and Louvain finds 12 of realistic size.
+  - **Deleted the fabricated gang layer.** The ER records no gang; the community *is* the
+    gang, derived and labelled as such.
+  - **Rewrote the test suites against the ER + Data Store.** 185 green — and the RBAC rules,
+    previously skipped for want of a Postgres stack, now run on every commit.
+  - **Consolidated every design doc into this file.** `docs/`, the per-folder READMEs, the
+    dataset catalog, `docker-compose.yml` and `data/sql/` are deleted.

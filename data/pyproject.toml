@@ -4,9 +4,6 @@ version = "0.1.0"
 description = "Veritas data foundation — schemas, connections, synthetic generator, NLP wrappers"
 requires-python = ">=3.11"
 dependencies = [
-    "sqlalchemy>=2.0",
-    "psycopg[binary]>=3.2",
-    "pgvector>=0.3",
     "networkx>=3.3",       # graph algorithms; replaces Neo4j GDS
     "pydantic>=2.7",
 ]

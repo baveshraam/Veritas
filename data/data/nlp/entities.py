@@ -1,7 +1,7 @@
 """Entity extraction over queries and FIR text.
 
 Hybrid gazetteer + pattern extractor: IPC sections and vehicle plates are strict
-regex (they have hard formats), while LOCATION and GANG resolve against the real
+regex (they have hard formats), while LOCATION resolves against the real
 reference tables, and PERSON resolves against the Karnataka name pool plus a
 capitalised-sequence fallback for names outside it.
 
@@ -35,7 +35,11 @@ _CAPS_TOKEN = re.compile(r"\b[A-Z][a-z]{2,}\b")
 
 class Entity(BaseModel):
     text: str
-    label: Literal["PERSON", "LOCATION", "GANG", "VEHICLE", "IPC_SECTION"]
+    # No GANG label. The organizers' ER records no gang, so a GANG entity would have
+    # nothing to resolve against — organised-crime grouping is the Louvain community over
+    # co-offending (data.gds), which is reached through a *person*, not by typing a gang's
+    # name. A gazetteer of invented gang names would only ever match invented gangs.
+    label: Literal["PERSON", "LOCATION", "VEHICLE", "IPC_SECTION"]
     start: int
     end: int
 
@@ -58,11 +62,6 @@ def _locations() -> set[str]:
 @lru_cache(maxsize=1)
 def _known_ipc() -> set[str]:
     return {s for ct in crime_types() for s in ct.ipc_sections}
-
-
-def _gangs() -> set[str]:
-    from ..generator.build import GANGS
-    return {g.lower() for g in GANGS}
 
 
 def _add(found: list[Entity], seen: list[tuple[int, int]], text: str,
@@ -94,7 +93,7 @@ def ner_extract(text: str, lang: Literal["en", "kn"] = "en") -> list[Entity]:
             _add(found, seen, text, m.start(1), m.end(1), "IPC_SECTION")
 
     lowered = text.lower()
-    phrases = [(g, "GANG") for g in _gangs()] + [(l, "LOCATION") for l in _locations()]
+    phrases = [(l, "LOCATION") for l in _locations()]
     # longest first: "Bangalore Urban" must win over the "Bangalore" alias, since
     # _add drops anything overlapping an already-claimed span.
     for phrase, label in sorted(phrases, key=lambda p: -len(p[0])):
@@ -134,7 +133,7 @@ def _person_spans(text: str) -> list[tuple[int, int]]:
     tokens = [(m.group(), m.start(), m.end()) for m in _CAPS_TOKEN.finditer(text)]
     spans: list[tuple[int, int]] = []
     group: list[tuple[str, int, int]] = []
-    known = _locations() | _gangs()
+    known = _locations()
 
     def flush() -> None:
         if not group:

@@ -27,9 +27,8 @@ intensity is therefore an unmeasured confounder and we say so out loud rather th
 adjust for a fabricated column — see UNMEASURED_CONFOUNDERS.
 """
 import pandas as pd
-from sqlalchemy import text
 
-from data.db import get_session
+from data import ds, queries
 
 from ..types import CausalEstimate
 
@@ -55,26 +54,31 @@ class SocioeconomicDataUnavailable(RuntimeError):
 
 
 def _panel() -> pd.DataFrame:
-    """District cross-section: real socioeconomic ground truth + observed crime rate."""
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT d.district_code, d.population, d.literacy_rate, d.poverty_index, "
-            "       d.marginal_worker_rate, d.urban_ratio, d.youth_ratio, "
-            "       COALESCE(f.crime_count, 0) AS crime_count "
-            "FROM district_socioeconomic d "
-            "LEFT JOIN (SELECT district_code, count(*) AS crime_count "
-            "           FROM fir GROUP BY district_code) f "
-            "  ON f.district_code = d.district_code"
-        )).all()
-    if not rows:
+    """District cross-section: real socioeconomic ground truth + observed crime rate.
+
+    The join happens here rather than in the query: ZCQL has no subquery, so the crime
+    count per district cannot be aggregated server-side. Thirty rows either way.
+    """
+    socio = ds.query(
+        'SELECT "DistrictID", "Population", "LiteracyRate", "PovertyIndex", '
+        '"MarginalWorkerRate", "UrbanRatio", "YouthRatio" FROM "vx_district_socioeconomic"')
+    if not socio:
         raise SocioeconomicDataUnavailable(
-            "district_socioeconomic is empty. Causal estimates need the real Census 2011 "
+            "vx_district_socioeconomic is empty. Causal estimates need the real Census 2011 "
             "ground truth (dataset D17) — load it with `python -m data.socioeconomic` "
             "rather than synthesising it.")
 
-    df = pd.DataFrame(rows, columns=[
-        "district_code", "population", "literacy_rate", "poverty_index",
-        "marginal_worker_rate", "urban_ratio", "youth_ratio", "crime_count"])
+    counts = queries.case_counts_by_district()
+    df = pd.DataFrame([{
+        "district_code": r["DistrictID"],
+        "population": r["Population"],
+        "literacy_rate": r["LiteracyRate"],
+        "poverty_index": r["PovertyIndex"],
+        "marginal_worker_rate": r["MarginalWorkerRate"],
+        "urban_ratio": r["UrbanRatio"],
+        "youth_ratio": r["YouthRatio"],
+        "crime_count": counts.get(r["DistrictID"], 0),
+    } for r in socio])
     # Crime rate per 100k — comparing raw counts across districts would make the
     # effect of every factor collapse into "Bengaluru is large".
     df["crime_rate"] = df["crime_count"] / (df["population"] / 100_000)

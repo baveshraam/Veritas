@@ -40,7 +40,8 @@ LOAD_ORDER = [
 # longer exist — and a citation to a deleted FIR is the one failure a citation-grounded
 # system must never have. vx_district_socioeconomic (real Census data) and the
 # session/conversation/audit tables are deliberately NOT wiped.
-DERIVED = ["vx_person", "vx_accused_identity", "vx_graph_edge", "vx_account", "vx_txn"]
+DERIVED = ["vx_person", "vx_accused_identity", "vx_graph_edge", "vx_account", "vx_txn",
+           "vx_officer_identity"]
 
 
 def load_dataset(ds: Dataset, wipe: bool = True) -> dict[str, int]:
@@ -51,7 +52,20 @@ def load_dataset(ds: Dataset, wipe: bool = True) -> dict[str, int]:
         rows = ds.tables.get(table) or []
         if rows:
             counts[table] = store.insert(table, rows)
+    counts["vx_officer_identity"] = store.insert(
+        "vx_officer_identity", officer_identities(ds.tables.get("Employee") or []))
     return counts
+
+
+def officer_identities(employees: list[dict]) -> list[dict]:
+    """The email -> EmployeeID bridge Catalyst Authentication signs in against.
+
+    Deterministic from the KGID, so a rebuild does not invalidate anyone's login. This is
+    the only place a login identity is minted; the ER's Employee row stays authoritative for
+    role and station.
+    """
+    return [{"Email": f"{e['KGID'].lower()}@ksp.gov.in", "EmployeeID": e["EmployeeID"]}
+            for e in employees if e.get("KGID")]
 
 
 def _csv_value(v: object) -> str:

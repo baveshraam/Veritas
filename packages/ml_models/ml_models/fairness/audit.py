@@ -17,9 +17,8 @@ the EEOC convention Aequitas adopts.
 from datetime import datetime, timezone
 
 import numpy as np
-from sqlalchemy import text
 
-from data.db import get_session
+from data import queries
 
 from ..types import AequitasReport
 
@@ -29,19 +28,18 @@ MIN_GROUP_SIZE = 20
 
 
 def _district_by_person() -> dict[str, str]:
-    """Person -> the district they most often appear in, for geographic subgroups."""
-    with get_session() as s:
-        rows = s.execute(text(
-            "SELECT cr.person_id, f.district_code, count(*) AS c "
-            "FROM criminal_record cr JOIN fir f ON f.fir_id = cr.fir_id "
-            "GROUP BY 1, 2"
-        )).all()
-    best: dict[str, tuple[str, int]] = {}
-    for r in rows:
-        pid = str(r.person_id)
-        if r.c > best.get(pid, ("", 0))[1]:
-            best[pid] = (r.district_code, r.c)
-    return {pid: d for pid, (d, _) in best.items()}
+    """Person -> the district they most often appear in, for geographic subgroups.
+
+    Geographic subgroups are the whole point of auditing a *policing* model: over-policing
+    a district produces more recorded crime there, which a naive model then "predicts".
+    This is the axis that catches it.
+    """
+    tally: dict[str, dict[int, int]] = {}
+    for r in queries.accused_with_cases():
+        pid = str(r["PersonUID"])
+        tally.setdefault(pid, {})
+        tally[pid][r["DistrictID"]] = tally[pid].get(r["DistrictID"], 0) + 1
+    return {pid: str(max(d, key=d.get)) for pid, d in tally.items() if d}
 
 
 def _group_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict[str, float]:
