@@ -38,6 +38,7 @@ async def refresh(x_veritas_job_token: str | None = Header(default=None)):
     """Recompute the derived layers. Idempotent, and safe to run while the API serves."""
     _authorise(x_veritas_job_token)
 
+    from data.embeddings.index_job import run_all as reindex
     from data.gds import run_all as run_gds
     from data.graph import publish_graph
 
@@ -46,9 +47,15 @@ async def refresh(x_veritas_job_token: str | None = Header(default=None)):
     # Graph metrics first: the community/PageRank values every network answer cites.
     out["gds"] = run_gds()
 
-    # Then the Stratus blob, so a cold container reads one object instead of paging the
-    # whole edge list back through ZCQL's 300-row cap.
+    # Then the Stratus blob, so a cold container reads one object instead of paging the whole
+    # edge list back through ZCQL's 300-row cap.
     out["stratus_graph"] = publish_graph()
+
+    # And the vector index, which is derived from the same record layer. Rebuilding it here is
+    # what makes the deployment self-healing: an index that is missing or stale is the one
+    # failure a citation-grounded system hides rather than reports — retrieval simply returns
+    # nothing, confidently.
+    out["vector_index"] = reindex()
 
     log.info("scheduled refresh complete: %s", out)
     return out

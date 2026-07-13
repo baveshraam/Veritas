@@ -87,3 +87,36 @@ def test_to_dt_accepts_both_backends_date_shapes(value, expected):
     Any caller doing date arithmetic goes through to_dt, or it works on one and throws on
     the other."""
     assert ds.to_dt(value) == expected
+
+
+# --------------------------------------------------------------- the one dialect difference
+def test_identifier_quotes_are_stripped_for_data_store():
+    """ZCQL rejects double-quoted identifiers outright — `No such Table with the given name
+    exists` — while SQLite needs them, because the ER contains tables called `Rank` and
+    `Section` which are SQL keywords. Callers write the portable quoted form; this strips it
+    on the way out to Catalyst.
+    """
+    sql = 'SELECT "CaseMaster"."CrimeNo" FROM "CaseMaster" WHERE "Rank"."RankID" = 1'
+    assert ds.unquote_identifiers(sql) == (
+        "SELECT CaseMaster.CrimeNo FROM CaseMaster WHERE Rank.RankID = 1")
+
+
+def test_a_double_quote_inside_a_value_survives_unquoting():
+    """It cannot be a blind `.replace('"', '')`. A recorded name may legitimately contain a
+    double quote — Indian aliases are often written `Ramesh "Chikka" Gowda` — and stripping it
+    from inside the literal would silently corrupt the value being written or compared."""
+    sql = ds.render('SELECT * FROM "vx_person" WHERE "CanonicalName" = :n',
+                    {"n": 'Ramesh "Chikka" Gowda'})
+    out = ds.unquote_identifiers(sql)
+    assert out == "SELECT * FROM vx_person WHERE CanonicalName = 'Ramesh \"Chikka\" Gowda'"
+
+
+def test_an_escaped_single_quote_does_not_unbalance_the_scanner():
+    """ZCQL escapes a quote by doubling it. The scanner must not mistake the second for the
+    start of a new literal, or every identifier after an apostrophe would stop being stripped.
+    """
+    sql = ds.render('SELECT * FROM "Court" WHERE "CourtName" = :n AND "Rank"."RankID" = 1',
+                    {"n": "O'Brien's"})
+    out = ds.unquote_identifiers(sql)
+    assert out.endswith("AND Rank.RankID = 1")
+    assert "'O''Brien''s'" in out

@@ -9,7 +9,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 185 green, no database or Docker required
+- **Tests**: `python -m pytest` — 188 green, no database or Docker required
 
 **Ground rule for this document**: choices are justified by "is this the best solution to the
 actual problem", never by "what was fast to build". Where something is simple, that is
@@ -73,7 +73,7 @@ Measured: **F1 0.989** (precision 0.997, recall 0.981) against the generator's a
             │
    ┌────────┴────────┬──────────────┬─────────────┬──────────────┐
  DATA STORE      STRATUS         CACHE        QUICKML          CRON
- (36 ZCQL        (graph blob +   (session     (GLM-4.7-Flash)  (refresh 6h,
+ (37 ZCQL        (graph blob +   (session     (GLM-4.7-Flash)  (refresh 6h,
   tables)         vector index)   focus)                        audit-verify 12h)
             │
    IN-PROCESS: NetworkX graph · numpy vector search · XGBoost / LightGBM / Prophet / DoWhy
@@ -100,7 +100,7 @@ Each step genuinely depends on the last. Identity cannot move.
 | API runtime | **AppSail** (custom OCI) | self-hosted uvicorn | Root `Dockerfile`; FastAPI runs as-is |
 | Console hosting | **Web Client Hosting** (Slate) | Next.js dev server | `output: "export"`; every component was already `"use client"` |
 | Identity | **Catalyst Authentication** | self-signed JWT | Catalyst says *who*; the `Employee` record still says *what they may see* |
-| Relational store | **Data Store** (ZCQL) | PostgreSQL + PostGIS | 36 tables — §3 |
+| Relational store | **Data Store** (ZCQL) | PostgreSQL + PostGIS | 37 tables — §3 |
 | Object storage | **Stratus** | filesystem | Graph pickle + vector index |
 | Cache | **Cache** | none | Session focus, read on every turn |
 | LLM | **QuickML LLM Serving** | Google Gemini | GLM-4.7-Flash. No API key in the image |
@@ -126,14 +126,14 @@ OPA, Kong, MLflow, Airflow.
 ## 3. Data foundation — `data/`
 
 ### The schema — `data/data/schema.py`
-One Python file defines all 36 tables and generates both backends.
+One Python file defines all 37 tables and generates both backends.
 
 **27 tables are the organizers' ER, verbatim** — their names, their columns, their spelling
 (`caste_master_id`, `csdate`, `CrimeHeadName`, `inv_arrestsurrenderaccused`). Do not
 "improve" them: conformance is a hard requirement, and `data/tests/test_schema.py` fails
 loudly if anyone tries.
 
-**9 tables are ours**, all prefixed `vx_` so nobody can ever mistake an addition for the
+**10 tables are ours**, all prefixed `vx_` so nobody can ever mistake an addition for the
 organizers' schema:
 
 | Table | What it is |
@@ -158,7 +158,7 @@ POST /baas/v1/project/{id}/table               {"table_name": "X"}   -> table_id
 POST /baas/v1/project/{id}/table/{tid}/column  [ {column spec}, … ]
 ```
 
-So the 36 tables are created from `schema.py` in one idempotent command, with no clicking:
+So the 37 tables are created from `schema.py` in one idempotent command, with no clicking:
 
 ```bash
 CATALYST_ACCESS_TOKEN=$(node scripts/catalyst-token.js) python -m data.provision
@@ -186,6 +186,14 @@ Three Data Store facts every caller is protected from:
 - **A SELECT returns at most 300 rows.** `query()` pages transparently.
 - **There are no bind parameters.** A query is a string, so `_lit()` is the single injection
   boundary in the system — and it is tested as one.
+- **ZCQL rejects double-quoted identifiers**, which SQLite requires (the ER has tables named
+  `Rank` and `Section` — both SQL keywords). Callers write the portable quoted form and
+  `unquote_identifiers()` strips them on the way out to Catalyst. This is the *only* genuine
+  dialect difference between the two backends, and it is worth naming because it was invisible
+  from the test suite: SQLite accepted every quoted query, so the whole suite passed while the
+  live service would have answered `No such Table with the given name exists` to every single
+  request. It was caught by driving the real Data Store, which is the argument for doing that
+  before the demo rather than during it.
 - **No `UPSERT`, no `date_trunc`, no CTE, no correlated subquery, at most 4 JOINs.**
   Aggregation that cannot be expressed server-side happens in Python
   (`data/data/queries.py`). At tens of thousands of rows, that is the same answer.
@@ -479,12 +487,12 @@ volume justifies the training cost.
   PostGIS deleted (KDE/DBSCAN never used its functions, only its storage); Neo4j + GDS deleted
   → NetworkX over an edge table, every algorithm ported exactly.
 - **v6 (this pass) — the organizers' ER, and the last of the third-party services.**
-  - **Reshaped the entire schema to the organizers' ER**, verbatim: 27 of their tables plus 9
+  - **Reshaped the entire schema to the organizers' ER**, verbatim: 27 of their tables plus 10
     `vx_`-prefixed additions. The old self-designed schema is gone.
   - **The ER has no person** (§0). Rebuilt Fellegi-Sunter to *reconstruct* people from
     `Accused` rows — F1 0.989 — and made it a hard dependency of the graph, the financial
     layer, the risk features, and every "does he have priors" answer.
-  - **PostgreSQL → Data Store.** Provisioned the 36 tables over the Admin API (IaC forks a new
+  - **PostgreSQL → Data Store.** Provisioned the 37 tables over the Admin API (IaC forks a new
     project, so it was the wrong tool); ported all ~30 SQL call sites to ZCQL. SQLAlchemy is
     gone from the repo.
   - **pgvector → Stratus + numpy.** Exact brute-force cosine over one blob, with an
@@ -501,7 +509,9 @@ volume justifies the training cost.
     people. Offenders now form crews, and Louvain finds 12 of realistic size.
   - **Deleted the fabricated gang layer.** The ER records no gang; the community *is* the
     gang, derived and labelled as such.
-  - **Rewrote the test suites against the ER + Data Store.** 185 green — and the RBAC rules,
+  - **Rewrote the test suites against the ER + Data Store.** 188 green — and the RBAC rules,
     previously skipped for want of a Postgres stack, now run on every commit.
+  - **Seeded the live Data Store** (105k rows) over the Admin API, and found the one thing the
+    SQLite backend could not have told us: ZCQL rejects quoted identifiers (§3).
   - **Consolidated every design doc into this file.** `docs/`, the per-folder READMEs, the
     dataset catalog, `docker-compose.yml` and `data/sql/` are deleted.

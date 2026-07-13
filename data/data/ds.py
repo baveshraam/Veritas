@@ -8,15 +8,21 @@ Replaces the old SQLAlchemy/Postgres layer entirely. Two backends, one query lan
   sqlite    the same ZCQL strings executed against a local SQLite file. Used for tests,
             for the generator, and for offline development.
 
-The second backend is not a mock. ZCQL is a subset of SQL, so SQLite executes the exact
-query strings the deployed service sends to Data Store. A query that works in the test
-suite is a query Data Store will accept, and one schema (data.schema) builds both.
+The second backend is not a mock. ZCQL is a subset of SQL, so SQLite executes the same query
+strings the deployed service sends to Data Store. A query that works in the test suite is a
+query Data Store will accept, and one schema (data.schema) builds both.
 
-Two Data Store facts every caller is protected from:
+Three Data Store facts every caller is protected from:
   * A SELECT returns at most 300 rows and 20 columns. `query()` pages transparently, so
     nothing above this module has to know. Ask for 24,000 FIRs and you get 24,000 FIRs.
   * Results come back keyed by table name ({"CaseMaster": {...}, "Employee": {...}} for a
     join). We flatten that to one flat row dict, which is what every caller wants.
+  * **ZCQL rejects double-quoted identifiers.** SQLite needs them (the ER has tables called
+    `Rank` and `Section`, which are SQL keywords); Data Store answers `No such Table with the
+    given name exists` to every query that has them. So callers write the quoted, portable
+    form and `unquote_identifiers()` strips them on the way out to Catalyst. This is the only
+    genuine dialect difference between the two backends, and it is handled here so that it is
+    handled once.
 """
 from __future__ import annotations
 
@@ -79,6 +85,35 @@ def render(zcql: str, params: dict[str, Any] | None = None) -> str:
     return re.sub(r":([a-zA-Z_][a-zA-Z0-9_]*)", sub, zcql)
 
 
+def unquote_identifiers(sql: str) -> str:
+    """Strip `"double quotes"` from identifiers. Data Store rejects them; SQLite requires
+    them for names like `Rank` and `Section` that collide with SQL keywords.
+
+    This is the one place the two backends genuinely disagree, and it is not cosmetic — the
+    live service answers `No such Table with the given name exists` to every quoted query, so
+    a codebase that only ever ran against SQLite would pass its whole suite and then fail on
+    literally every request in production.
+
+    It cannot be a `.replace('"', '')`: a name in the data may legitimately contain a double
+    quote (`Ramesh "Chikka" Gowda`), and stripping it from inside a string literal would
+    silently corrupt the value being written or compared. So this walks the string and only
+    removes quotes that are *outside* a single-quoted literal. ZCQL literals escape a quote by
+    doubling it (`''`), which a single pass handles naturally: the closing quote of the first
+    is immediately reopened by the second.
+    """
+    out: list[str] = []
+    in_literal = False
+    for ch in sql:
+        if ch == "'":
+            in_literal = not in_literal
+            out.append(ch)
+        elif ch == '"' and not in_literal:
+            continue
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 # ---------------------------------------------------------------------------- catalyst
 @lru_cache(maxsize=1)
 def _catalyst_app():
@@ -99,6 +134,7 @@ def _flatten(rows: list[dict]) -> list[dict]:
 
 def _catalyst_select(sql: str) -> list[dict]:
     zcql = _catalyst_app().zcql()
+    sql = unquote_identifiers(sql)
     if _LIMIT_RE.search(sql):                     # caller set its own LIMIT: respect it
         return _flatten(zcql.execute_query(sql))
     rows, offset = [], 0
@@ -195,7 +231,7 @@ def execute(zcql: str, params: dict[str, Any] | None = None) -> None:
     """Run a ZCQL UPDATE/DELETE."""
     sql = render(zcql, params)
     if backend() == "catalyst":
-        _catalyst_app().zcql().execute_query(sql)
+        _catalyst_app().zcql().execute_query(unquote_identifiers(sql))
         return
     conn = _sqlite_conn()
     conn.execute(sql)
