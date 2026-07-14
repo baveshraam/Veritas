@@ -7,12 +7,6 @@
 #   docker build --platform linux/amd64 -t veritas-api:latest .
 FROM --platform=linux/amd64 python:3.11-slim
 
-# ponytail: single stage. The wheel set (torch, prophet, xgboost) dominates the image;
-# a builder stage would save tens of MB of apt packages against ~3GB of wheels.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential git \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 ENV PYTHONUNBUFFERED=1
@@ -72,7 +66,7 @@ ENV VERITAS_FASTEMBED_CACHE=/opt/models/fastembed \
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     HF_HUB_OFFLINE=0 TRANSFORMERS_OFFLINE=0 python - <<'PY'
-import os
+import glob, os
 # The retrieval embedder: every single query goes through it.
 from fastembed import TextEmbedding
 TextEmbedding(model_name="BAAI/bge-small-en-v1.5",
@@ -81,12 +75,29 @@ TextEmbedding(model_name="BAAI/bge-small-en-v1.5",
 # Kannada translation. Kept self-hosted because Catalyst Zia has no translation service at
 # all — see CLAUDE.md. NLLB-200 rather than IndicTrans2 only because IndicTrans2's weights
 # are gated behind a click-through, which a build cannot do.
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+#
+# Converted to CTranslate2 int8 rather than baked as a raw fp32 checkpoint: ~2.4GB raw vs.
+# ~650MB int8 — the same technique already used for Whisper below, and the single biggest
+# saving available, since the deploy pipeline has a real disk quota on the pull/unpack step.
+from ctranslate2.converters import TransformersConverter
+TransformersConverter("facebook/nllb-200-distilled-600M").convert(
+    "/opt/models/nllb-ct2", quantization="int8", force=True)
+
+from transformers import AutoTokenizer
 AutoTokenizer.from_pretrained("facebook/nllb-200-distilled-600M")
-AutoModelForSeq2SeqLM.from_pretrained("facebook/nllb-200-distilled-600M")
+
+# The converter downloaded the raw fp32 checkpoint into the HF cache to convert from —
+# it is dead weight now that /opt/models/nllb-ct2 exists. Only the tokenizer/config files
+# above (a few MB) are needed at runtime, so drop any cached blob bigger than a tokenizer
+# could plausibly be, rather than the whole repo cache (which would take the tokenizer
+# with it).
+for blob in glob.glob("/opt/models/hf/hub/models--facebook--nllb*/blobs/*"):
+    if os.path.getsize(blob) > 100 * 1024 * 1024:
+        os.remove(blob)
 
 # ASR. Zia has no speech-to-text either. `base.en` for English, multilingual `small` for
 # Kannada — both are what data.nlp.speech loads by default, so they must both be here.
+# Already CTranslate2 int8 checkpoints straight from the HF hub — no conversion needed.
 from faster_whisper import WhisperModel
 WhisperModel("base.en", device="cpu", compute_type="int8")
 WhisperModel("small", device="cpu", compute_type="int8")
