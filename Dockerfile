@@ -42,7 +42,7 @@ COPY constraints.txt constraints.txt
 ENV PIP_CONSTRAINT=/app/constraints.txt
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu
+    pip install --index-url https://download.pytorch.org/whl/cpu torch==2.6.0+cpu
 
 # Order matters: the leaves resolve `veritas-data` etc. from the local paths above.
 # Cache mount: the wheel set is ~3GB, so a failed resolve must not cost a re-download.

@@ -5,7 +5,7 @@
 # pip happily satisfies that from PyPI with the CUDA build — dragging nvidia-cudnn /
 # triton (~2GB) into a container that has no GPU, and thrashing the resolver while it
 # backtracks between the two indexes.
-torch==2.5.1+cpu
+torch==2.6.0+cpu
 
 # psycopg 3.2.0's `binary` extra requires psycopg-binary==3.2.0.dev1 — a version that
 # was never published. Any resolve that backtracks onto 3.2.0 dies there. Pin past it.
