@@ -10,3 +10,8 @@ torch==2.6.0+cpu
 # psycopg 3.2.0's `binary` extra requires psycopg-binary==3.2.0.dev1 — a version that
 # was never published. Any resolve that backtracks onto 3.2.0 dies there. Pin past it.
 psycopg==3.2.9
+
+# langgraph builds its state schemas with TypedDict(extra_items=...), which needs
+# typing_extensions 4.13+ — but its own floor is looser, and torch's resolve used to
+# drag the tree down to 4.12.2, which crashed every /chat query at graph-build time.
+typing_extensions>=4.13
