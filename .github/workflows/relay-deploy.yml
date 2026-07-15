@@ -1,0 +1,34 @@
+# Relays the Docker image from Docker Hub to Catalyst's AppSail upload bucket.
+#
+# Why this exists: `catalyst deploy` for a container app uploads the image tar from the
+# developer's machine. On a residential uplink that is 80+ minutes for a 4.4GB image,
+# and the signed upload URL Catalyst mints expires after 30 — so a local upload can
+# never finish. A GitHub runner pulls the same image from Docker Hub and uploads it
+# datacenter-to-datacenter in minutes.
+#
+# Trigger: push a fresh signed URL (from GET /appsail/get-signature) to
+# .github/relay-upload.url. The upsert callback that turns the uploaded object into a
+# deployment is made locally afterwards — it is a small authenticated request.
+name: relay-deploy
+on:
+  push:
+    paths:
+      - ".github/relay-upload.url"
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Pull image from Docker Hub and save to tar
+        run: |
+          docker pull baveshraam/veritas-api:latest
+          docker save baveshraam/veritas-api:latest -o "$RUNNER_TEMP/veritas.tar"
+          ls -la "$RUNNER_TEMP/veritas.tar"
+      - name: Upload tar to Catalyst signed URL
+        run: |
+          URL=$(cat .github/relay-upload.url)
+          curl -sS --fail-with-body -X PUT \
+            -T "$RUNNER_TEMP/veritas.tar" \
+            -H "Content-Type: application/octet-stream" \
+            -w "\nHTTP:%{http_code} took:%{time_total}s speed:%{speed_upload}B/s\n" \
+            "$URL"
