@@ -167,15 +167,22 @@ def _catalyst_select(sql: str) -> list[dict]:
     if _LIMIT_RE.search(sql):                     # caller set its own LIMIT: respect it
         return _flatten(zcql.execute_query(sql))
     # Pagination MUST have a stable order or pages overlap and skip: Data Store gives
-    # `LIMIT offset, n` no ordering guarantee, and hydrating the mirror through unordered
-    # pages produced duplicate rows (seen live as UNIQUE violations). ROWID is always
-    # present and unique.
+    # `LIMIT offset, n` no ordering guarantee. And measured live, even ordered paging
+    # duplicates one row at a page boundary — so when ROWID is in the result, rows are
+    # deduped on it. (This artifact is also why the store itself briefly held 13
+    # "duplicates": the original seeding read through the same paging.)
     if "ORDER BY" not in sql.upper():
         sql = f"{sql} ORDER BY ROWID"
-    rows, offset = [], 0
+    rows, offset, seen = [], 0, set()
     while True:                                   # page around the 300-row cap
         page = _flatten(zcql.execute_query(f"{sql} LIMIT {offset}, {PAGE}"))
-        rows += page
+        for r in page:
+            rid = r.get("ROWID")
+            if rid is not None:
+                if rid in seen:
+                    continue
+                seen.add(rid)
+            rows.append(r)
         if len(page) < PAGE:
             return rows
         offset += PAGE
@@ -282,7 +289,10 @@ def _ensure_mirror() -> None:
                 if not rows:
                     continue
                 names = [c.name for c in cols]
-                sql = (f'INSERT INTO "{table}" '
+                # OR IGNORE: belt against the page-boundary duplicate above — the second
+                # copy of an identical row is dropped, never a distinct row (unique keys
+                # would collide loudly in the tests otherwise).
+                sql = (f'INSERT OR IGNORE INTO "{table}" '
                        f'({", ".join(chr(34)+n+chr(34) for n in names)}) '
                        f'VALUES ({", ".join("?" for _ in names)})')
                 conn.executemany(sql, [[_norm(c, r.get(c.name)) for c in cols]
