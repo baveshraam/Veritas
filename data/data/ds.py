@@ -179,15 +179,108 @@ def _catalyst_select(sql: str) -> list[dict]:
 _local = threading.local()
 
 
+def _sqlite_path() -> Path:
+    """The local database file. On Catalyst this is the READ MIRROR (see below), which
+    lives on the instance's scratch disk, not in the repo tree."""
+    if backend() == "catalyst":
+        return Path(os.getenv("VERITAS_MIRROR_DB", "/tmp/veritas_mirror.db"))
+    return _SQLITE_PATH
+
+
 def _sqlite_conn() -> sqlite3.Connection:
     conn = getattr(_local, "conn", None)
     if conn is None:
-        if str(_SQLITE_PATH) != ":memory:":
-            _SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(_SQLITE_PATH), check_same_thread=False)
+        path = _sqlite_path()
+        if str(path) != ":memory:":
+            path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         _local.conn = conn
     return conn
+
+
+# ---------------------------------------------------------------- catalyst read mirror
+# Discovered on the live Data Store, not in any doc: ZCQL refuses to JOIN tables that
+# have no *declared* relationship — and the ER's relationships are by business value
+# (CaseMasterID, ActCode), which Data Store's ForeignKey column type cannot express
+# (it only references ROWIDs; see data.schema). Every JOIN in the codebase is therefore
+# unexecutable server-side, while the same string runs perfectly on SQLite.
+#
+# So on Catalyst, reads run against a LOCAL SQLITE MIRROR hydrated from the Data Store
+# once per container: every ZCQL string keeps working verbatim, and the Data Store
+# remains the record of truth — every write goes there first and is applied to the
+# mirror second. Bonus, not incidental: hydration coerces values through the schema's
+# declared column types, which kills the whole "live returns '4', sqlite returns 4"
+# class of bug, and runtime Data Store reads drop to near zero (cost directive).
+#
+# Ceiling: one app instance. A second instance would have its own mirror and would not
+# see this one's writes until rehydration. At that point move reads back server-side
+# or add invalidation — for a single-instance deployment this is exact, not approximate.
+_MIRROR_LOCK = threading.Lock()
+_MIRROR_READY = False
+
+
+def _norm(col, v):
+    """Coerce a Data Store value (usually a string) to the schema's declared type."""
+    if v is None or v == "":
+        return None
+    if col.type in ("int", "bigint"):
+        return int(v)
+    if col.type == "double":
+        return float(v)
+    if col.type == "boolean":
+        return v if isinstance(v, bool) else str(v).lower() in ("true", "1")
+    if col.type in ("date", "datetime"):
+        dt = to_dt(v)
+        if dt is None:
+            return None
+        return dt.strftime("%Y-%m-%d" if col.type == "date" else "%Y-%m-%d %H:%M:%S")
+    return str(v)
+
+
+def _ensure_mirror() -> None:
+    global _MIRROR_READY
+    if _MIRROR_READY or backend() != "catalyst":
+        return
+    with _MIRROR_LOCK:
+        if _MIRROR_READY:
+            return
+        conn = _sqlite_conn()
+        if conn.execute("SELECT name FROM sqlite_master WHERE name='vx_mirror_done'").fetchone():
+            _MIRROR_READY = True
+            return
+        import logging
+        log = logging.getLogger(__name__)
+        log.info("hydrating read mirror from Data Store")
+        from .schema import TABLES, emit_sqlite
+        for stmt in emit_sqlite():
+            conn.execute(stmt)
+        for table, cols in TABLES.items():
+            rows = _catalyst_select(f'SELECT * FROM "{table}"')
+            if not rows:
+                continue
+            names = [c.name for c in cols]
+            sql = (f'INSERT INTO "{table}" ({", ".join(chr(34)+n+chr(34) for n in names)}) '
+                   f'VALUES ({", ".join("?" for _ in names)})')
+            conn.executemany(sql, [[_norm(c, r.get(c.name)) for c in cols] for r in rows])
+            log.info("mirrored %s: %d rows", table, len(rows))
+        conn.execute("CREATE TABLE vx_mirror_done (ok INT)")
+        conn.commit()
+        _MIRROR_READY = True
+        log.info("read mirror ready")
+
+
+def _mirror_apply(fn) -> None:
+    """Apply a write to the mirror; a mirror failure must never fail the Data Store
+    write that already happened — worst case a read is stale until the next container."""
+    try:
+        _ensure_mirror()
+        conn = _sqlite_conn()
+        fn(conn)
+        conn.commit()
+    except Exception:
+        import logging
+        logging.getLogger(__name__).exception("mirror write failed (Data Store write OK)")
 
 
 def init_db() -> None:
@@ -204,10 +297,11 @@ def init_db() -> None:
 
 # ------------------------------------------------------------------------------- public
 def query(zcql: str, params: dict[str, Any] | None = None) -> list[dict]:
-    """Run a ZCQL SELECT. Pages past the 300-row cap; returns flat row dicts."""
+    """Run a ZCQL SELECT. On Catalyst, reads come from the hydrated mirror — live ZCQL
+    cannot JOIN value-related tables (see the mirror block above). Locally, sqlite."""
     sql = render(zcql, params)
     if backend() == "catalyst":
-        return _catalyst_select(sql)
+        _ensure_mirror()
     return [dict(r) for r in _sqlite_conn().execute(sql).fetchall()]
 
 
@@ -216,16 +310,20 @@ def insert(table: str, rows: Sequence[dict]) -> int:
     rows = [r for r in rows if r]
     if not rows:
         return 0
+    def _sqlite_insert(conn: sqlite3.Connection) -> None:
+        for r in rows:                            # heterogeneous keys are allowed
+            cols = ", ".join(f'"{c}"' for c in r)
+            vals = ", ".join(_lit(v) for v in r.values())
+            conn.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({vals})')
+
     if backend() == "catalyst":
         t = _catalyst_app().datastore().table(table)
         for i in range(0, len(rows), _INSERT_BATCH):
             t.insert_rows(list(rows[i : i + _INSERT_BATCH]))
+        _mirror_apply(_sqlite_insert)             # truth written; keep reads current
         return len(rows)
     conn = _sqlite_conn()
-    for r in rows:                                # heterogeneous keys are allowed
-        cols = ", ".join(f'"{c}"' for c in r)
-        vals = ", ".join(_lit(v) for v in r.values())
-        conn.execute(f'INSERT INTO "{table}" ({cols}) VALUES ({vals})')
+    _sqlite_insert(conn)
     conn.commit()
     return len(rows)
 
@@ -240,27 +338,36 @@ def update(table: str, key: str, rows: Sequence[dict]) -> int:
     rows = [r for r in rows if r]
     if not rows:
         return 0
+    def _sqlite_update(conn: sqlite3.Connection) -> None:
+        for r in rows:
+            sets = ", ".join(f'"{c}" = {_lit(v)}' for c, v in r.items() if c != key)
+            conn.execute(f'UPDATE "{table}" SET {sets} WHERE "{key}" = {_lit(r[key])}')
+
     if backend() == "catalyst":
-        rowid_of = {r[key]: r["ROWID"] for r in
-                    query(f'SELECT ROWID, "{key}" FROM "{table}"')}
-        payload = [dict(r, ROWID=rowid_of[r[key]]) for r in rows if r[key] in rowid_of]
+        # ROWID resolution must hit the real Data Store: the mirror's sqlite rowids
+        # are its own and share nothing with Data Store's. str() both sides — the live
+        # store returns every value as a string, our callers pass ints.
+        rowid_of = {str(r[key]): r["ROWID"] for r in
+                    _catalyst_select(f'SELECT ROWID, "{key}" FROM "{table}"')}
+        payload = [dict(r, ROWID=rowid_of[str(r[key])])
+                   for r in rows if str(r[key]) in rowid_of]
         t = _catalyst_app().datastore().table(table)
         for i in range(0, len(payload), _INSERT_BATCH):
             t.update_rows(payload[i : i + _INSERT_BATCH])
+        _mirror_apply(_sqlite_update)
         return len(payload)
     conn = _sqlite_conn()
-    for r in rows:
-        sets = ", ".join(f'"{c}" = {_lit(v)}' for c, v in r.items() if c != key)
-        conn.execute(f'UPDATE "{table}" SET {sets} WHERE "{key}" = {_lit(r[key])}')
+    _sqlite_update(conn)
     conn.commit()
     return len(rows)
 
 
 def execute(zcql: str, params: dict[str, Any] | None = None) -> None:
-    """Run a ZCQL UPDATE/DELETE."""
+    """Run a ZCQL UPDATE/DELETE. On Catalyst: Data Store first (truth), mirror second."""
     sql = render(zcql, params)
     if backend() == "catalyst":
         _catalyst_app().zcql().execute_query(unquote_identifiers(sql))
+        _mirror_apply(lambda conn: conn.execute(sql))
         return
     conn = _sqlite_conn()
     conn.execute(sql)

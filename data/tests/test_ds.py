@@ -120,3 +120,31 @@ def test_an_escaped_single_quote_does_not_unbalance_the_scanner():
     out = ds.unquote_identifiers(sql)
     assert out.endswith("AND Rank.RankID = 1")
     assert "'O''Brien''s'" in out
+
+
+def test_catalyst_reads_go_through_a_hydrated_mirror(monkeypatch, tmp_path):
+    """Live ZCQL refuses to JOIN tables whose relationship is by business value (all of the
+    ER's are), so on Catalyst every read runs against a local sqlite mirror hydrated from the
+    Data Store. The JOIN below is exactly the shape the live service executes; if hydration,
+    type coercion (the store returns '4', the schema says int) or read routing breaks, this
+    fails."""
+    canned = {
+        "Employee": [{"EmployeeID": "301", "DesignationID": "4", "KGID": "KGID000301",
+                      "FirstName": "Shivakumar", "UnitID": "2304", "ROWID": "9001"}],
+        "Unit": [{"UnitID": "2304", "UnitName": "Kolar Town PS", "DistrictID": "12",
+                  "ROWID": "9002"}],
+    }
+    monkeypatch.setenv("VERITAS_DS_BACKEND", "catalyst")
+    monkeypatch.setenv("VERITAS_MIRROR_DB", str(tmp_path / "mirror.db"))
+    monkeypatch.setattr(ds, "_MIRROR_READY", False)
+    monkeypatch.setattr(ds, "_local", type(ds._local)())     # drop cached connections
+    monkeypatch.setattr(
+        ds, "_catalyst_select",
+        lambda sql: next((rows for t, rows in canned.items()
+                          if f'FROM "{t}"' in sql or f"FROM {t}" in sql), []))
+
+    rows = ds.query('SELECT "Employee"."FirstName", "Unit"."UnitName", '
+                    '       "Employee"."DesignationID" '
+                    'FROM "Employee" JOIN "Unit" ON "Employee"."UnitID" = "Unit"."UnitID"')
+    assert rows == [{"FirstName": "Shivakumar", "UnitName": "Kolar Town PS",
+                     "DesignationID": 4}]                     # int, not '4': coerced
