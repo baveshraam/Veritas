@@ -47,10 +47,25 @@ def _training_set(window_days: int | None, holdout_days: int):
     return X, y, rows, cutoff
 
 
+class _XGBShap:
+    """TreeSHAP through xgboost's own `pred_contribs` — the exact per-feature
+    attributions shap.TreeExplainer computes for an XGBoost ensemble, minus the
+    shap→numba→llvmlite import chain (~240MB) the deployed image cannot afford
+    under AppSail's bundle-sandbox size cap."""
+
+    def __init__(self, model) -> None:
+        self._booster = model.get_booster()
+
+    def shap_values(self, x: np.ndarray) -> np.ndarray:
+        import xgboost as xgb
+
+        contribs = self._booster.predict(xgb.DMatrix(x), pred_contribs=True)
+        return contribs[:, :-1]                     # last column is the bias term
+
+
 @lru_cache(maxsize=1)
 def _risk_model():
     from xgboost import XGBClassifier
-    import shap
 
     X, y, _, _ = _training_set(window_days=None, holdout_days=_RISK_HOLDOUT_DAYS)
     Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
@@ -60,8 +75,7 @@ def _risk_model():
         random_state=0,
     )
     model.fit(Xtr, ytr)
-    explainer = shap.TreeExplainer(model)
-    return model, explainer
+    return model, _XGBShap(model)
 
 
 @lru_cache(maxsize=1)

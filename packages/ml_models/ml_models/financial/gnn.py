@@ -121,8 +121,15 @@ def _normalise(X: np.ndarray) -> np.ndarray:
 @lru_cache(maxsize=1)
 def _trained():
     """Fit the GNN on the current graph. Cached per process."""
-    import torch
-    import torch.nn as nn
+    try:
+        import torch
+        import torch.nn as nn
+    except ImportError as e:
+        # The deployed image ships without torch: AppSail's bundle sandbox caps the image
+        # size, and torch is 800MB serving only this one detector. The rule-based
+        # structuring detector still runs; this one degrades exactly like it does on a
+        # too-small graph.
+        raise GNNUnavailable(f"torch is not installed on this host ({e})") from e
 
     torch.manual_seed(_SEED)
     ids, X, A, y = _fetch_graph()

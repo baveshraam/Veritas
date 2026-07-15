@@ -515,3 +515,26 @@ volume justifies the training cost.
     SQLite backend could not have told us: ZCQL rejects quoted identifiers (§3).
   - **Consolidated every design doc into this file.** `docs/`, the per-folder READMEs, the
     dataset catalog, `docker-compose.yml` and `data/sql/` are deleted.
+- **v7 (deployment) — fitting the image through AppSail's bundle sandbox.**
+  - **The constraint, measured empirically**: AppSail's bundle creator unpacks the image
+    in a ~4.5GB scratch space that must hold the tar *and* its extraction simultaneously,
+    so the deployable image ceiling is ~2.2GB. (The app-level `disk` config caps at 1024MB
+    and governs runtime writes, not the unpack.) The 9.31GB first image died downloading;
+    a 4.66GB rebuild died extracting. Bundle-creator logs via
+    `GET .../appsail/{id}/deployment/{depid}/logs`.
+  - **The image is 2.23GB** and every subsystem still passes its checks in-container:
+    NLLB -> CTranslate2 int8 (600MB replaces a 2.4GB fp32 checkpoint that had been baked in
+    *twice*), whisper `base` multilingual for Kannada ASR (via `VERITAS_WHISPER_KN_MODEL`;
+    `small` is better and stays the code default for local dev), `xgboost-cpu` instead of
+    the CUDA-bundled wheel, and no generator-only deps (geopandas/pyogrio/faker).
+  - **torch is not in the deployed image** (800MB serving one detector). The AML GNN
+    degrades to `GNNUnavailable` exactly as it does on a too-small graph; the rule-based
+    structuring detector - the court-auditable one - is unaffected. The GNN runs anywhere
+    torch is installed, including local dev and the demo laptop.
+  - **SHAP values now come from xgboost's own `pred_contribs`** (identical TreeSHAP math,
+    minus the shap -> numba -> llvmlite chain, ~240MB). `_XGBShap` in `risk/scoring.py`.
+  - **Deploys relay through GitHub Actions** (`.github/workflows/relay-deploy.yml`): the
+    CLI uploads the image tar from the developer's machine, which cannot beat the signed
+    URL's 30-minute TTL on a residential uplink. The runner pulls from Docker Hub and
+    uploads datacenter-to-datacenter; the `upsert` callback (with `memory: 2048`, the max
+    this org accepts) is then made locally.
