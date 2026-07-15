@@ -52,7 +52,17 @@ async def _catalyst_context(request: Request, call_next):
 
         from data.nlp.model_fetch import ensure_models
 
-        threading.Thread(target=ensure_models, name="model-fetch", daemon=True).start()
+        def _warm() -> None:
+            # Mirror first (the Data Store reads every endpoint needs), models second.
+            # Both are idempotent and both block their lazy loaders while running, so
+            # a query that beats the warm-up waits instead of failing.
+            try:
+                ds._ensure_mirror()
+            except Exception:
+                pass                      # next query retries; failure detail is logged
+            ensure_models()
+
+        threading.Thread(target=_warm, name="warm", daemon=True).start()
 
     return await call_next(request)
 

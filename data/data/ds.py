@@ -166,6 +166,12 @@ def _catalyst_select(sql: str) -> list[dict]:
     sql = unquote_identifiers(sql)
     if _LIMIT_RE.search(sql):                     # caller set its own LIMIT: respect it
         return _flatten(zcql.execute_query(sql))
+    # Pagination MUST have a stable order or pages overlap and skip: Data Store gives
+    # `LIMIT offset, n` no ordering guarantee, and hydrating the mirror through unordered
+    # pages produced duplicate rows (seen live as UNIQUE violations). ROWID is always
+    # present and unique.
+    if "ORDER BY" not in sql.upper():
+        sql = f"{sql} ORDER BY ROWID"
     rows, offset = [], 0
     while True:                                   # page around the 300-row cap
         page = _flatten(zcql.execute_query(f"{sql} LIMIT {offset}, {PAGE}"))
@@ -189,13 +195,14 @@ def _sqlite_path() -> Path:
 
 def _sqlite_conn() -> sqlite3.Connection:
     conn = getattr(_local, "conn", None)
-    if conn is None:
+    if conn is None or getattr(_local, "epoch", -1) != _CONN_EPOCH:
         path = _sqlite_path()
         if str(path) != ":memory:":
             path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), check_same_thread=False)
         conn.row_factory = sqlite3.Row
         _local.conn = conn
+        _local.epoch = _CONN_EPOCH
     return conn
 
 
@@ -218,6 +225,8 @@ def _sqlite_conn() -> sqlite3.Connection:
 # or add invalidation — for a single-instance deployment this is exact, not approximate.
 _MIRROR_LOCK = threading.Lock()
 _MIRROR_READY = False
+_CONN_EPOCH = 0        # bumped when the mirror file is atomically replaced — stale
+                       # per-thread connections point at the old inode and must reopen
 
 
 def _norm(col, v):
@@ -239,33 +248,55 @@ def _norm(col, v):
 
 
 def _ensure_mirror() -> None:
-    global _MIRROR_READY
+    global _MIRROR_READY, _CONN_EPOCH
     if _MIRROR_READY or backend() != "catalyst":
         return
     with _MIRROR_LOCK:
         if _MIRROR_READY:
             return
-        conn = _sqlite_conn()
-        if conn.execute("SELECT name FROM sqlite_master WHERE name='vx_mirror_done'").fetchone():
-            _MIRROR_READY = True
-            return
         import logging
         log = logging.getLogger(__name__)
+        path = _sqlite_path()
+        if path.exists():
+            probe = sqlite3.connect(str(path))
+            done = probe.execute(
+                "SELECT name FROM sqlite_master WHERE name='vx_mirror_done'").fetchone()
+            probe.close()
+            if done:
+                _MIRROR_READY = True
+                return
+
+        # All-or-nothing: hydrate into a scratch file and atomically replace. A failed
+        # attempt leaves nothing behind, so the next request retries from zero instead
+        # of colliding with a half-filled mirror (the UNIQUE-violation loop seen live).
+        tmp = path.with_suffix(".hydrating")
+        tmp.unlink(missing_ok=True)
         log.info("hydrating read mirror from Data Store")
-        from .schema import TABLES, emit_sqlite
-        for stmt in emit_sqlite():
-            conn.execute(stmt)
-        for table, cols in TABLES.items():
-            rows = _catalyst_select(f'SELECT * FROM "{table}"')
-            if not rows:
-                continue
-            names = [c.name for c in cols]
-            sql = (f'INSERT INTO "{table}" ({", ".join(chr(34)+n+chr(34) for n in names)}) '
-                   f'VALUES ({", ".join("?" for _ in names)})')
-            conn.executemany(sql, [[_norm(c, r.get(c.name)) for c in cols] for r in rows])
-            log.info("mirrored %s: %d rows", table, len(rows))
-        conn.execute("CREATE TABLE vx_mirror_done (ok INT)")
-        conn.commit()
+        conn = sqlite3.connect(str(tmp))
+        try:
+            from .schema import TABLES, emit_sqlite
+            for stmt in emit_sqlite():
+                conn.execute(stmt)
+            for table, cols in TABLES.items():
+                rows = _catalyst_select(f'SELECT * FROM "{table}"')
+                if not rows:
+                    continue
+                names = [c.name for c in cols]
+                sql = (f'INSERT INTO "{table}" '
+                       f'({", ".join(chr(34)+n+chr(34) for n in names)}) '
+                       f'VALUES ({", ".join("?" for _ in names)})')
+                conn.executemany(sql, [[_norm(c, r.get(c.name)) for c in cols]
+                                       for r in rows])
+                log.info("mirrored %s: %d rows", table, len(rows))
+            conn.execute("CREATE TABLE vx_mirror_done (ok INT)")
+            conn.commit()
+        except Exception:
+            conn.close()
+            tmp.unlink(missing_ok=True)
+            raise
+        conn.close()
+        os.replace(tmp, path)
+        _CONN_EPOCH += 1                # stale per-thread conns reopen the new file
         _MIRROR_READY = True
         log.info("read mirror ready")
 
