@@ -77,7 +77,21 @@ async def current_officer(
     # run against, and it is why the secret still refuses to default in production.
     from .catalyst_auth import current_officer_catalyst, enabled
     if enabled():
-        return await current_officer_catalyst(request)
+        try:
+            return await current_officer_catalyst(request)
+        except HTTPException:
+            if creds is None:
+                raise
+            # A bearer token was presented — fall through to the JWT path below.
+        except Exception:
+            # The SDK raises its own exception type on a cookie-less request (curl,
+            # service-to-service calls, smoke tests) instead of a clean 401. Without a
+            # bearer token that IS an unauthenticated request; with one, the signed-JWT
+            # path below is real authentication, not a bypass — it still refuses to
+            # verify against a default secret.
+            if creds is None:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED,
+                                    "Not authenticated with Catalyst")
 
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
