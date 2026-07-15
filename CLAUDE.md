@@ -538,3 +538,28 @@ volume justifies the training cost.
     URL's 30-minute TTL on a residential uplink. The runner pulls from Docker Hub and
     uploads datacenter-to-datacenter; the `upsert` callback (with `memory: 2048`, the max
     this org accepts) is then made locally.
+- **v8 (going live) — everything empirical about running on Catalyst, learned the hard way.**
+  - **LIVE**: API `https://veritas-api-50043864344.development.catalystappsail.in` (health,
+    auth, cases, fir, person, copilot, chat all verified); console
+    `https://veritas-60077763394.development.catalystserverless.in/app/index.html`.
+  - **The SDK's context is per-request headers, not env** (`X-ZC-*`): a bare
+    `zcatalyst_sdk.initialize()` raises "Catalyst headers are empty" in AppSail. The API
+    middleware captures each request into the SDK (`ds.bind_catalyst_request`); background
+    work reuses the captured app.
+  - **Live ZCQL refuses JOINs between value-related tables** — every JOIN in the codebase,
+    since the ER relates by business key. Reads therefore run on a **local sqlite mirror**
+    hydrated from the Data Store once per container (writes: Data Store first, mirror
+    second). Bonus: schema-typed hydration killed the whole "live returns '4', sqlite
+    returns 4" bug class.
+  - **Data Store pagination duplicates one row at a page boundary, even under ORDER BY**
+    (measured repeatedly). Paged reads dedupe on ROWID; hydration INSERT OR IGNOREs; and
+    this artifact — via the original seeding — is what the 13 phantom "duplicate" rows were.
+  - **The SDK JSON-serializes writes**, so datetimes must be Data Store display strings
+    (`_sdk_row`); a raw datetime 500'd every audited endpoint while sqlite hid it.
+  - **Hybrid deployed auth**: Catalyst session first, signed JWT (VERITAS_JWT_SECRET, set
+    via the configuration API) as fallback; SDK exceptions on cookie-less requests now 401.
+  - **AppSail env vars, memory (2048 max here) and disk (1024 max) are all settable over
+    `POST /appsail/{id}/configuration`** once one deployment has succeeded — nothing was
+    console-only in the end, including the VERITAS_JOB_TOKEN cron secret.
+  - langgraph needs typing_extensions>=4.13 (`TypedDict(extra_items=...)`) — constraints.txt
+    now pins the floor; the old torch resolve had dragged it to 4.12.2, killing /chat.
