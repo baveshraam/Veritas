@@ -9,7 +9,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 188 green, no database or Docker required
+- **Tests**: `python -m pytest` — 189 green, no database or Docker required
 
 **Ground rule for this document**: choices are justified by "is this the best solution to the
 actual problem", never by "what was fast to build". Where something is simple, that is
@@ -101,7 +101,7 @@ Each step genuinely depends on the last. Identity cannot move.
 | Console hosting | **Web Client Hosting** (Slate) | Next.js dev server | `output: "export"`; every component was already `"use client"` |
 | Identity | **Catalyst Authentication** | self-signed JWT | Catalyst says *who*; the `Employee` record still says *what they may see* |
 | Relational store | **Data Store** (ZCQL) | PostgreSQL + PostGIS | 37 tables — §3 |
-| Object storage | **Stratus** | filesystem | Graph pickle + vector index |
+| Object storage | **File Store** | filesystem | Model weights (~760MB, streamed at cold start). *Stratus was the design target for the graph/vector cache, but bucket creation is scope-blocked over the Admin API (console-only); live, the graph and vector index rebuild through the sqlite mirror instead — §8 changelog v8* |
 | Cache | **Cache** | none | Session focus, read on every turn |
 | LLM | **QuickML LLM Serving** | Google Gemini | GLM-4.7-Flash. No API key in the image |
 | Scheduling | **Cron** | none | `veritas_refresh` (6h), `veritas_audit_verify` (12h) |
@@ -452,7 +452,7 @@ microservices.
 
 ### Run it
 ```bash
-python -m pytest                                     # 184 tests, no stack needed
+python -m pytest                                     # 189 tests, no stack needed
 cd data && python -m data.generator.run --cases 10000
 cd apps/api && uvicorn api.main:app --reload
 cd apps/web && npm run dev
@@ -509,7 +509,7 @@ volume justifies the training cost.
     people. Offenders now form crews, and Louvain finds 12 of realistic size.
   - **Deleted the fabricated gang layer.** The ER records no gang; the community *is* the
     gang, derived and labelled as such.
-  - **Rewrote the test suites against the ER + Data Store.** 188 green — and the RBAC rules,
+  - **Rewrote the test suites against the ER + Data Store.** 189 green — and the RBAC rules,
     previously skipped for want of a Postgres stack, now run on every commit.
   - **Seeded the live Data Store** (105k rows) over the Admin API, and found the one thing the
     SQLite backend could not have told us: ZCQL rejects quoted identifiers (§3).
@@ -563,3 +563,17 @@ volume justifies the training cost.
     console-only in the end, including the VERITAS_JOB_TOKEN cron secret.
   - langgraph needs typing_extensions>=4.13 (`TypedDict(extra_items=...)`) — constraints.txt
     now pins the floor; the old torch resolve had dragged it to 4.12.2, killing /chat.
+  - **Weights left the image entirely; the image is now 0.88GB.** The v7 image (2.23GB, weights
+    baked in) still died in the bundle sandbox on a bad day — the *real* ceiling is ~1.3GB, not
+    2.2GB, because staging adds a fourth copy. So the ~760MB of NLLB + whisper weights moved
+    **out of the image into Catalyst File Store** (folder `models`, 8×95MB chunks), streamed and
+    spliced into CTranslate2/whisper at cold start (`data/nlp/model_fetch.py`) — never written to
+    disk as one tar. The image now carries only code and CPU wheels.
+  - **Stratus was the design target for the graph/vector cache but its bucket creation is
+    scope-blocked over the Admin API** (`OAUTH_SCOPE_MISMATCH`, console-only). Not needed: File
+    Store holds the models and the sqlite mirror serves the graph and vector index (rebuilt from
+    `vx_graph_edge` / the embeddings on first read). The Stratus fast path in `graph.py` /
+    `vectors.py` stays as code — it simply always misses live and falls back to the mirror.
+  - **Live health, verified**: `llm=quickml(glm-4.7-flash) · datastore=catalyst · firs=10000 ·
+    graph 16,918n/87,120e · vectors 13,835 docs · cache=catalyst`. All 6 roles resolve; `/chat`
+    streams the LangGraph trace; 189 tests green.
