@@ -54,13 +54,12 @@ class LLMUnavailable(RuntimeError):
 
 
 def _token() -> str | None:
-    """The app's own Catalyst token. Injected by AppSail; absent everywhere else."""
+    """The app's own Catalyst token. In AppSail the SDK context comes from the request
+    headers the API middleware captured into data.ds — a bare initialize() would fail
+    with empty headers. Absent everywhere else."""
     try:
-        import zcatalyst_sdk
-        from zcatalyst_sdk.credentials import Credential
-        cred = zcatalyst_sdk.initialize()._app._credential  # noqa: SLF001
-        if isinstance(cred, Credential):
-            return cred.get_token()
+        from data.ds import catalyst_app
+        cred = catalyst_app()._app._credential  # noqa: SLF001
         return cred.get_token()
     except Exception:
         return None

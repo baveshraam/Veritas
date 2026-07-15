@@ -115,10 +115,39 @@ def unquote_identifiers(sql: str) -> str:
 
 
 # ---------------------------------------------------------------------------- catalyst
-@lru_cache(maxsize=1)
-def _catalyst_app():
+# In AppSail the SDK's whole context — project id, key, domain, admin credential — arrives
+# as X-ZC-* HEADERS on each gateway request, not as env vars, so `initialize()` with no
+# request raises "Catalyst headers are empty". The API middleware calls
+# bind_catalyst_request() on every request; the resulting app object is kept module-global
+# so work that runs outside any request (the background model fetch, warm caches) can use
+# the most recent context.
+_sdk_app = None
+
+
+def bind_catalyst_request(request) -> None:
+    """Capture the current request's Catalyst headers into an SDK app instance."""
+    global _sdk_app
+    if backend() != "catalyst":
+        return
+    try:
+        import zcatalyst_sdk
+        _sdk_app = zcatalyst_sdk.initialize(req=request)
+    except Exception:                              # never let context capture kill a request
+        pass
+
+
+def catalyst_app():
+    """The SDK app for the current context. Public so model_fetch can share it."""
+    global _sdk_app
+    if _sdk_app is not None:
+        return _sdk_app
     import zcatalyst_sdk
-    return zcatalyst_sdk.initialize()
+    _sdk_app = zcatalyst_sdk.initialize()          # functions-style runtime: thread-local set
+    return _sdk_app
+
+
+def _catalyst_app():
+    return catalyst_app()
 
 
 def _flatten(rows: list[dict]) -> list[dict]:

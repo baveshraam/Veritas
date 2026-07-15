@@ -107,9 +107,10 @@ def ensure_models() -> bool:
             return False
 
         try:
-            import zcatalyst_sdk
-            app = zcatalyst_sdk.initialize()
-            folder = app.filestore().folder(folder_id)
+            # Shared with ds: in AppSail the SDK context comes from request headers the
+            # API middleware captured, never from env — initialize() bare would fail here.
+            from data.ds import catalyst_app
+            folder = catalyst_app().filestore().folder(folder_id)
             log.info("fetching %d model chunks from File Store folder %s",
                      len(file_ids), folder_id)
             stream = _ChunkStream(folder, file_ids)

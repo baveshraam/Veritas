@@ -8,7 +8,7 @@ import os
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
 # There are no API keys in the image. Inside AppSail the Catalyst SDK authenticates as the
@@ -28,18 +28,33 @@ app = FastAPI(
 )
 
 
-@app.on_event("startup")
-async def _warm_models() -> None:
-    """Start the File Store model fetch while the container warms (see
-    data.nlp.model_fetch — the weights live outside the image because AppSail's
-    bundle sandbox caps the image size). Background thread, not awaited: the API
-    serves immediately and the lazy loaders block on the same lock if a query
-    arrives before the fetch finishes. A no-op in local dev."""
-    import threading
+_model_fetch_kicked = False
 
-    from data.nlp.model_fetch import ensure_models
 
-    threading.Thread(target=ensure_models, name="model-fetch", daemon=True).start()
+@app.middleware("http")
+async def _catalyst_context(request: Request, call_next):
+    """Capture AppSail's per-request Catalyst headers (X-ZC-*) into the SDK.
+
+    The SDK has no env-var path in AppSail — its project context and admin credential
+    ride on every gateway request. Data Store access and the File Store model fetch
+    both depend on this. The model fetch (see data.nlp.model_fetch — the weights live
+    outside the image because AppSail's bundle sandbox caps the image size) is kicked
+    once, in the background, after the first request has provided a context; the lazy
+    model loaders block on its lock if a query needs a model before it finishes."""
+    from data import ds
+
+    ds.bind_catalyst_request(request)
+
+    global _model_fetch_kicked
+    if not _model_fetch_kicked and os.getenv("VERITAS_MODELS_FOLDER_ID"):
+        _model_fetch_kicked = True
+        import threading
+
+        from data.nlp.model_fetch import ensure_models
+
+        threading.Thread(target=ensure_models, name="model-fetch", daemon=True).start()
+
+    return await call_next(request)
 
 # The Command Console is a separate origin in dev; lock this down per-deployment.
 _origins = [o for o in os.getenv(
