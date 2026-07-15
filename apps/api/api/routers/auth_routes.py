@@ -40,7 +40,7 @@ async def list_officers():
     seen: dict[str, dict] = {}
     for r in ds.query('SELECT "EmployeeID", "DesignationID", "KGID", "FirstName", "UnitID" '
                       'FROM "Employee" ORDER BY "EmployeeID"'):
-        role = DESIGNATION_TO_ROLE.get(r["DesignationID"])
+        role = DESIGNATION_TO_ROLE.get(int(r["DesignationID"] or 0))
         if role and role not in seen:
             seen[role] = {"badge_no": r["KGID"], "name": r["FirstName"], "role": role,
                           "ps_code": str(r["UnitID"] or "")}

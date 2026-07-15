@@ -32,7 +32,9 @@ _SELECT = ('SELECT "EmployeeID", "DesignationID", "UnitID", "DistrictID", "KGID"
 def _record(row: dict) -> OfficerRecord:
     return OfficerRecord(
         officer_id=str(row["EmployeeID"]),
-        role=DESIGNATION_TO_ROLE.get(row["DesignationID"], "IO"),
+        # int(): the live Data Store returns every column as a string ("4"), sqlite as an
+        # int — an uncoerced .get() silently made every deployed officer an IO.
+        role=DESIGNATION_TO_ROLE.get(int(row["DesignationID"] or 0), "IO"),
         ps_code=str(row["UnitID"] or ""),
         district_code=str(row["DistrictID"] or ""),
         badge_no=row["KGID"] or "",
