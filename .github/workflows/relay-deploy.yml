@@ -19,10 +19,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pull image from Docker Hub and save to tar
+      - name: Copy image from Docker Hub as OCI archive (gzip layers)
+        # skopeo, not docker save: save writes uncompressed layers, and Catalyst's bundle
+        # creator needs tar + blobs + unpacked rootfs to coexist in its scratch space —
+        # only compressed blobs (the registry's own gzip form) make that fit.
         run: |
-          docker pull baveshraam/veritas-api:latest
-          docker save baveshraam/veritas-api:latest -o "$RUNNER_TEMP/veritas.tar"
+          which skopeo || sudo apt-get install -y skopeo
+          skopeo copy docker://baveshraam/veritas-api:latest "oci-archive:$RUNNER_TEMP/veritas.tar:latest"
           ls -la "$RUNNER_TEMP/veritas.tar"
       - name: Upload tar to Catalyst signed URL
         run: |
