@@ -95,32 +95,58 @@ def _load():
 
 
 class _CTranslate2Backend:
-    """NLLB via CTranslate2 int8 — see module docstring for why."""
+    """NLLB via CTranslate2 int8 — see module docstring for why.
+
+    Tokenization prefers a `tokenizer.json` sitting next to the converted model,
+    loaded through the `tokenizers` runtime directly (~10MB). The deployed image
+    ships without the full `transformers` package (~110MB of model code serving
+    nothing once translation runs on CTranslate2); `transformers.AutoTokenizer`
+    is the fallback for local dev, where the HF cache exists but no tokenizer.json
+    was copied beside the model.
+    """
 
     def __init__(self, ct2_dir: str, tokenizer_name: str):
         try:
             import ctranslate2
-            from transformers import AutoTokenizer
         except ImportError as e:
             raise TranslationUnavailable(
-                f"ctranslate2/transformers are not installed, so no self-hosted "
-                f"translation backend can run ({e}).") from e
+                f"ctranslate2 is not installed, so no self-hosted translation "
+                f"backend can run ({e}).") from e
         try:
             self._translator = ctranslate2.Translator(ct2_dir, device="cpu")
-            self._tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            tok_json = os.path.join(ct2_dir, "tokenizer.json")
+            if os.path.isfile(tok_json):
+                from tokenizers import Tokenizer
+                self._tok = Tokenizer.from_file(tok_json)
+                self._hf = None
+            else:
+                from transformers import AutoTokenizer
+                self._hf = AutoTokenizer.from_pretrained(tokenizer_name)
+                self._tok = None
         except Exception as e:
             raise TranslationUnavailable(
                 f"could not load the baked NLLB CTranslate2 model at {ct2_dir!r}: "
                 f"{type(e).__name__}.") from e
 
     def translate(self, text: str, src_flores: str, tgt_flores: str) -> str:
-        self._tokenizer.src_lang = src_flores
-        source = self._tokenizer.convert_ids_to_tokens(self._tokenizer.encode(text))
+        if self._hf is not None:
+            self._hf.src_lang = src_flores
+            source = self._hf.convert_ids_to_tokens(self._hf.encode(text))
+            result = self._translator.translate_batch(
+                [source], target_prefix=[[tgt_flores]], beam_size=4)
+            output_tokens = result[0].hypotheses[0][1:]    # drop the target-prefix token
+            output_ids = self._hf.convert_tokens_to_ids(output_tokens)
+            return self._hf.decode(output_ids, skip_special_tokens=True).strip()
+
+        # NLLB's convention, applied by hand: [src_lang] ... </s> on the source side,
+        # exactly what transformers' fast tokenizer emits for encode(text).
+        enc = self._tok.encode(text, add_special_tokens=False)
+        source = [src_flores] + enc.tokens + ["</s>"]
         result = self._translator.translate_batch(
             [source], target_prefix=[[tgt_flores]], beam_size=4)
-        output_tokens = result[0].hypotheses[0][1:]        # drop the target-prefix token
-        output_ids = self._tokenizer.convert_tokens_to_ids(output_tokens)
-        return self._tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+        hyp = result[0].hypotheses[0][1:]                  # drop the target-prefix token
+        ids = [i for i in (self._tok.token_to_id(t) for t in hyp) if i is not None]
+        return self._tok.decode(ids, skip_special_tokens=True).strip()
 
 
 class _TransformersBackend:

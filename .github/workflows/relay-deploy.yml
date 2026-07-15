@@ -19,13 +19,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Copy image from Docker Hub as OCI archive (gzip layers)
-        # skopeo, not docker save: save writes uncompressed layers, and Catalyst's bundle
-        # creator needs tar + blobs + unpacked rootfs to coexist in its scratch space —
-        # only compressed blobs (the registry's own gzip form) make that fit.
+      - name: Pull image from Docker Hub and save to tar
+        # Plain docker save (uncompressed layers), deliberately: the bundle creator
+        # extracts uncompressed layers straight into the rootfs, so peak scratch usage is
+        # exactly tar + blobs + rootfs = 3x the image. Gzip layers are WORSE there — they
+        # get staged to a temp dir before an rsync into rootfs, a fourth copy. The image
+        # is kept ≤1.7GB so three copies fit the ~5GB sandbox (measured empirically).
         run: |
-          which skopeo || sudo apt-get install -y skopeo
-          skopeo copy docker://baveshraam/veritas-api:latest "oci-archive:$RUNNER_TEMP/veritas.tar:latest"
+          docker pull baveshraam/veritas-api:latest
+          docker save baveshraam/veritas-api:latest -o "$RUNNER_TEMP/veritas.tar"
           ls -la "$RUNNER_TEMP/veritas.tar"
       - name: Upload tar to Catalyst signed URL
         run: |

@@ -97,7 +97,16 @@ def estimate_causal_effect(factor: str, outcome: str, district_code: str) -> Cau
             f"only {len(df)} districts with complete socioeconomic data — too few to "
             "identify an effect. Load the full Census 2011 table.")
 
-    from dowhy import CausalModel
+    try:
+        from dowhy import CausalModel
+    except ImportError as e:
+        # The deployed image ships without dowhy (and its sympy/matplotlib/statsmodels
+        # chain, ~230MB): AppSail's bundle sandbox caps the image, and this is the caught
+        # channel the prediction agent already degrades through. Causal estimates run
+        # anywhere the [causal] extra is installed — local dev and the demo laptop.
+        raise SocioeconomicDataUnavailable(
+            f"the causal-inference library is not installed on this host ({e}); "
+            "install ml_models[causal] to run causal estimates.") from e
 
     adjusted = [c for c in CONFOUNDERS if c != factor]
     model = CausalModel(data=df, treatment=factor, outcome="crime_rate",
