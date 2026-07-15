@@ -27,6 +27,20 @@ app = FastAPI(
     description="Evidence-grounded investigative AI. Every answer traces to a record.",
 )
 
+
+@app.on_event("startup")
+async def _warm_models() -> None:
+    """Start the File Store model fetch while the container warms (see
+    data.nlp.model_fetch — the weights live outside the image because AppSail's
+    bundle sandbox caps the image size). Background thread, not awaited: the API
+    serves immediately and the lazy loaders block on the same lock if a query
+    arrives before the fetch finishes. A no-op in local dev."""
+    import threading
+
+    from data.nlp.model_fetch import ensure_models
+
+    threading.Thread(target=ensure_models, name="model-fetch", daemon=True).start()
+
 # The Command Console is a separate origin in dev; lock this down per-deployment.
 _origins = [o for o in os.getenv(
     "VERITAS_CORS_ORIGINS", "http://localhost:3000").split(",") if o]

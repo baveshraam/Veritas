@@ -58,6 +58,8 @@ _TOKEN = re.compile(r"[a-z0-9]+")
 @lru_cache(maxsize=1)
 def _embedder():
     # Lazy: loading the ONNX model is ~130MB on first run, cached after.
+    from data.nlp.model_fetch import ensure_models
+    ensure_models()                    # no-op locally; File Store fetch on AppSail
     from fastembed import TextEmbedding
     cache_dir = os.getenv("VERITAS_FASTEMBED_CACHE")
     kwargs = {"cache_dir": cache_dir} if cache_dir else {}

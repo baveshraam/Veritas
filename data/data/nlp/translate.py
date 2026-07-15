@@ -85,6 +85,9 @@ def _load():
     deployed image), and falls back to a raw `transformers` load of the same model
     otherwise (local dev without the Docker build step).
     """
+    from data.nlp.model_fetch import ensure_models
+    ensure_models()                    # no-op locally; File Store fetch on AppSail
+
     indictrans = os.getenv("VERITAS_INDICTRANS2_MODEL")
     custom = os.getenv("VERITAS_TRANSLATION_MODEL")
     if indictrans or custom:

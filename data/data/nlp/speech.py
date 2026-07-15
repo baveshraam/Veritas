@@ -62,6 +62,8 @@ def _whisper_transcribe(audio: bytes, lang: str = "en") -> str:
 
 @lru_cache(maxsize=2)          # one English checkpoint, one multilingual
 def _load_whisper(name: str):
+    from data.nlp.model_fetch import ensure_models
+    ensure_models()                    # no-op locally; File Store fetch on AppSail
     try:
         from faster_whisper import WhisperModel
     except ImportError as e:
