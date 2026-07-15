@@ -311,6 +311,21 @@ def _ensure_mirror() -> None:
         log.info("read mirror ready")
 
 
+def _sdk_row(r: dict) -> dict:
+    """A row the SDK can send: it JSON-serializes, so datetimes must already be the
+    display strings Data Store expects — sqlite's _lit() did this implicitly, and any
+    caller passing a datetime (the audit trail's CreatedAt) worked locally and 500'd
+    live until this normalization."""
+    out = {}
+    for k, v in r.items():
+        if isinstance(v, datetime):
+            v = v.strftime("%Y-%m-%d %H:%M:%S")
+        elif isinstance(v, date):
+            v = v.strftime("%Y-%m-%d")
+        out[k] = v
+    return out
+
+
 def _mirror_apply(fn) -> None:
     """Apply a write to the mirror; a mirror failure must never fail the Data Store
     write that already happened — worst case a read is stale until the next container."""
@@ -359,8 +374,9 @@ def insert(table: str, rows: Sequence[dict]) -> int:
 
     if backend() == "catalyst":
         t = _catalyst_app().datastore().table(table)
-        for i in range(0, len(rows), _INSERT_BATCH):
-            t.insert_rows(list(rows[i : i + _INSERT_BATCH]))
+        payload = [_sdk_row(r) for r in rows]
+        for i in range(0, len(payload), _INSERT_BATCH):
+            t.insert_rows(payload[i : i + _INSERT_BATCH])
         _mirror_apply(_sqlite_insert)             # truth written; keep reads current
         return len(rows)
     conn = _sqlite_conn()
@@ -390,7 +406,7 @@ def update(table: str, key: str, rows: Sequence[dict]) -> int:
         # store returns every value as a string, our callers pass ints.
         rowid_of = {str(r[key]): r["ROWID"] for r in
                     _catalyst_select(f'SELECT ROWID, "{key}" FROM "{table}"')}
-        payload = [dict(r, ROWID=rowid_of[str(r[key])])
+        payload = [_sdk_row(dict(r, ROWID=rowid_of[str(r[key])]))
                    for r in rows if str(r[key]) in rowid_of]
         t = _catalyst_app().datastore().table(table)
         for i in range(0, len(payload), _INSERT_BATCH):
