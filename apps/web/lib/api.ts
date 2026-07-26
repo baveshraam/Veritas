@@ -29,6 +29,19 @@ export async function listOfficers(): Promise<Officer[]> {
   return r.json();
 }
 
+export type Health = {
+  api: string; llm: string; datastore: string; firs: number;
+  graph_nodes: number; graph_edges: number; indexed_documents: number;
+};
+
+/** Powers the status readout in the command bar. What is loaded is a fact about the
+ *  answers this console can give, so it belongs on screen rather than in a log. */
+export async function getHealth(): Promise<Health> {
+  const r = await fetch(`${BASE}/health`);
+  if (!r.ok) throw new Error("unhealthy");
+  return r.json();
+}
+
 export async function login(badge_no: string): Promise<{ officer: Officer }> {
   const r = await fetch(`${BASE}/auth/token`, {
     method: "POST",
@@ -141,10 +154,17 @@ export async function exportPdf(sessionId: string): Promise<void> {
   URL.revokeObjectURL(url);
 }
 
-export function severityOf(confidence: number): "low" | "med" | "high" {
-  if (confidence >= 0.75) return "high";
-  if (confidence >= 0.45) return "med";
-  return "low";
+/** How well corroborated a piece of evidence is.
+ *
+ *  This used to route confidence through the SEVERITY ramp, which inverted its
+ *  meaning on screen: a 100%-confidence record — the strongest thing the retrieval
+ *  found — rendered in the same crimson used for a high-risk hotspot, so the best
+ *  evidence looked like the most alarming. Confidence is its own dimension and reads
+ *  the intuitive way now: strong is green, weak is red. */
+export function confidenceBand(confidence: number): "strong" | "fair" | "weak" {
+  if (confidence >= 0.75) return "strong";
+  if (confidence >= 0.45) return "fair";
+  return "weak";
 }
 
 export function evidenceFor(e: EvidenceItem): string {

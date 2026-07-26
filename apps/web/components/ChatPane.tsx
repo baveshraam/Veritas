@@ -27,7 +27,7 @@ function useVoiceRecorder(onDone: (base64: string) => void) {
       for (let i = 0; i < bars; i++) {
         const v = Math.abs(data[i * step] - 128) / 128;
         const h = Math.max(2, v * canvas.height);
-        ctx.fillStyle = "#2f6fed";
+        ctx.fillStyle = "#d8a657";
         ctx.globalAlpha = 0.55 + v * 0.45;
         ctx.fillRect(i * (canvas.width / bars), (canvas.height - h) / 2, canvas.width / bars - 2, h);
       }
@@ -79,6 +79,7 @@ function withCitations(
   text: string,
   onCite: (evidenceId: string) => void,
   citations: Turn["citations"],
+  active: string | null,
 ) {
   return text.split(/(\[\d+\])/g).map((p, i) => {
     const m = p.match(/^\[(\d+)\]$/);
@@ -87,7 +88,14 @@ function withCitations(
     const cite = citations.find((c) => c.index === idx);
     if (!cite) return <span key={i}>{p}</span>;
     return (
-      <button key={i} className="cite" title={cite.label} onClick={() => onCite(cite.evidence_id)}>
+      <button
+        key={i}
+        // The thread reads this to find the claim end of the line it draws.
+        data-cite={cite.evidence_id}
+        className={`cite ${active === cite.evidence_id ? "lit" : ""}`}
+        title={cite.label}
+        onClick={() => onCite(cite.evidence_id)}
+      >
         {idx}
       </button>
     );
@@ -95,20 +103,14 @@ function withCitations(
 }
 
 export default function ChatPane({
-  turns, busy, language, onLanguage, onSend, onSendAudio, voiceOut, onVoiceOut,
-  onCite, onExport, officer,
+  turns, busy, onSend, onSendAudio, onCite, activeEvidence,
 }: {
   turns: Turn[];
   busy: boolean;
-  language: "en" | "kn";
-  onLanguage: (l: "en" | "kn") => void;
   onSend: (q: string) => void;
   onSendAudio: (base64: string) => void;
-  voiceOut: boolean;
-  onVoiceOut: (v: boolean) => void;
   onCite: (evidenceId: string) => void;
-  onExport: () => void;
-  officer: { name: string; role: string; ps_code: string } | null;
+  activeEvidence: string | null;
 }) {
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
@@ -128,45 +130,20 @@ export default function ChatPane({
   return (
     <div className="pane glass">
       <div className="pane-head">
-        <div>
-          <div className="pane-title">Veritas</div>
-          {officer && (
-            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 2 }}>
-              {officer.name} · {officer.role} · {officer.ps_code}
-            </div>
-          )}
-        </div>
-        <div className="tabs">
-          {(["en", "kn"] as const).map((l) => (
-            <button
-              key={l}
-              className={`tab ${language === l ? "on" : ""}`}
-              onClick={() => onLanguage(l)}
-            >
-              {l === "en" ? "EN" : "ಕನ್ನಡ"}
-            </button>
-          ))}
-          <button
-            className={`tab ${voiceOut ? "on" : ""}`}
-            onClick={() => onVoiceOut(!voiceOut)}
-            title="Speak the answer aloud"
-          >
-            {voiceOut ? "🔊" : "🔈"}
-          </button>
-          <button className="tab" onClick={onExport} disabled={!turns.length} title="Export as PDF">
-            PDF
-          </button>
-        </div>
+        <span className="pane-title">Investigation</span>
+        {turns.length > 0 && (
+          <span className="chip chip-low">{turns.length} {turns.length === 1 ? "query" : "queries"}</span>
+        )}
       </div>
 
       <div className="pane-body">
         {!turns.length && (
           <div className="intro">
             <p>
-              <strong>The case index is open beside you.</strong> Search it, then press{" "}
-              <em>Ask about this case</em> on any card — or type a question here.
+              <strong>The case index is open beside you.</strong> Search it and press{" "}
+              <em>Ask about this case</em> on any card, or type a question here.
             </p>
-            <p className="dim">What this console can answer:</p>
+            <p className="dim">Questions this console answers from the records:</p>
             <ul>
               <li>Who is accused in a case, and do they have priors?</li>
               <li>Who does this person offend with — and who runs that network?</li>
@@ -174,9 +151,10 @@ export default function ChatPane({
               <li>Where did the money in this case go?</li>
               <li>How many cases should this station expect next month?</li>
             </ul>
-            <p className="dim">
-              Every answer cites the FIR it came from. Where the records don&apos;t
-              support one, it says so instead of guessing.
+            <p>
+              Answers cite the FIR they came from. Select any{" "}
+              <span className="cite" style={{ cursor: "default" }}>1</span> to trace it
+              back to the record it rests on.
             </p>
           </div>
         )}
@@ -187,7 +165,7 @@ export default function ChatPane({
             <ReasoningTrace trace={t.trace} streaming={t.streaming} />
             {t.answer && (
               <div className={`msg-a ${t.citations.length === 0 ? "refusal" : ""}`}>
-                {withCitations(t.answer, onCite, t.citations)}
+                {withCitations(t.answer, onCite, t.citations, activeEvidence)}
               </div>
             )}
           </div>
@@ -215,9 +193,9 @@ export default function ChatPane({
           className={`btn ${recording ? "btn-rec" : ""}`}
           onClick={toggleMic}
           disabled={busy && !recording}
-          title={recording ? "Stop and send" : "Push to talk"}
+          title={recording ? "Stop and send" : "Hold a question in English or Kannada"}
         >
-          {recording ? "■" : "🎤"}
+          {recording ? "Stop" : "Speak"}
         </button>
         {!recording && (
           <button className="btn btn-accent" onClick={send} disabled={busy || !text.trim()}>

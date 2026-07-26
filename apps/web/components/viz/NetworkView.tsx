@@ -1,6 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
-import { CHART_BASE, ACCENT, ramp, rgba } from "./palette";
+import { CHART_BASE, ACCENT, TEXT_DIM, ramp, rgba } from "./palette";
 
 type Node = { id: string; label: string; risk_score: number };
 type Edge = { source: string; target: string; type: string; strength: number };
@@ -25,7 +25,7 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
       draggable: true,
       force: { repulsion: 190, edgeLength: [45, 130], gravity: 0.08 },
       label: {
-        show: true, position: "right", color: "#16203a", fontSize: 11,
+        show: true, position: "right", color: TEXT_DIM, fontSize: 11,
         formatter: (p: any) => (p.data.value > max * 0.4 ? p.data.name : ""),
       },
       emphasis: { focus: "adjacency", label: { show: true } },

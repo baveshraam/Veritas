@@ -12,14 +12,14 @@ import type { CaseIndex, CaseRow } from "@/lib/types";
  * browsing turns into asking without anyone having to invent a phrasing.
  */
 
-// The four case_status values the record layer actually emits. Unknown -> "med",
-// so a new status shows up as neutral rather than silently reading as resolved.
-const STATUS_SEV: Record<string, string> = {
-  Convicted: "low",
-  Acquitted: "low",
-  Chargesheeted: "med",
-  "Under Investigation": "high",
-};
+/** Case status is NOT severity, and must not borrow the severity ramp.
+ *
+ *  It used to: "Under Investigation" rendered in the same crimson as a high-risk
+ *  hotspot, so the most ordinary state a case can be in read as an alarm, and the
+ *  palette's own promise — that a high looks like a high everywhere — stopped being
+ *  true. Status is now neutral, with one bit of information carried honestly:
+ *  whether the case is still open. */
+const OPEN_STATUS = "Under Investigation";
 
 function fmt(d: string): string {
   return new Date(d).toLocaleDateString("en-IN", {
@@ -114,7 +114,7 @@ export default function CaseExplorer({
           <div className="case" key={c.fir_id}>
             <div className="case-head">
               <span className="case-no">{c.fir_number}</span>
-              <span className={`chip chip-${STATUS_SEV[c.case_status] ?? "med"}`}>
+              <span className={`chip chip-stat ${c.case_status === OPEN_STATUS ? "open" : ""}`}>
                 {c.case_status}
               </span>
             </div>

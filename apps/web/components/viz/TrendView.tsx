@@ -1,6 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
-import { CHART_BASE, ACCENT, GRID, rgba } from "./palette";
+import { CHART_BASE, ACCENT, GRID, TEXT_FAINT, rgba } from "./palette";
 
 type Point = [string, number, number, number]; // date, point, lower, upper
 
@@ -23,26 +23,28 @@ export default function TrendView({ data }: { data: { series: Point[] } }) {
       formatter: (ps: any[]) => {
         const i = ps[0].dataIndex;
         return `<b>${dates[i]}</b><br/>forecast ${point[i].toFixed(1)}` +
-               `<br/><span style="color:#4c5a7a">range ${s[i][2].toFixed(1)} – ${s[i][3].toFixed(1)}</span>`;
+               `<br/><span style="color:#63757f">range ${s[i][2].toFixed(1)} – ${s[i][3].toFixed(1)}</span>`;
       },
     },
     xAxis: {
       type: "category", data: dates, boundaryGap: false,
       axisLine: { lineStyle: { color: GRID } },
-      axisLabel: { color: "#64708f", fontSize: 10, formatter: (v: string) => v.slice(5) },
+      axisLabel: { color: TEXT_FAINT, fontSize: 10, formatter: (v: string) => v.slice(5) },
     },
     yAxis: {
-      type: "value", name: "FIRs/day", nameTextStyle: { color: "#64708f", fontSize: 10 },
+      type: "value", name: "FIRs/day", nameTextStyle: { color: TEXT_FAINT, fontSize: 10 },
       splitLine: { lineStyle: { color: GRID } },
-      axisLabel: { color: "#64708f", fontSize: 10 },
+      axisLabel: { color: TEXT_FAINT, fontSize: 10 },
     },
     series: [
       // stacked transparent base + visible spread = the confidence band
+      // The band is smoothed to match the point series; an interval drawn with hard
+      // vertices around a smoothed forecast reads as two different measurements.
       { type: "line", stack: "band", data: lower, lineStyle: { opacity: 0 },
-        symbol: "none", silent: true, areaStyle: { opacity: 0 } },
+        symbol: "none", silent: true, smooth: true, areaStyle: { opacity: 0 } },
       { type: "line", stack: "band", data: spread, lineStyle: { opacity: 0 },
-        symbol: "none", silent: true,
-        areaStyle: { color: rgba(ACCENT, 0.14) } },
+        symbol: "none", silent: true, smooth: true,
+        areaStyle: { color: rgba(ACCENT, 0.17) } },
       { type: "line", data: point, smooth: true, symbol: "none",
         lineStyle: { color: ACCENT, width: 2.2, shadowBlur: 12, shadowColor: rgba(ACCENT, 0.5) } },
     ],

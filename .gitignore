@@ -45,3 +45,4 @@ client/
 .vercel
 .env*
 
+.build.log

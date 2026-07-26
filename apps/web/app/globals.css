@@ -1,96 +1,230 @@
-/* Veritas Command Console — light glass over a soft gradient mesh.
+/* Veritas Command Console — "Registry".
  *
- * One severity palette (green -> amber -> rose) runs across every view, so a "high"
- * reads the same whether it is a hotspot, a graph node, or a money flow — the console
- * reads as one instrument rather than four widgets sharing a page. The severity hues
- * are the darker, print-legible variants: the pastel ones vanish on white.
+ * Dark instrument glass floating over an ink ground. The accent is brass, taken from
+ * the KSP uniform rather than from a UI kit; it marks the two things an officer acts
+ * on — a citation and the control that is currently live. Everything else stays
+ * achromatic so those two read instantly in a dense pane.
  *
- * --tint is the one fill used inside a glass panel (inputs, cards, evidence rows).
- * Flipping this file back to dark is: invert --tint, the --bg/--glass/--text vars,
- * and palette.ts. Nothing else reads a raw colour.
+ * One severity palette (jade -> orange -> crimson) runs across every view, so a "high"
+ * reads the same whether it is a hotspot, a graph node, or a money flow. Severity is
+ * always a FILLED pill; brass is always an OUTLINE. That is what keeps the brass accent
+ * from being confused with the orange rung of the severity ramp.
+ *
+ * Record identifiers (FIR numbers, badge numbers, evidence ids, timings) are set in
+ * mono. They are not prose and are frequently compared character by character.
+ *
+ * Nothing outside :root reads a raw colour.
  */
 
 :root {
-  --bg-0: #eef1f7;
-  --bg-1: #f7f9fc;
+  /* ground */
+  --bg-0: #06090c;
+  --bg-1: #0c1319;
 
-  /* frosted panels — transparent, floating over the mesh */
-  --glass: rgba(255, 255, 255, 0.5);
-  --glass-strong: rgba(255, 255, 255, 0.82);
-  --glass-line: rgba(23, 42, 82, 0.1);
-  --glass-line-hi: rgba(23, 42, 82, 0.24);
-  --tint: rgba(23, 42, 82, 0.035);
-  --tint-hi: rgba(23, 42, 82, 0.07);
+  /* instrument glass — panes float, they are not boxes drawn on a page */
+  --glass: rgba(255, 255, 255, 0.045);
+  --glass-strong: rgba(17, 24, 31, 0.93);
+  --glass-line: rgba(255, 255, 255, 0.09);
+  --glass-line-hi: rgba(255, 255, 255, 0.2);
+  --tint: rgba(255, 255, 255, 0.035);
+  --tint-hi: rgba(255, 255, 255, 0.075);
 
-  --text: #16203a;
-  --text-dim: #4c5a7a;
-  --text-faint: #8590a8;
+  --text: #e9eff4;
+  --text-dim: #9fb1be;
+  --text-faint: #63757f;
 
-  /* accents — used sparingly, for emphasis only */
-  --accent: #2f6fed;
-  --accent-soft: rgba(47, 111, 237, 0.1);
+  /* brass — the KSP accent. Outline, never fill, except on the primary action. */
+  --accent: #d8a657;
+  --accent-hi: #eec177;
+  --accent-soft: rgba(216, 166, 87, 0.13);
+  --accent-line: rgba(216, 166, 87, 0.42);
 
   /* one severity scale, shared by every visualization */
-  --sev-low: #0f9d76;
-  --sev-med: #c07d10;
-  --sev-high: #d64466;
+  --sev-low: #35c08a;
+  --sev-med: #ee8b4b;
+  --sev-high: #f2555a;
 
-  --radius: 18px;
-  --radius-sm: 12px;
+  --radius: 16px;
+  --radius-sm: 10px;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --font-body: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-label: var(--font-cond), var(--font-sans), ui-sans-serif, sans-serif;
+  --font-rec: var(--font-mono), ui-monospace, Menlo, monospace;
 }
 
 * { box-sizing: border-box; }
 
-html, body {
+html {
+  height: 100%;
+  background: var(--bg-0);
+}
+
+/* Ink ground. Brass glows low-right where the evidence rail sits, cold cyan top-left
+ * where the conversation does — the room is lit from the direction of the record.
+ *
+ * Painted on body itself rather than a ::before. html and body both carry a
+ * background colour here, and a negative-z-index pseudo-element renders behind both
+ * of them — the mesh was there but permanently covered. */
+body {
   margin: 0;
   padding: 0;
   height: 100%;
-  background: var(--bg-0);
   color: var(--text);
-  font-family: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
   -webkit-font-smoothing: antialiased;
   overflow: hidden;
+  background-color: var(--bg-0);
+  background-image:
+    radial-gradient(44% 40% at 6% 0%,     rgba(56, 160, 178, 0.26), transparent 62%),
+    radial-gradient(42% 40% at 100% 100%, rgba(216, 166, 87, 0.20), transparent 58%),
+    radial-gradient(58% 50% at 80% 10%,   rgba(78, 100, 168, 0.18), transparent 66%),
+    linear-gradient(158deg, #111c25, var(--bg-0) 72%);
+  background-attachment: fixed;
 }
 
-/* Restrained gradient-mesh backdrop. Fixed, so panes float over it. */
-body::before {
+/* A faint register rule over the ground: this is a records system, and the grid is
+ * the ruled page it is printed on. Very low contrast — atmosphere, not decoration. */
+body::after {
   content: "";
   position: fixed;
-  inset: -20%;
-  z-index: -1;
-  background:
-    radial-gradient(48% 40% at 12% 8%,  rgba(47, 111, 237, 0.13), transparent 60%),
-    radial-gradient(42% 38% at 88% 12%, rgba(214, 68, 102, 0.09), transparent 62%),
-    radial-gradient(56% 46% at 72% 92%, rgba(15, 157, 118, 0.09), transparent 64%),
-    linear-gradient(160deg, var(--bg-1), var(--bg-0));
-  filter: saturate(1.05);
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px);
+  background-size: 100% 30px;
+  mask-image: radial-gradient(70% 60% at 50% 40%, #000 30%, transparent 100%);
+  -webkit-mask-image: radial-gradient(70% 60% at 50% 40%, #000 30%, transparent 100%);
 }
+
+/* Content sits above the register rule. */
+.shell, .gate { position: relative; z-index: 1; }
 
 .glass {
   background: var(--glass);
-  backdrop-filter: blur(22px) saturate(1.3);
-  -webkit-backdrop-filter: blur(22px) saturate(1.3);
+  backdrop-filter: blur(22px) saturate(1.25);
+  -webkit-backdrop-filter: blur(22px) saturate(1.25);
   border: 1px solid var(--glass-line);
   border-radius: var(--radius);
   box-shadow:
-    0 16px 44px rgba(23, 42, 82, 0.09),
-    inset 0 1px 0 rgba(255, 255, 255, 0.6);
+    0 20px 50px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
-/* Layout: three floating panes, generous gutters — spatial, not panelled. */
+/* Layout: a command bar over three floating panes. The bar is full-width because
+ * identity and language are console-wide facts, not properties of the chat pane. */
+.shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 12px;
+  height: 100vh;
+  padding: 12px;
+}
 .console {
   display: grid;
-  grid-template-columns: minmax(330px, 24%) 1fr minmax(300px, 22%);
-  gap: 16px;
-  padding: 16px;
-  height: 100vh;
+  grid-template-columns: minmax(340px, 25%) 1fr minmax(310px, 23%);
+  gap: 12px;
+  min-height: 0;
 }
 @media (max-width: 1280px) {
   .console { grid-template-columns: 320px 1fr; }
   .rail { display: none; }
 }
+/* Below 900px only the conversation survives. The centre pane is the second child;
+ * targeting it positionally avoids wrapping ContextView in a layout-only div. */
+@media (max-width: 900px) {
+  .console { grid-template-columns: 1fr; }
+  .console > :nth-child(2) { display: none; }
+}
+
+/* Command bar ----------------------------------------------------------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 9px 16px;
+  flex: 0 0 auto;
+}
+.brand {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+.brand h1 {
+  margin: 0;
+  font-family: var(--font-label);
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: 0.3em;
+  text-indent: 0.3em;      /* letter-spacing adds a trailing gap; balance it */
+  color: var(--text);
+}
+.brand .brand-sub {
+  font-family: var(--font-label);
+  font-size: 10.5px;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+@media (max-width: 1100px) { .brand .brand-sub { display: none; } }
+
+.bar-spacer { margin-left: auto; }
+
+/* What is actually loaded. Counts are mono and tabular — they are quantities to be
+ * read, and they change between deploys. */
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-left: 16px;
+  border-left: 1px solid var(--glass-line);
+  min-width: 0;
+}
+.status-txt {
+  font-size: 11.5px;
+  color: var(--text-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.status-txt b {
+  font-family: var(--font-rec);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+@media (max-width: 1280px) { .status { display: none; } }
+
+/* Who is signed in. Rank is the load-bearing fact — the console masks and scopes by
+ * it — so rank is what gets the brass, not the name. */
+.officer-chip {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 11px 5px 9px;
+  border: 1px solid var(--glass-line);
+  border-radius: 999px;
+  background: var(--tint);
+}
+.officer-chip .rank {
+  font-family: var(--font-label);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+}
+.officer-chip .who { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.officer-chip .ps {
+  font-family: var(--font-rec);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  padding-left: 9px;
+  border-left: 1px solid var(--glass-line);
+}
+@media (max-width: 1024px) { .officer-chip .who, .officer-chip .ps { display: none; } }
 
 .pane {
   display: flex;
@@ -104,72 +238,90 @@ body::before {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding: 14px 16px;
+  padding: 12px 15px;
   border-bottom: 1px solid var(--glass-line);
   flex: 0 0 auto;
 }
 .pane-title {
+  font-family: var(--font-label);
   font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.15em;
   text-transform: uppercase;
   color: var(--text-faint);
 }
-.pane-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 16px; }
-.pane-body::-webkit-scrollbar { width: 8px; }
+.pane-body { flex: 1 1 auto; overflow-y: auto; padding: 14px 15px; }
+.pane-body::-webkit-scrollbar { width: 9px; }
+.pane-body::-webkit-scrollbar-track { background: transparent; }
 .pane-body::-webkit-scrollbar-thumb {
-  background: rgba(23, 42, 82, 0.16);
-  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.11);
+  border-radius: 9px;
+  border: 2px solid transparent;
+  background-clip: content-box;
 }
+.pane-body::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.2); background-clip: content-box; }
 
 /* Chat ---------------------------------------------------------------- */
-.msg { margin-bottom: 16px; animation: rise 0.4s var(--ease) both; }
+.msg { margin-bottom: 20px; animation: rise 0.4s var(--ease) both; }
 @keyframes rise {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
 .msg-q {
-  align-self: flex-end;
-  background: var(--accent-soft);
-  border: 1px solid rgba(47, 111, 237, 0.28);
-  border-radius: 14px 14px 4px 14px;
+  margin: 0 0 10px 20px;
   padding: 10px 13px;
-  margin-left: 22px;
+  background: var(--tint-hi);
+  border: 1px solid var(--glass-line);
+  border-radius: 13px 13px 3px 13px;
   color: var(--text);
 }
 .msg-a {
-  border-radius: 14px 14px 14px 4px;
-  padding: 11px 13px;
-  margin-right: 12px;
-  background: var(--tint);
+  position: relative;
+  margin-right: 10px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.028);
   border: 1px solid var(--glass-line);
+  border-left: 2px solid var(--accent-line);
+  border-radius: 3px 13px 13px 3px;
   white-space: pre-wrap;
-  line-height: 1.62;
+  line-height: 1.66;
   color: var(--text);
 }
+/* A refusal is a feature here, not an error state: the engine declining to answer on
+ * thin evidence is the trustworthy path. It reads as a distinct, calm register. */
 .msg-a.refusal {
-  border-color: rgba(214, 68, 102, 0.4);
-  background: rgba(214, 68, 102, 0.06);
+  border-color: rgba(242, 85, 90, 0.3);
+  border-left-color: var(--sev-high);
+  background: rgba(242, 85, 90, 0.05);
+  color: var(--text-dim);
 }
 
+/* Citation chip — the smallest control in the console and the most important. */
 .cite {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  margin: 0 2px;
+  min-width: 19px;
+  height: 19px;
+  margin: 0 3px;
   padding: 0 5px;
+  font-family: var(--font-rec);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: 500;
   color: var(--accent);
   background: var(--accent-soft);
-  border: 1px solid rgba(47, 111, 237, 0.35);
-  border-radius: 6px;
+  border: 1px solid var(--accent-line);
+  border-radius: 5px;
   cursor: pointer;
-  transition: all 0.18s var(--ease);
+  vertical-align: baseline;
+  transition: background 0.18s var(--ease), color 0.18s var(--ease),
+              box-shadow 0.18s var(--ease);
 }
-.cite:hover { background: rgba(47, 111, 237, 0.2); transform: translateY(-1px); }
+.cite:hover, .cite.lit {
+  color: #14100a;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
 
 /* Composer ------------------------------------------------------------ */
 .composer {
@@ -177,7 +329,7 @@ body::before {
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  padding: 12px;
+  padding: 11px;
   border-top: 1px solid var(--glass-line);
 }
 .composer textarea {
@@ -192,13 +344,17 @@ body::before {
   border-radius: var(--radius-sm);
   font: inherit;
   outline: none;
-  transition: border-color 0.2s var(--ease);
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
-.composer textarea:focus { border-color: var(--glass-line-hi); }
+.composer textarea::placeholder { color: var(--text-faint); }
+.composer textarea:focus {
+  border-color: var(--accent-line);
+  background: var(--tint-hi);
+}
 
 .btn {
   padding: 10px 14px;
-  color: var(--text);
+  color: var(--text-dim);
   background: var(--tint);
   border: 1px solid var(--glass-line);
   border-radius: var(--radius-sm);
@@ -208,48 +364,50 @@ body::before {
   white-space: nowrap;
 }
 .btn:hover:not(:disabled) {
+  color: var(--text);
   background: var(--tint-hi);
   border-color: var(--glass-line-hi);
 }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.btn:disabled { opacity: 0.35; cursor: not-allowed; }
 .btn-accent {
-  color: #ffffff;
+  color: #14100a;
   background: var(--accent);
   border-color: transparent;
   font-weight: 600;
 }
-.btn-accent:hover:not(:disabled) { background: #1f5ede; }
+.btn-accent:hover:not(:disabled) { background: var(--accent-hi); color: #14100a; }
 .btn-rec {
   color: var(--sev-high);
-  border-color: rgba(214, 68, 102, 0.45);
-  background: rgba(214, 68, 102, 0.08);
+  border-color: rgba(242, 85, 90, 0.45);
+  background: rgba(242, 85, 90, 0.09);
   animation: pulse 1.4s infinite;
 }
 .mic-wave { flex: 1; min-height: 42px; border-radius: var(--radius-sm); background: var(--tint); }
 
 /* Reasoning trace ------------------------------------------------------ */
-.trace { margin: 8px 0 4px; }
+.trace { margin: 0 0 10px; }
 .trace-toggle {
   display: flex;
   align-items: center;
   gap: 7px;
+  font-family: var(--font-label);
   font-size: 11px;
+  letter-spacing: 0.05em;
   color: var(--text-faint);
   background: none;
   border: 0;
   padding: 3px 0;
   cursor: pointer;
-  font-family: inherit;
 }
 .trace-toggle:hover { color: var(--text-dim); }
 .trace-steps {
   margin-top: 8px;
-  padding-left: 11px;
+  padding-left: 12px;
   border-left: 1px solid var(--glass-line);
 }
 .trace-step {
   display: flex;
-  gap: 8px;
+  gap: 9px;
   align-items: baseline;
   padding: 4px 0;
   font-size: 12px;
@@ -262,55 +420,136 @@ body::before {
   flex: 0 0 auto;
   transform: translateY(-2px);
 }
-.trace-step .ms { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.trace-step .ms {
+  font-family: var(--font-rec);
+  font-size: 11px;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
 
 /* Evidence rail -------------------------------------------------------- */
 .ev {
+  position: relative;
   padding: 11px 12px;
   margin-bottom: 9px;
   background: var(--tint);
   border: 1px solid var(--glass-line);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  transition: all 0.2s var(--ease);
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease),
+              transform 0.2s var(--ease);
 }
 .ev:hover { border-color: var(--glass-line-hi); transform: translateY(-1px); }
-.ev.active { border-color: var(--accent); background: var(--accent-soft); }
-.ev-head {
-  display: flex; align-items: center; gap: 7px; margin-bottom: 5px;
+.ev.active, .ev.lit {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
 }
+/* The spine: the record end of the evidence thread. */
+.ev.active::before, .ev.lit::before {
+  content: "";
+  position: absolute;
+  left: -1px; top: -1px; bottom: -1px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 2px 0 0 2px;
+}
+.ev-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .ev-idx {
-  font-size: 10px; font-weight: 700; color: var(--accent);
-  background: var(--accent-soft); border-radius: 4px; padding: 1px 5px;
+  font-family: var(--font-rec);
+  font-size: 10px; font-weight: 500; color: var(--accent);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: 4px; padding: 0 5px;
 }
 .ev-type {
-  font-size: 9px; letter-spacing: 0.09em; text-transform: uppercase;
+  font-family: var(--font-label);
+  font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--text-faint);
 }
-.ev-body { font-size: 12px; line-height: 1.5; color: var(--text-dim); }
+.ev-body { font-size: 12.5px; line-height: 1.55; color: var(--text-dim); }
 .ev-src {
-  margin-top: 6px; padding-top: 6px;
+  margin-top: 8px; padding-top: 7px;
   border-top: 1px dashed var(--glass-line);
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-rec);
   font-size: 10px; color: var(--text-faint);
   word-break: break-all;
 }
 
-/* Confidence + severity chips ------------------------------------------ */
+/* Confidence + severity chips — always FILLED, so they never read as brass. */
 .chip {
   display: inline-flex; align-items: center; gap: 5px;
-  padding: 3px 8px; border-radius: 999px;
-  font-size: 10px; font-weight: 600; letter-spacing: 0.04em;
+  padding: 2px 8px; border-radius: 999px;
+  font-family: var(--font-rec);
+  font-size: 10px; font-weight: 500; letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
 }
-.chip-low  { color: var(--sev-low);  background: rgba(15, 157, 118, 0.12); }
-.chip-med  { color: var(--sev-med);  background: rgba(192, 125, 16, 0.13); }
-.chip-high { color: var(--sev-high); background: rgba(214, 68, 102, 0.12); }
+.chip-low  { color: var(--sev-low);  background: rgba(53, 192, 138, 0.14); }
+.chip-med  { color: var(--sev-med);  background: rgba(238, 139, 75, 0.15); }
+.chip-high { color: var(--sev-high); background: rgba(242, 85, 90, 0.15); }
+
+/* Evidence confidence — read the intuitive way round: strong is green, weak is red.
+ * It is deliberately NOT the severity ramp; routing it through severity made a
+ * 100%-confidence record render in the same crimson as a high-risk hotspot. */
+.chip-strong { color: var(--sev-low);  background: rgba(53, 192, 138, 0.14); }
+.chip-fair   { color: var(--sev-med);  background: rgba(238, 139, 75, 0.15); }
+.chip-weak   { color: var(--sev-high); background: rgba(242, 85, 90, 0.15); }
+
+/* Case status — a separate dimension from severity, so a separate treatment.
+ * Neutral by default; an open case carries a dot, which is the only thing about a
+ * status that changes what an officer does next. */
+.chip-stat {
+  color: var(--text-faint);
+  background: rgba(255, 255, 255, 0.055);
+}
+.chip-stat.open { color: var(--text-dim); }
+.chip-stat.open::before {
+  content: "";
+  width: 5px; height: 5px; border-radius: 50%;
+  background: var(--sev-med);
+  flex: 0 0 auto;
+}
+
+/* The evidence thread — the signature.
+ * Draws from a citation chip to the evidence card it came from, because "every claim
+ * traces to a record" is the product's whole argument and it should be visible, not
+ * merely asserted in prose. */
+/* width/height are explicit because <svg> is a replaced element: `inset: 0` positions
+ * it but does not stretch it, so it keeps its intrinsic 300x150 and silently clips
+ * every path that starts below 150px — which is all of them. */
+.thread-layer {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  z-index: 30;
+  pointer-events: none;
+  overflow: visible;
+}
+.thread-path {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 5px rgba(216, 166, 87, 0.55));
+  stroke-dasharray: var(--len);
+  stroke-dashoffset: var(--len);
+  animation: draw 0.5s var(--ease) forwards;
+}
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.thread-end { fill: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) {
+  .thread-path { animation: none; stroke-dashoffset: 0; }
+  .msg, .trace-step, .viz-fade, .toast { animation: none; }
+}
 
 /* Context view --------------------------------------------------------- */
 .viz { position: relative; width: 100%; height: 100%; min-height: 0; }
 .viz-empty {
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   height: 100%; gap: 10px; color: var(--text-faint); text-align: center; padding: 30px;
+  font-size: 13px;
 }
 .viz-fade { animation: fade 0.55s var(--ease) both; height: 100%; }
 @keyframes fade {
@@ -318,33 +557,57 @@ body::before {
   to   { opacity: 1; transform: none; }
 }
 
-.tabs { display: flex; gap: 6px; }
+.tabs { display: flex; gap: 5px; align-items: center; }
 .tab {
-  padding: 5px 11px; font-size: 11px; border-radius: 999px;
+  padding: 5px 11px;
+  font-family: var(--font-label);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+  border-radius: 999px;
   color: var(--text-faint);
-  background: transparent; border: 1px solid transparent;
-  cursor: pointer; font-family: inherit;
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
   transition: all 0.18s var(--ease);
 }
-.tab:hover { color: var(--text-dim); }
+.tab:hover:not(:disabled) { color: var(--text-dim); background: var(--tint); }
+.tab:disabled { opacity: 0.35; cursor: not-allowed; }
 .tab.on {
-  color: var(--text);
-  background: var(--tint-hi);
-  border-color: var(--glass-line);
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
 }
 
-/* Login ---------------------------------------------------------------- */
+/* Sign-in --------------------------------------------------------------- */
 .gate {
   display: flex; align-items: center; justify-content: center;
   height: 100vh; padding: 20px;
 }
-.gate-card { width: 100%; max-width: 400px; padding: 30px; }
-.gate h1 {
-  margin: 0 0 5px; font-size: 22px; letter-spacing: 0.16em; font-weight: 600;
+.gate-card {
+  width: 100%; max-width: 430px; padding: 32px 30px 26px;
+  animation: rise 0.5s var(--ease) both;
 }
-.gate .tag { margin: 0 0 22px; font-size: 12px; color: var(--text-faint); }
+.gate h1 {
+  margin: 0 0 6px;
+  font-family: var(--font-label);
+  font-size: 26px; font-weight: 700;
+  letter-spacing: 0.3em; text-indent: 0.3em;
+}
+.gate .tag {
+  margin: 0 0 4px;
+  font-family: var(--font-label);
+  font-size: 11px; letter-spacing: 0.13em; text-transform: uppercase;
+  color: var(--text-faint);
+}
+/* The thesis, on the first screen. */
+.gate .thesis {
+  margin: 18px 0 22px;
+  padding-left: 11px;
+  border-left: 2px solid var(--accent-line);
+  font-size: 13px; line-height: 1.6; color: var(--text-dim);
+}
 .officer-row {
-  display: flex; align-items: center; justify-content: space-between;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
   width: 100%; padding: 11px 13px; margin-bottom: 7px;
   background: var(--tint);
   border: 1px solid var(--glass-line);
@@ -352,21 +615,38 @@ body::before {
   cursor: pointer; color: var(--text); font: inherit; text-align: left;
   transition: all 0.18s var(--ease);
 }
-.officer-row:hover { border-color: var(--accent); background: var(--accent-soft); }
-.officer-row .role { font-weight: 600; }
-.officer-row .meta { font-size: 11px; color: var(--text-faint); }
+.officer-row:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+  transform: translateX(2px);
+}
+.officer-row:disabled { opacity: 0.5; cursor: wait; }
+.officer-row .role {
+  font-family: var(--font-label);
+  font-weight: 700; letter-spacing: 0.09em; color: var(--accent);
+}
+.officer-row .meta { font-size: 12px; color: var(--text-faint); }
+.officer-row .ps { font-family: var(--font-rec); font-size: 11px; color: var(--text-faint); }
+.gate-note {
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--glass-line);
+  font-size: 11.5px; line-height: 1.55; color: var(--text-faint);
+}
 
 .dot-live {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--sev-low);
-  box-shadow: 0 0 8px var(--sev-low);
+  box-shadow: 0 0 9px var(--sev-low);
   animation: pulse 2s infinite;
+  flex: 0 0 auto;
 }
+.dot-live.off { background: var(--sev-high); box-shadow: 0 0 9px var(--sev-high); }
 @keyframes pulse { 50% { opacity: 0.35; } }
 
 .spinner {
+  display: inline-block;
   width: 13px; height: 13px; border-radius: 50%;
-  border: 2px solid rgba(47, 111, 237, 0.2);
+  border: 2px solid rgba(216, 166, 87, 0.25);
   border-top-color: var(--accent);
   animation: spin 0.8s linear infinite;
 }
@@ -374,11 +654,27 @@ body::before {
 
 .maplibregl-ctrl-attrib, .maplibregl-ctrl-logo { display: none !important; }
 
+/* MapLibre ships a light control skin that glares against the ink basemap. */
+.maplibregl-ctrl-group {
+  background: rgba(18, 26, 33, 0.9) !important;
+  border: 1px solid var(--glass-line) !important;
+  border-radius: var(--radius-sm) !important;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45) !important;
+  overflow: hidden;
+}
+.maplibregl-ctrl-group button + button { border-top: 1px solid var(--glass-line) !important; }
+.maplibregl-ctrl-group button { background: transparent !important; }
+.maplibregl-ctrl-group button:hover { background: var(--tint-hi) !important; }
+/* The glyphs are inlined SVGs painted near-black; invert them rather than shipping
+ * replacement icons. */
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1) opacity(0.75); }
+.maplibregl-canvas { border-radius: var(--radius-sm); }
+
 /* Investigation Copilot overlay --------------------------------------- */
 .copilot-overlay {
   position: fixed; inset: 0; z-index: 40;
-  background: rgba(23, 42, 82, 0.28);
-  backdrop-filter: blur(4px);
+  background: rgba(3, 6, 9, 0.68);
+  backdrop-filter: blur(5px);
   display: flex; align-items: center; justify-content: center;
   padding: 30px;
   animation: fade 0.25s var(--ease) both;
@@ -389,36 +685,54 @@ body::before {
 }
 .copilot-section { margin-bottom: 22px; }
 .copilot-section h3 {
-  margin: 0 0 10px; font-size: 12px; letter-spacing: 0.08em; text-transform: uppercase;
+  margin: 0 0 10px;
+  font-family: var(--font-label);
+  font-size: 11px; letter-spacing: 0.13em; text-transform: uppercase;
   color: var(--text-faint);
 }
 .copilot-row {
-  display: flex; gap: 12px; padding: 7px 0; font-size: 13px;
+  display: flex; gap: 12px; padding: 8px 0; font-size: 13px; color: var(--text-dim);
   border-bottom: 1px dashed var(--glass-line);
 }
-.copilot-date { flex: 0 0 auto; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.copilot-date {
+  flex: 0 0 auto; font-family: var(--font-rec); font-size: 11.5px;
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
 .copilot-draft {
-  line-height: 1.7; font-size: 13px; color: var(--text-dim);
+  line-height: 1.72; font-size: 13px; color: var(--text-dim);
   background: var(--tint); border: 1px solid var(--glass-line);
-  border-radius: var(--radius-sm); padding: 12px;
+  border-left: 2px solid var(--accent-line);
+  border-radius: var(--radius-sm); padding: 13px;
 }
 .dim { color: var(--text-faint); font-size: 13px; }
 
 /* Alert toasts ---------------------------------------------------------- */
 .toast-stack {
-  position: fixed; right: 20px; bottom: 20px; z-index: 50;
-  display: flex; flex-direction: column; gap: 8px; width: 280px;
+  position: fixed; right: 18px; bottom: 18px; z-index: 50;
+  display: flex; flex-direction: column; gap: 8px; width: 290px;
 }
 .toast { padding: 11px 13px; animation: rise 0.35s var(--ease) both; }
-.toast-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; font-size: 12px; font-weight: 600; }
-.toast-body { font-size: 12px; color: var(--text-dim); }
-.toast-high { border-color: rgba(214, 68, 102, 0.4); }
+.toast-head {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 4px;
+  font-family: var(--font-label);
+  font-size: 12px; font-weight: 600; letter-spacing: 0.04em;
+}
+.toast-body { font-size: 12px; color: var(--text-dim); line-height: 1.5; }
+.toast-high { border-color: rgba(242, 85, 90, 0.42); }
 
 /* Chat intro — concrete, not a mission statement --------------------------- */
-.intro { padding: 6px 2px 0; line-height: 1.65; color: var(--text); }
-.intro p { margin: 0 0 12px; }
-.intro ul { margin: 0 0 14px; padding-left: 18px; color: var(--text-dim); }
-.intro li { margin-bottom: 6px; }
+.intro { padding: 4px 2px 0; line-height: 1.68; color: var(--text-dim); }
+.intro p { margin: 0 0 13px; }
+.intro strong { color: var(--text); font-weight: 600; }
+.intro ul { margin: 0 0 14px; padding: 0; list-style: none; }
+.intro li {
+  margin-bottom: 7px; padding-left: 13px; position: relative;
+  color: var(--text-dim); font-size: 13px;
+}
+.intro li::before {
+  content: ""; position: absolute; left: 0; top: 8px;
+  width: 4px; height: 4px; border-radius: 50%; background: var(--accent-line);
+}
 
 /* Case index ---------------------------------------------------------------- */
 .explorer { display: flex; flex-direction: column; gap: 12px; }
@@ -429,9 +743,15 @@ body::before {
   background: var(--tint); border: 1px solid var(--glass-line);
   border-radius: var(--radius-sm);
 }
-.stat-n { font-size: 22px; font-weight: 600; letter-spacing: -0.01em; }
+.stat-n {
+  font-family: var(--font-rec);
+  font-size: 21px; font-weight: 500; letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums; color: var(--text);
+}
 .stat-l {
-  margin-top: 2px; font-size: 10px; letter-spacing: 0.08em;
+  margin-top: 3px;
+  font-family: var(--font-label);
+  font-size: 10px; letter-spacing: 0.11em;
   text-transform: uppercase; color: var(--text-faint);
 }
 
@@ -440,17 +760,21 @@ body::before {
   color: var(--text); background: var(--tint);
   border: 1px solid var(--glass-line); border-radius: var(--radius-sm);
   font: inherit; outline: none;
-  transition: border-color 0.2s var(--ease);
+  transition: border-color 0.2s var(--ease), background 0.2s var(--ease);
 }
-.search:focus { border-color: var(--accent); }
+.search::placeholder { color: var(--text-faint); }
+.search:focus { border-color: var(--accent-line); background: var(--tint-hi); }
 
 .facets { display: flex; flex-wrap: wrap; gap: 6px; }
 .facets .tab { border-color: var(--glass-line); }
-.facet-n { margin-left: 5px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.facet-n {
+  margin-left: 6px; font-family: var(--font-rec); font-size: 10px;
+  color: var(--text-faint); font-variant-numeric: tabular-nums;
+}
 
 .case-grid {
   display: grid; gap: 10px;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(265px, 1fr));
 }
 .case {
   padding: 12px 13px;
@@ -460,16 +784,20 @@ body::before {
 }
 .case:hover { border-color: var(--glass-line-hi); transform: translateY(-1px); }
 .case-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.case-no {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  font-size: 11px; color: var(--text-dim);
-}
-.case-type { margin-top: 6px; font-weight: 600; }
-.case-meta { margin-top: 3px; font-size: 11px; color: var(--text-faint); }
+.case-no { font-family: var(--font-rec); font-size: 11px; color: var(--text-dim); }
+.case-type { margin-top: 7px; font-weight: 600; color: var(--text); }
+.case-meta { margin-top: 3px; font-size: 11.5px; color: var(--text-faint); }
 .case-mo {
   margin-top: 8px; font-size: 12px; line-height: 1.5; color: var(--text-dim);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden;
 }
 .case-acts { display: flex; gap: 6px; margin-top: 10px; }
-.btn-sm { padding: 6px 10px; font-size: 11px; border-radius: 9px; }
+.btn-sm { padding: 6px 10px; font-size: 11px; border-radius: 8px; }
+
+/* Keyboard access is not optional in a tool an officer uses all day. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 4px;
+}

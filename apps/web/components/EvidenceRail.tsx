@@ -1,6 +1,6 @@
 "use client";
 import type { EvidenceItem } from "@/lib/types";
-import { severityOf } from "@/lib/api";
+import { confidenceBand } from "@/lib/api";
 
 /** Every citation chip in the answer opens its evidence here. The rail shows the
  *  FULL content, not just the label — a citation you cannot inspect is a citation
@@ -25,7 +25,7 @@ export default function EvidenceRail({
   return (
     <>
       {evidence.map((e, i) => {
-        const sev = severityOf(e.confidence);
+        const band = confidenceBand(e.confidence);
         return (
           <div
             key={e.evidence_id}
@@ -36,7 +36,7 @@ export default function EvidenceRail({
             <div className="ev-head">
               <span className="ev-idx">{i + 1}</span>
               <span className="ev-type">{e.source_type.replace(/_/g, " ")}</span>
-              <span style={{ marginLeft: "auto" }} className={`chip chip-${sev}`}>
+              <span style={{ marginLeft: "auto" }} className={`chip chip-${band}`}>
                 {(e.confidence * 100).toFixed(0)}%
               </span>
             </div>

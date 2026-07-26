@@ -2,11 +2,13 @@
 import { useCallback, useMemo, useState } from "react";
 import AlertToasts from "@/components/AlertToasts";
 import ChatPane from "@/components/ChatPane";
+import CommandBar from "@/components/CommandBar";
 import ContextView from "@/components/ContextView";
 import Copilot from "@/components/Copilot";
 import EvidenceRail from "@/components/EvidenceRail";
+import EvidenceThread from "@/components/EvidenceThread";
 import LoginGate from "@/components/LoginGate";
-import { exportPdf, playBase64Audio, streamChat } from "@/lib/api";
+import { exportPdf, playBase64Audio, setToken, streamChat } from "@/lib/api";
 import type { Officer, Turn, Visualization } from "@/lib/types";
 
 export default function Console() {
@@ -80,46 +82,55 @@ export default function Console() {
   if (!officer) return <LoginGate onIn={setOfficer} />;
 
   return (
-    <main className="console">
-      <ChatPane
-        turns={turns}
-        busy={busy}
+    <div className="shell">
+      <CommandBar
+        officer={officer}
         language={language}
         onLanguage={setLanguage}
-        onSend={(query) => send({ query })}
-        onSendAudio={(audio) => send({ audio })}
         voiceOut={voiceOut}
         onVoiceOut={setVoiceOut}
-        onCite={revealEvidence}
         onExport={() => exportPdf(sessionId).catch(() => undefined)}
-        officer={officer}
+        canExport={turns.length > 0}
+        onSignOut={() => { setToken(null); setOfficer(null); setTurns([]); }}
       />
 
-      <ContextView
-        viz={viz}
-        onAsk={(query) => send({ query })}
-        onCopilot={setCopilotFir}
-      />
+      <main className="console">
+        <ChatPane
+          turns={turns}
+          busy={busy}
+          onSend={(query) => send({ query })}
+          onSendAudio={(audio) => send({ audio })}
+          onCite={revealEvidence}
+          activeEvidence={activeEvidence}
+        />
 
-      <div className="pane glass rail">
-        <div className="pane-head">
-          <span className="pane-title">Evidence</span>
-          {evidence.length > 0 && (
-            <span className="chip chip-low">{evidence.length} items</span>
-          )}
-        </div>
-        <div className="pane-body">
-          <EvidenceRail
-            evidence={evidence}
-            active={activeEvidence}
-            onSelect={setActiveEvidence}
-            onOpenCopilot={setCopilotFir}
-          />
-        </div>
-      </div>
+        <ContextView
+          viz={viz}
+          onAsk={(query) => send({ query })}
+          onCopilot={setCopilotFir}
+        />
 
+        <div className="pane glass rail">
+          <div className="pane-head">
+            <span className="pane-title">Evidence</span>
+            {evidence.length > 0 && (
+              <span className="chip chip-low">{evidence.length} cited</span>
+            )}
+          </div>
+          <div className="pane-body">
+            <EvidenceRail
+              evidence={evidence}
+              active={activeEvidence}
+              onSelect={setActiveEvidence}
+              onOpenCopilot={setCopilotFir}
+            />
+          </div>
+        </div>
+      </main>
+
+      <EvidenceThread evidenceId={activeEvidence} />
       <AlertToasts />
       {copilotFir && <Copilot firId={copilotFir} onClose={() => setCopilotFir(null)} />}
-    </main>
+    </div>
   );
 }

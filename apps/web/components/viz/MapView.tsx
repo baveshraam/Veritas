@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ramp, rgba, ACCENT } from "./palette";
+import { ramp, rgba, ACCENT, MAP_BG } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
 type Point = { lat: number; lng: number; fir_id: string };
@@ -27,7 +27,7 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
       style: style ?? {
         version: 8,
         sources: {},
-        layers: [{ id: "bg", type: "background", paint: { "background-color": "#e7ecf5" } }],
+        layers: [{ id: "bg", type: "background", paint: { "background-color": MAP_BG } }],
       },
       center: [76.6, 14.5],
       zoom: 5.6,

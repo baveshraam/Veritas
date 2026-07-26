@@ -5,14 +5,18 @@
  * of four charts that happen to sit on the same page — a "high" looks like a high
  * everywhere. */
 export const SEV = {
-  low: "#0f9d76",
-  med: "#c07d10",
-  high: "#d64466",
+  low: "#35c08a",
+  med: "#ee8b4b",
+  high: "#f2555a",
 } as const;
 
-export const ACCENT = "#2f6fed";
-export const GRID = "rgba(23,42,82,0.10)";
-export const TEXT_DIM = "#4c5a7a";
+export const ACCENT = "#d8a657";
+export const GRID = "rgba(255,255,255,0.07)";
+export const TEXT_DIM = "#9fb1be";
+export const TEXT_FAINT = "#63757f";
+/** The self-drawn basemap ground. Deliberately not a tile service: FIR coordinates
+ *  must never leave the network inside a third-party tile request URL. */
+export const MAP_BG = "#080d12";
 
 /** Map a 0-1 intensity onto the shared ramp. */
 export function ramp(t: number): string {
@@ -35,11 +39,14 @@ export function rgba(hex: string, alpha: number): string {
 
 export const CHART_BASE = {
   backgroundColor: "transparent",
-  textStyle: { color: TEXT_DIM, fontFamily: "ui-sans-serif, Inter, system-ui" },
+  textStyle: {
+    color: TEXT_DIM,
+    fontFamily: "var(--font-sans), ui-sans-serif, system-ui",
+  },
   tooltip: {
-    backgroundColor: "rgba(255,255,255,0.94)",
-    borderColor: "rgba(23,42,82,0.16)",
-    textStyle: { color: "#16203a", fontSize: 12 },
+    backgroundColor: "rgba(12,19,25,0.95)",
+    borderColor: "rgba(255,255,255,0.14)",
+    textStyle: { color: "#e9eff4", fontSize: 12 },
     extraCssText: "backdrop-filter: blur(10px); border-radius: 10px;",
   },
 } as const;

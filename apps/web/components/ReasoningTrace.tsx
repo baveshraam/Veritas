@@ -23,7 +23,7 @@ export default function ReasoningTrace({ trace, streaming }: { trace: TraceEntry
             <div className="trace-step" key={i} style={{ animationDelay: `${i * 45}ms` }}>
               <span className="dot" />
               <span>
-                <b style={{ color: "#c8d3ef", fontWeight: 600 }}>{t.step}</b>
+                <b style={{ color: "var(--text)", fontWeight: 600 }}>{t.step}</b>
                 {" — "}{t.detail}
               </span>
               {t.duration_ms != null && <span className="ms">{t.duration_ms}ms</span>}

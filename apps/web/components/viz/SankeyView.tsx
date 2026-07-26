@@ -1,6 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
-import { CHART_BASE, ramp, rgba } from "./palette";
+import { CHART_BASE, ACCENT, TEXT_DIM, ramp, rgba } from "./palette";
 
 /** Money-flow Sankey. Deliberately distinct from the criminal-network view: a
  *  transfer has direction and magnitude, which a force graph cannot show. */
@@ -24,12 +24,12 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
       nodeWidth: 12,
       nodeGap: 10,
       emphasis: { focus: "adjacency" },
-      label: { color: "#c8d3ef", fontSize: 10, formatter: (p: any) => short(p.name) },
+      label: { color: TEXT_DIM, fontSize: 10, formatter: (p: any) => short(p.name) },
       lineStyle: { curveness: 0.5 },
       itemStyle: { borderWidth: 0 },
       data: (data.nodes ?? []).map((n) => ({
         name: n.name,
-        itemStyle: { color: rgba("#2f6fed", 0.6) },
+        itemStyle: { color: rgba(ACCENT, 0.6) },
       })),
       links: links.map((l) => ({
         ...l,
