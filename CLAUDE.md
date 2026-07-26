@@ -657,3 +657,30 @@ volume justifies the training cost.
     number refuses; RBAC holds (IO 81 cases / 1 station, DSP+ 500 / 76); Kannada round-trips
     (`ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?` → CRIME_SEARCH, 5 citations); map and forecast
     both render.
+- **v11 — the map and the forecast died on the shortest question anyone would ask.**
+  - **A hotspot or forecast question that names no district raised, and the turn was lost.**
+    `_district_code()` falls back to the busiest district when the question names none;
+    `crime_counts_by_district()` returned `district_code = str(DistrictID)` — `"5"` — while
+    every consumer beneath it parses a code as `int(code[2:])`. So `int('')`, and *"The
+    investigation engine failed on this query"*. Measured live: `Show me crime hotspots`,
+    `Show hotspots`, `Show me the hotspot map`, `Where are the crime hotspots?`,
+    `Forecast crime` and `What are the crime trends?` **all** raised, while *"theft hotspots
+    in Bengaluru Urban"* worked — the named path goes through `canonical_code()` and never
+    touches the fallback. A demo script written from working examples cannot find this; only
+    typing the *lazier* question does. Fixed at the producer — it is the sole caller of that
+    field, and everything below it already agreed on `KAnn`. **200 → 201 tests.**
+  - **The console was discarding the diagnosis.** The API has always sent `detail` (exception
+    type and message) on an `error` frame; `lib/api.ts` threw away everything but `message`,
+    so the console reported that something had failed and nothing about what — the one fact
+    the officer could already see.
+  - **Not a bug, worth knowing before a demo**: `Show me the co-offender network` and
+    `Show me the money trail` return zero citations and no visualization. That is the CRAG
+    evaluator refusing correctly — neither question names a subject to traverse from, and
+    picking one would be invention. Name the person (`Who are the associates of Usha Naika?`
+    → 41 nodes, 12 citations) and the graph renders.
+  - **Deploy notes that cost time**: the admin API is on the **India** DC
+    (`api.catalyst.zoho.in`, not `.com`) and the header is `ENVIRONMENT: Development` —
+    `DEVELOPMENT` and `development` are both rejected with `Invalid input value for Env Name`.
+  - **Verified live after deploy**, all nine: bare hotspot → map/600 points/9 citations, bare
+    forecast → trend/30 points/6 citations, named hotspot, network, refusal, real FIR, Kannada.
+    Console redeployed; all 7 assets 200 and the new error handling is in the served bundle.
