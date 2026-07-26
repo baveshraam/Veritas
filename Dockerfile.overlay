@@ -1,0 +1,33 @@
+# The deploy image: the published base, plus the current source tree.
+#
+# WHY THIS EXISTS, and why it is not a shortcut:
+#
+# The v8 runtime image was never produced by `docker build -f Dockerfile .`. Building
+# from the Dockerfile pulls model weights from huggingface.co at build time, which
+# stalled for hours on rate limits, and the resulting image was far over AppSail's
+# ~1.3GB bundle-sandbox ceiling. The image that actually runs was built by patching
+# inside the container and moving the weights out to Catalyst File Store — see
+# CONTEXT.md, "DEPLOY PIPELINE". `Dockerfile` documents how the dependency set was
+# originally assembled; it is not the file that builds what ships.
+#
+# Since the dependency set only changes when a pyproject does, a source-only change
+# is exactly one layer over the published base. That is this file.
+#
+# It also sidesteps a live break: a clean `docker build -f Dockerfile .` currently
+# dies in pip's resolver (ResolutionTooDeep: 200000). Nothing in the dependency set
+# moved — the same Dockerfile built 10 days earlier — so a newly published release
+# widened the search space. The fix belongs in constraints.txt, tracked separately.
+#
+# WHEN A DEPENDENCY CHANGES this file is not enough: rebuild the base properly, keep
+# the weights out of the image, and republish it.
+#
+# Verify before relying on it — the base must already contain the current deps:
+#   git log --oneline -- '*/pyproject.toml' constraints.txt
+FROM baveshraam/veritas-api:latest
+
+# Everything pip-installed non-editable, so the packages live in site-packages.
+COPY packages/rag_agent/rag_agent /usr/local/lib/python3.11/site-packages/rag_agent
+COPY packages/policy/policy      /usr/local/lib/python3.11/site-packages/policy
+COPY packages/ml_models/ml_models /usr/local/lib/python3.11/site-packages/ml_models
+COPY data/data                   /usr/local/lib/python3.11/site-packages/data
+COPY apps/api/api                /usr/local/lib/python3.11/site-packages/api

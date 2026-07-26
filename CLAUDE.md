@@ -597,3 +597,42 @@ volume justifies the training cost.
   - **Verified live, not assumed**: all 7 referenced assets return 200, and the full console
     flow — officers → token → `/cases` → `/chat` with cited evidence — was driven end to end
     against the deployed URLs.
+- **v10 — the console people actually see, and the bug the demo would have hit first.**
+  - **The 18-digit FIR number was never recognised.** `sql_agent.fir_by_number()` has always
+    taken the 18-digit `CrimeNo` — its docstring says so, it is what the generator writes and
+    the case index renders — but the `FIR_LOOKUP` branch only matched the short `0112/2026`
+    form. Every query carrying a real FIR number skipped the exact lookup and was answered by
+    semantic search. Measured live: *"What is the status of FIR 100222201202600022?"* — a Hurt
+    case in Mandya — returned five **cyber-crime cases in Shivamogga**, cited and confident.
+    That is precisely what the console's own *Ask about this case* button sends. `FIR_NUMBER_RE`
+    now matches both forms, floored at 12 digits so "the last 30 days" and "2026" can never be
+    read as a record identifier.
+  - **A named FIR that does not exist is now refused.** A record identifier is a yes/no claim
+    about one row, and retrieval will always return *something* — the nearest narratives it can
+    find, which are records about a different crime. Confidence cannot rescue that case, so the
+    evaluator REJECTs on a missed exact lookup (`exact_lookup_missed`). The refusal path was
+    working as documented; it simply had no way to know a lookup had missed. **189 → 196 tests.**
+  - **Console redesign — "Registry".** Ink ground, brass accent taken from the KSP uniform, IBM
+    Plex in three roles (condensed for official labels, sans for prose, mono for record
+    identifiers). Fonts resolve at build time into the export, so the page still makes no
+    third-party request. Signature element: the **evidence thread** — selecting a citation draws
+    a line from the claim to the record it rests on, which is the one argument the console had
+    only ever asserted in prose.
+  - **Three colour bugs, one category error**: a non-severity dimension borrowing the severity
+    ramp. Evidence *confidence* ran through `severityOf()`, so a 100%-confidence record rendered
+    in the crimson of a high-risk hotspot — the strongest evidence looked the most alarming.
+    Case *status* did the same, making "Under Investigation" read as an alarm. Both now have
+    their own scales. The map basemap, network labels, chart axes and the MapLibre zoom control
+    were still light-theme; the network labels were near-black on near-black.
+  - **Sign-in cannot hang.** The roster request is bounded and every outcome renders something
+    actionable; on failure the gate falls back to unverified rank buttons so the console still
+    opens. `?as=DSP` signs straight in at a rank, making the RBAC contrast a link.
+  - **`scripts/deploy-console.sh`** replaces the copy-paste deploy and asserts the two
+    build-time invariants that shipped a blank page in v9: `/app`-prefixed assets, non-localhost
+    API URL.
+  - **Known issue — a clean `docker build .` fails** in pip's resolver
+    (`ResolutionTooDeep: 200000`). The dependency set has not changed and the same Dockerfile
+    built 10 days earlier, so a newly published release widened the search space; the fix
+    belongs in `constraints.txt`. The v10 API image was produced as a source-only layer over the
+    last good image, which is exact here because `git` shows no change to `packages/`,
+    `apps/api` or `data/` since that image other than the `rag_agent` fix itself.

@@ -19,7 +19,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Pull image from Docker Hub and save to tar
+      - name: Build the deploy image and save to tar
+        # The runner applies Dockerfile.overlay — the published base plus THIS commit's
+        # source — so a source-only change never needs a `docker push` from a developer
+        # machine. The base is public, so the pull needs no credentials. See
+        # Dockerfile.overlay for when the base itself must be rebuilt instead.
+        #
         # Plain docker save (uncompressed layers), deliberately: the bundle creator
         # extracts uncompressed layers straight into the rootfs, so peak scratch usage is
         # exactly tar + blobs + rootfs = 3x the image. Gzip layers are WORSE there — they
@@ -27,7 +32,10 @@ jobs:
         # is kept ≤1.7GB so three copies fit the ~5GB sandbox (measured empirically).
         run: |
           docker pull baveshraam/veritas-api:latest
-          docker save baveshraam/veritas-api:latest -o "$RUNNER_TEMP/veritas.tar"
+          docker build -f Dockerfile.overlay -t baveshraam/veritas-api:deploy .
+          docker run --rm --entrypoint python baveshraam/veritas-api:deploy \
+            -c "import api.main, rag_agent.orchestrator, ml_models, policy, data; print('imports OK')"
+          docker save baveshraam/veritas-api:deploy -o "$RUNNER_TEMP/veritas.tar"
           ls -la "$RUNNER_TEMP/veritas.tar"
       - name: Upload tar to Catalyst signed URL
         run: |
