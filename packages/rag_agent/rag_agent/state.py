@@ -67,6 +67,9 @@ class InvestigationState(BaseModel):
 
     confidence_score: float = 0.0
     requires_escalation: bool = False
+    # Set when the query named a specific record (a FIR number) that the store does
+    # not hold. Semantic neighbours of a nonexistent FIR are not evidence about it.
+    exact_lookup_missed: bool = False
     agent_trace: list[AgentTraceEntry] = Field(default_factory=list)
 
     # Internal routing (not part of the API surface).

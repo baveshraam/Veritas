@@ -54,9 +54,22 @@ def score_batch(evidence: list[EvidenceItem]) -> float:
     return min(1.0, best + corroboration)
 
 
-def evaluate(evidence: list[EvidenceItem], attempts: int) -> tuple[Verdict, float, str]:
-    """Returns (verdict, confidence, plain-language detail for the trace)."""
+def evaluate(evidence: list[EvidenceItem], attempts: int,
+             exact_lookup_missed: bool = False) -> tuple[Verdict, float, str]:
+    """Returns (verdict, confidence, plain-language detail for the trace).
+
+    `exact_lookup_missed` is set when the query named a specific record — a FIR
+    number — that the store does not hold. That is a different situation from weak
+    evidence, and confidence cannot rescue it: retrieval will happily return the
+    nearest narratives it can find, and those are records about something else. A
+    named identifier is a yes/no claim about one row, so a miss is a refusal
+    regardless of how confident the neighbourhood looks.
+    """
     confidence = score_batch(evidence)
+
+    if exact_lookup_missed:
+        return ("REJECT", 0.0,
+                "The FIR number in the query matches no record within policy scope")
 
     if len(evidence) < MIN_ITEMS:
         if attempts < 1:

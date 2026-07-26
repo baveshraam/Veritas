@@ -180,3 +180,48 @@ def test_no_catalyst_credential_means_no_llm(monkeypatch):
 
     with pytest.raises(llm.LLMUnavailable):
         llm.generate("hello")
+
+
+# --- Exact FIR lookup: the number on the paper FIR --------------------------
+#
+# fir_by_number() has always taken the 18-digit CrimeNo — its docstring says so, and
+# that is the number the generator writes and the case index renders. But the branch
+# that calls it only recognised the "0112/2026" short form, so every query carrying a
+# real FIR number fell through to semantic search. Asking for a Hurt case in Mandya
+# returned cyber-crime cases in Shivamogga, cited and confident. The console's own
+# "Ask about this case" button sends exactly this format.
+
+from rag_agent.orchestrator import FIR_NUMBER_RE
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("What is the status of FIR 100222201202600022?", "100222201202600022"),
+    ("what is the status of fir 0112/2026", "0112/2026"),
+    ("Tell me about FIR 100121201202600041.", "100121201202600041"),
+    ("status of FIR 123/2024?", "123/2024"),
+])
+def test_both_fir_number_forms_are_recognised(query, expected):
+    m = FIR_NUMBER_RE.search(query)
+    assert m is not None, f"no FIR number found in {query!r}"
+    assert m.group(1) == expected
+
+
+def test_a_bare_year_is_not_mistaken_for_a_fir_number():
+    """Guards the long-form branch: it must not fire on ordinary numbers."""
+    assert FIR_NUMBER_RE.search("How many thefts in 2026?") is None
+    assert FIR_NUMBER_RE.search("Show me the last 30 days") is None
+
+
+def test_naming_a_fir_that_does_not_exist_is_refused():
+    """A named identifier is a claim about a specific record, and it is either in the
+    store or it is not. Semantic neighbours of a nonexistent FIR are not evidence
+    about it — answering from them is the fabrication the evaluator exists to stop."""
+    verdict, conf, detail = evaluate([_ev(0.6), _ev(0.55)], attempts=1,
+                                     exact_lookup_missed=True)
+    assert verdict == "REJECT"
+    assert conf == 0.0
+
+
+def test_a_fir_that_does_exist_still_answers():
+    verdict, _, _ = evaluate([_ev(0.9)], attempts=1, exact_lookup_missed=False)
+    assert verdict == "ACCEPT"

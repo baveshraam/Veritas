@@ -23,6 +23,19 @@ from .evidence.evaluator import NOT_FOUND_MESSAGE, evaluate
 from .retrieval import hipporag, tog
 from .state import AgentTraceEntry, EvidenceItem, InvestigationState
 
+# The two forms a FIR number takes in this system.
+#
+#   100222201202600022  the 18-digit CrimeNo the generator writes, the case index
+#                       renders, and fir_by_number() has always queried
+#   0112/2026           the short serial/year form officers also write by hand
+#
+# Only the short form was matched before, so every query carrying a real FIR number
+# skipped the exact lookup entirely and was answered by semantic search — asking for
+# a Hurt case in Mandya returned cyber-crime cases in Shivamogga. The long form is
+# floored at 12 digits so ordinary numbers in a question ("the last 30 days", "2026")
+# can never be mistaken for a record identifier.
+FIR_NUMBER_RE = re.compile(r"\b(\d{3,4}/\d{4}|\d{12,20})\b")
+
 TOG_CONFIDENCE_FLOOR = 0.55      # below this, HippoRAG alone isn't trusted
 _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
 
@@ -238,9 +251,12 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         # The classifier has always had this intent; the branch was missing, so
         # "what is the status of FIR 0112/2026" fell through to semantic search and
         # got refused — an exact-ID lookup answered by the wrong retriever.
-        m = re.search(r"\b(\d{3,4}/\d{4})\b", state.original_query or "")
+        m = FIR_NUMBER_RE.search(state.original_query or "")
         if m:
             rows = sql_agent.fir_by_number(m.group(1), role, ps)
+            # A named FIR that returns nothing must not be answered from semantic
+            # neighbours — see FIR_NUMBER_RE and node_evaluate.
+            state.exact_lookup_missed = not rows
             state.sql_query_results += rows
             out += [EvidenceItem(
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
@@ -355,7 +371,8 @@ def _dedupe(items: list[EvidenceItem]) -> list[EvidenceItem]:
 
 def node_evaluate(state: InvestigationState) -> InvestigationState:
     t0 = time.perf_counter()
-    verdict, confidence, detail = evaluate(state.evidence_items, state.retrieval_attempts - 1)
+    verdict, confidence, detail = evaluate(state.evidence_items, state.retrieval_attempts - 1,
+                                           state.exact_lookup_missed)
     state.confidence_score = confidence
     state.requires_escalation = verdict == "REJECT"
     _trace(state, "Evidence Evaluator (CRAG)", detail, t0, confidence)
@@ -437,7 +454,8 @@ def node_voice_out(state: InvestigationState) -> InvestigationState:
 
 def _after_evaluate(state: InvestigationState) -> str:
     """CRAG's conditional edge — the reason a weak batch can't reach synthesis."""
-    verdict, _, _ = evaluate(state.evidence_items, state.retrieval_attempts - 1)
+    verdict, _, _ = evaluate(state.evidence_items, state.retrieval_attempts - 1,
+                             state.exact_lookup_missed)
     return "retrieve" if verdict == "REFINE" else "synthesize"
 
 
