@@ -12,7 +12,7 @@ handed the evidence list — it has no other input.
 import re
 import time
 
-from data import upsert_session_focus
+from data import ds, upsert_session_focus
 
 from . import intents
 from .agents import (
@@ -262,10 +262,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
                 source_id=str(r["fir_id"]),
                 source_query="SELECT ... FROM fir WHERE fir_number = :n",
-                content=(f"FIR {r['fir_number']} ({r['district']}, {r['ps_code']}) — "
-                         f"{r['crime_type']}, IPC {', '.join(r['ipc_sections'] or [])}, "
-                         f"filed {r['date_filed']:%d %b %Y}, status {r['case_status']}. "
-                         f"MO: {r['modus_operandi'] or 'not recorded'}."),
+                content=_fir_content(r),
                 confidence=0.97) for r in rows]
             state.active_entities.active_fir = rows[0]["fir_id"] if rows else \
                 state.active_entities.active_fir
@@ -339,14 +336,36 @@ def _district_code(state: InvestigationState) -> str | None:
     return rows[0]["district_code"] if rows else None
 
 
+def _fir_date(value) -> str:
+    """Live Data Store returns every column as a string (CONTEXT.md), so a date spec
+    applied straight to the value raises. ds.to_dt() is the shared coercion; a row
+    with no date still has to render, because the record identifier is the point."""
+    dt = ds.to_dt(value)
+    return f"{dt:%d %b %Y}" if dt else "date not recorded"
+
+
+def _fir_content(r: dict) -> str:
+    """One FIR, as a sentence — built ONLY from keys sql_agent._case() returns.
+
+    It previously reached for 'ipc_sections' and 'modus_operandi', which that mapping
+    has never produced. The code never ran, because the branch calling it was
+    unreachable until the 18-digit FIR number was recognised."""
+    where = ", ".join(x for x in (r.get("district"), f"PS {r['ps_code']}" if r.get("ps_code") else None) if x)
+    text = (f"FIR {r['fir_number']}" + (f" ({where})" if where else "")
+            + f" — {r.get('crime_type') or 'crime type not recorded'}, "
+              f"filed {_fir_date(r.get('date_filed'))}, "
+              f"status {r.get('case_status') or 'not recorded'}.")
+    if r.get("narrative"):
+        text += f" {r['narrative']}"
+    return text
+
+
 def _fir_evidence(r: dict) -> EvidenceItem:
     return EvidenceItem(
         evidence_id=f"fir:{r['fir_id']}", source_type="CRIMINAL_RECORD",
         source_id=str(r["fir_id"]),
         source_query="SELECT ... FROM criminal_record JOIN fir",
-        content=(f"FIR {r['fir_number']} ({r['district']}) — {r['crime_type']}, "
-                 f"filed {r['date_filed']:%d %b %Y}, status {r['case_status']}"
-                 + (f", convicted" if r.get("conviction") else "")),
+        content=_fir_content(r) + (" Convicted." if r.get("conviction") else ""),
         confidence=0.95)
 
 

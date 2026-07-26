@@ -225,3 +225,44 @@ def test_naming_a_fir_that_does_not_exist_is_refused():
 def test_a_fir_that_does_exist_still_answers():
     verdict, _, _ = evaluate([_ev(0.9)], attempts=1, exact_lookup_missed=False)
     assert verdict == "ACCEPT"
+
+
+# --- FIR evidence formatting ------------------------------------------------
+#
+# The FIR_LOOKUP branch built its evidence string from three keys sql_agent._case()
+# has never returned — 'ipc_sections', 'modus_operandi' — and formatted date_filed
+# with a date spec. None of it had ever run: the branch was unreachable until the
+# 18-digit number was recognised, so fixing the regex turned a dead branch into a
+# KeyError on every FIR lookup. Live Data Store also returns dates as strings, which
+# is why ds.to_dt() exists and why '%d %b %Y' applied straight to the value is wrong.
+
+from rag_agent.orchestrator import _fir_content
+
+
+def _row(**over):
+    r = {"fir_id": "1", "fir_number": "100222201202600022", "district": "Mandya",
+         "ps_code": "2201", "crime_type": "Hurt", "date_filed": "2026-06-30",
+         "case_status": "Under Investigation", "narrative": "A brief fact."}
+    r.update(over)
+    return r
+
+
+def test_fir_content_uses_only_keys_the_row_actually_has():
+    text = _fir_content(_row())
+    assert "100222201202600022" in text
+    assert "Mandya" in text and "Hurt" in text and "Under Investigation" in text
+
+
+def test_fir_content_accepts_a_string_date_from_live_datastore():
+    """Live Data Store returns every value as a string — see CONTEXT.md."""
+    assert "30 Jun 2026" in _fir_content(_row(date_filed="2026-06-30"))
+
+
+def test_fir_content_accepts_a_real_date_too():
+    from datetime import date
+    assert "30 Jun 2026" in _fir_content(_row(date_filed=date(2026, 6, 30)))
+
+
+def test_fir_content_survives_a_missing_date():
+    text = _fir_content(_row(date_filed=None))
+    assert "100222201202600022" in text      # no crash, still identifies the record
