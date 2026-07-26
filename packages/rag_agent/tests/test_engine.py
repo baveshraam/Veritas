@@ -266,3 +266,23 @@ def test_fir_content_accepts_a_real_date_too():
 def test_fir_content_survives_a_missing_date():
     text = _fir_content(_row(date_filed=None))
     assert "100222201202600022" in text      # no crash, still identifies the record
+
+
+# --- district code contract --------------------------------------------------
+
+def test_district_fallback_emits_a_code_the_models_can_parse(monkeypatch):
+    """`_district_code()` falls back to the busiest district when the question names
+    none ("show me crime hotspots"). Everything downstream parses the code with
+    `int(code[2:])`, so a raw DistrictID -- "5" -- made int('') raise and the whole
+    turn failed. The fallback must speak the same KAnn dialect as canonical_code().
+    """
+    from data import queries
+    from rag_agent.agents import sql_agent
+
+    monkeypatch.setattr(sql_agent.ds, "query",
+                        lambda *a, **k: [{"DistrictID": "5", "DistrictName": "Bengaluru Urban"}])
+    monkeypatch.setattr(sql_agent.queries, "case_counts_by_district", lambda: {"5": 900})
+
+    code = sql_agent.crime_counts_by_district(limit=1)[0]["district_code"]
+    assert code == "KA05"
+    assert queries.district_id(code) == 5

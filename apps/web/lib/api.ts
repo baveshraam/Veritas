@@ -116,7 +116,11 @@ export async function streamChat(
       else if (evt.type === "audio") onAudio?.(evt.data as string);
       // The engine failed. Surface it: an ignored error event leaves the console
       // spinning on keep-alive pings with no answer and no explanation.
-      else if (evt.type === "error") throw new Error(evt.message ?? "Investigation failed");
+      // The API sends `detail` (the exception type and message) alongside `message`.
+      // Dropping it left the console reporting only that something failed, which is
+      // the one thing the officer could already see.
+      else if (evt.type === "error")
+        throw new Error([evt.message ?? "Investigation failed", evt.detail].filter(Boolean).join(" — "));
     }
   }
 }

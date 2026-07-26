@@ -150,7 +150,10 @@ def crime_counts_by_district(limit: int = 10) -> list[dict]:
              for r in ds.query('SELECT "DistrictID", "DistrictName" FROM "District"')}
     counts = queries.case_counts_by_district()
     ranked = sorted(counts.items(), key=lambda kv: -kv[1])[:limit]
-    return [{"district": names.get(did, str(did)), "district_code": str(did),
+    # The ER stores an integer DistrictID; every caller above this layer — and every
+    # model behind it — speaks the canonical KAnn code, which they parse with
+    # int(code[2:]). Emitting the raw id here made that int('') and failed the turn.
+    return [{"district": names.get(did, str(did)), "district_code": f"KA{int(did):02d}",
              "fir_count": n} for did, n in ranked]
 
 
