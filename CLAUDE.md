@@ -577,3 +577,23 @@ volume justifies the training cost.
   - **Live health, verified**: `llm=quickml(glm-4.7-flash) · datastore=catalyst · firs=10000 ·
     graph 16,918n/87,120e · vectors 13,835 docs · cache=catalyst`. All 6 roles resolve; `/chat`
     streams the LangGraph trace; 189 tests green.
+- **v9 (the console actually loads) — two build-time bugs that made a healthy stack look dead.**
+  The API was live and correct the whole time; the *hosted console* was blank, and both causes
+  were baked into the static export rather than being runtime faults.
+  - **Catalyst serves the client from `/app/`, not the domain root.** Next's default
+    root-relative `/_next/...` asset URLs therefore 404'd — every chunk and the stylesheet. With
+    no JS there is no hydration, so the page froze on its prerendered "Loading officers…" shell.
+    Fixed with `assetPrefix: "/app"` in `next.config.mjs`. This is invisible locally, where
+    `next dev` and `next start` both serve from `/`.
+  - **`NEXT_PUBLIC_API_URL` was unset at build time**, so the export fell back to the
+    `http://localhost:8000` default and shipped it to users — each visitor's browser called its
+    own machine. **The committed default in `next.config.mjs` is now the deployed API URL**, and
+    localhost is the opt-in (`.env.local`). A static export resolves env vars at build time with
+    no runtime left to correct them, and `.env.*` is gitignored — so a default that is only right
+    when someone remembers to set a variable is a bug waiting to recur on the next clean clone.
+    A wrong default is invisible in dev and fatal in production; production wins the default.
+  - **CORS was already correct** and needed no change; the API had been returning 200 on
+    `/health`, `/auth/officers`, `/auth/token`, `/cases` and `/chat` throughout.
+  - **Verified live, not assumed**: all 7 referenced assets return 200, and the full console
+    flow — officers → token → `/cases` → `/chat` with cited evidence — was driven end to end
+    against the deployed URLs.
