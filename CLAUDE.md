@@ -630,9 +630,30 @@ volume justifies the training cost.
   - **`scripts/deploy-console.sh`** replaces the copy-paste deploy and asserts the two
     build-time invariants that shipped a blank page in v9: `/app`-prefixed assets, non-localhost
     API URL.
-  - **Known issue — a clean `docker build .` fails** in pip's resolver
-    (`ResolutionTooDeep: 200000`). The dependency set has not changed and the same Dockerfile
-    built 10 days earlier, so a newly published release widened the search space; the fix
-    belongs in `constraints.txt`. The v10 API image was produced as a source-only layer over the
-    last good image, which is exact here because `git` shows no change to `packages/`,
-    `apps/api` or `data/` since that image other than the `rag_agent` fix itself.
+  - **The FIR branch had never executed, so its bugs had never been wrong out loud.** Making it
+    reachable immediately raised `KeyError: 'ipc_sections'`: it built its evidence string from
+    keys `sql_agent._case()` has never returned (`ipc_sections`, `modus_operandi`) and formatted
+    `date_filed` with a date spec, which also breaks because live Data Store returns every
+    column as a string. `_fir_content()` now builds from the real keys and routes the date
+    through `ds.to_dt()`. Worth recording that the engine behaved correctly while broken — the
+    failure surfaced as *"Nothing was answered — no partial or unsourced result is being
+    shown"*, not as a half-built citation. **196 → 200 tests.**
+  - **Deploys no longer need a `docker push` from a developer machine.** `Dockerfile.overlay` is
+    the published base plus the current source tree, and `relay-deploy.yml` builds it *on the
+    runner* (the base is public, so the pull needs no credentials), smoke-tests that the app
+    imports, and uploads that. This also documents what the root `Dockerfile` no longer does:
+    the running image was never built from it — weights moved to File Store and the build was
+    patched inside the container to fit the ~1.3GB sandbox. When a `pyproject` changes, the base
+    must be rebuilt properly; the overlay is not enough.
+  - **Re-confirmed from `CONTEXT.md`, the hard way**: `catalyst deploy --only appsail` hangs
+    silently (and defaults to memory=256) — use the raw `upsert`; and a local upload of the tar
+    still loses to the signed URL's 30-minute TTL, even at 898MB on this uplink.
+  - **Known issue — a clean `docker build -f Dockerfile .` fails** in pip's resolver
+    (`ResolutionTooDeep: 200000`) after ~25 minutes. The dependency set has not changed and the
+    same Dockerfile built 10 days earlier, so a newly published release widened the search
+    space. The fix belongs in `constraints.txt` and is not yet done.
+  - **Verified live end to end**: *"What is the status of FIR 100222201202600022?"* now returns
+    that FIR (Mandya, PS 2201, Hurt, filed 30 Jun 2026) at confidence 0.97; a nonexistent FIR
+    number refuses; RBAC holds (IO 81 cases / 1 station, DSP+ 500 / 76); Kannada round-trips
+    (`ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?` → CRIME_SEARCH, 5 citations); map and forecast
+    both render.

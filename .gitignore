@@ -46,3 +46,7 @@ client/
 .env*
 
 .build.log
+
+# transient deploy artefacts
+.objkey
+.appsail-deploy.log
