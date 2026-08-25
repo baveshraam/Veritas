@@ -231,3 +231,84 @@ def test_the_alerts_websocket_refuses_an_unauthenticated_client(client, dataset)
         with client.websocket_connect("/alerts") as ws:
             ws.send_text("not-a-real-token")
             ws.receive_json()
+
+
+# --- BUG-024: /jobs/refresh must not block the request on a multi-minute job -------
+#
+# Measured live: at the dataset's real size, POST /jobs/refresh consistently 500'd
+# around 15-16s. Timed the GDS algorithms alone at production scale locally (179s for
+# pivot-sampled betweenness at the full graph's reported size; 8.23s at the more
+# accurate co-offending-projection scale the code actually runs on) -- inconclusive on
+# which step dominates, but conclusive that none of this belongs inside a synchronous
+# HTTP handler. Cron only needs the trigger call to succeed.
+
+def test_refresh_returns_immediately_instead_of_blocking_on_the_recompute(
+        client, officers, monkeypatch):
+    import time
+
+    from api.routers import jobs as jobs_router
+
+    started = {"gds": False, "graph": False, "reindex": False}
+    release = threading_event = __import__("threading").Event()
+
+    def slow_gds():
+        threading_event.wait(timeout=2)   # stands in for a multi-minute computation
+        started["gds"] = True
+        return {"nodes": 1}
+
+    monkeypatch.setattr("data.gds.run_all", slow_gds)
+    monkeypatch.setattr("data.graph.publish_graph", lambda: started.__setitem__("graph", True) or True)
+    monkeypatch.setattr("data.embeddings.index_job.run_all",
+                        lambda: started.__setitem__("reindex", True) or {"docs": 1})
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_refresh_running", False)
+
+    t0 = time.monotonic()
+    r = client.post("/jobs/refresh", headers={"X-Veritas-Job-Token": "test-token"})
+    elapsed = time.monotonic() - t0
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "started"}
+    assert elapsed < 1.0, f"the request blocked for {elapsed:.2f}s waiting on the job"
+    assert started == {"gds": False, "graph": False, "reindex": False}, \
+        "the response returned before the job had even started, which is correct -- " \
+        "but the job itself must still run: released below"
+
+    release.set()
+    for _ in range(50):
+        if all(started.values()):
+            break
+        time.sleep(0.05)
+    assert started == {"gds": True, "graph": True, "reindex": True}, \
+        "the background thread never completed the job"
+
+
+def test_refresh_refuses_to_overlap_a_run_already_in_flight(client, officers, monkeypatch):
+    import threading
+
+    from api.routers import jobs as jobs_router
+
+    gate = threading.Event()
+    monkeypatch.setattr("data.gds.run_all", lambda: gate.wait(timeout=2) and {})
+    monkeypatch.setattr("data.graph.publish_graph", lambda: True)
+    monkeypatch.setattr("data.embeddings.index_job.run_all", lambda: {})
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_refresh_running", False)
+
+    try:
+        first = client.post("/jobs/refresh", headers={"X-Veritas-Job-Token": "test-token"})
+        second = client.post("/jobs/refresh", headers={"X-Veritas-Job-Token": "test-token"})
+        assert first.json() == {"status": "started"}
+        assert second.json() == {"status": "already_running"}
+    finally:
+        gate.set()
+
+
+def test_refresh_still_requires_the_job_token(client, officers, monkeypatch):
+    from api.routers import jobs as jobs_router
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_refresh_running", False)
+
+    assert client.post("/jobs/refresh").status_code == 401
+    assert client.post("/jobs/refresh",
+                       headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401

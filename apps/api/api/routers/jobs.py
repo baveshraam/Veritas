@@ -13,15 +13,28 @@ public one:
   * so it is behind a shared secret instead (`VERITAS_JOB_TOKEN`), and it refuses to run at
     all if that secret is unset. An unauthenticated endpoint that rewrites the graph is a
     remote denial-of-service with extra steps.
+
+Runs in the background, not inline in the request. Measured live: at the dataset's real
+size the request consistently 500'd around 15-16s. Timed the three GDS algorithms locally
+against the actual co-offending-projection scale (~7,000 person nodes) at 8.23s — plausibly
+not the dominant cost — with the Data Store write-back (no bulk UPDATE in ZCQL; thousands of
+individual row writes) and the vector reindex (13,835+ documents) as the untimed remainder.
+Whichever it is, none of them belongs inside a synchronous HTTP handler: Cron only needs the
+trigger call to succeed, and every long-running thing already in this codebase (the AppSail
+warm-up in `main.py`) runs the same way — kicked from a request, finishing after it returns.
 """
 import hmac
 import logging
 import os
+import threading
 
 from fastapi import APIRouter, Header, HTTPException, status
 
 router = APIRouter()
 log = logging.getLogger(__name__)
+
+_refresh_lock = threading.Lock()
+_refresh_running = False
 
 
 def _authorise(token: str | None) -> None:
@@ -33,32 +46,63 @@ def _authorise(token: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad job token")
 
 
-@router.post("/jobs/refresh")
-async def refresh(x_veritas_job_token: str | None = Header(default=None)):
-    """Recompute the derived layers. Idempotent, and safe to run while the API serves."""
-    _authorise(x_veritas_job_token)
-
+def _run_refresh() -> None:
+    global _refresh_running
     from data.embeddings.index_job import run_all as reindex
     from data.gds import run_all as run_gds
     from data.graph import publish_graph
 
-    out: dict = {}
+    try:
+        out: dict = {}
+        # Graph metrics first: the community/PageRank values every network answer cites.
+        out["gds"] = run_gds()
+        # Then the Stratus blob, so a cold container reads one object instead of paging the
+        # whole edge list back through ZCQL's 300-row cap.
+        out["stratus_graph"] = publish_graph()
+        # And the vector index, which is derived from the same record layer. Rebuilding it
+        # here is what makes the deployment self-healing: an index that is missing or stale
+        # is the one failure a citation-grounded system hides rather than reports —
+        # retrieval simply returns nothing, confidently.
+        out["vector_index"] = reindex()
+        log.info("scheduled refresh complete: %s", out)
+    except Exception:
+        # A background thread's exception has nowhere else to go — log it with the
+        # traceback, or a failed refresh looks identical to a slow one from the outside.
+        log.exception("scheduled refresh failed")
+    finally:
+        with _refresh_lock:
+            _refresh_running = False
 
-    # Graph metrics first: the community/PageRank values every network answer cites.
-    out["gds"] = run_gds()
 
-    # Then the Stratus blob, so a cold container reads one object instead of paging the whole
-    # edge list back through ZCQL's 300-row cap.
-    out["stratus_graph"] = publish_graph()
+@router.post("/jobs/refresh")
+async def refresh(x_veritas_job_token: str | None = Header(default=None)):
+    """Kick off the recompute and return immediately. Idempotent, and safe to run while
+    the API serves — but not safe to run twice at once against the same rows, so a
+    second trigger while one is still in flight is reported rather than started."""
+    _authorise(x_veritas_job_token)
 
-    # And the vector index, which is derived from the same record layer. Rebuilding it here is
-    # what makes the deployment self-healing: an index that is missing or stale is the one
-    # failure a citation-grounded system hides rather than reports — retrieval simply returns
-    # nothing, confidently.
-    out["vector_index"] = reindex()
+    global _refresh_running
+    with _refresh_lock:
+        if _refresh_running:
+            return {"status": "already_running"}
+        _refresh_running = True
 
-    log.info("scheduled refresh complete: %s", out)
-    return out
+    from data import ds
+
+    # Capture the current request's Catalyst context for the background thread — it has
+    # no request of its own to bind. Guarded exactly like bind_catalyst_request: on the
+    # sqlite backend (local dev, tests) there is no SDK context to capture, and calling
+    # catalyst_app() unconditionally would import zcatalyst_sdk where it is deliberately
+    # absent.
+    app = ds.catalyst_app() if ds.backend() == "catalyst" else None
+
+    def _work() -> None:
+        if app is not None:
+            ds._sdk_app = app          # noqa: SLF001 — same pattern main.py's warm-up thread uses
+        _run_refresh()
+
+    threading.Thread(target=_work, name="jobs-refresh", daemon=True).start()
+    return {"status": "started"}
 
 
 @router.get("/jobs/audit-verify")
