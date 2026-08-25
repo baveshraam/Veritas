@@ -112,7 +112,7 @@ that stated, not `VERIFIED`.
 | ML-05 | LightGBM recidivism | `risk/scoring.py` (via `predict_recidivism`) | Yes: fires alongside risk | PARTIAL — value not checked against the answer key |
 | ML-06 | Isolation Forest district-spike alerts | `risk/anomalies.py` | **No** — only reachable through `/alerts`, which is live-blocked | UNKNOWN |
 | ML-07 | Louvain community detection | (via `data/gds.py`, not ml_models directly) | Yes: person 803 → community 28, plural communities confirmed in prior pass | VERIFIED |
-| ML-08 | PageRank / betweenness (graph centrality) | `data/gds.py` | Indirectly — PageRank values appear in `/person` and network evidence | PARTIAL |
+| ML-08 | PageRank / betweenness (graph centrality) | `data/gds.py` | Yes, live this pass (North Star Phase 3) | VERIFIED — network view renders real PageRank-derived node sizing/color, live-verified via "Who are the associates of Usha Naika?"; field renamed `risk_score`→`pagerank` end to end (payload + TS type) since it was never a risk score, matching the BUG-011 confidence-kind discipline |
 | ML-09 | Rule-based AML structuring detector | `financial/structuring.py` | **No** — not reachable without a real money trail (RAG-07 gap) | UNKNOWN |
 | ML-10 | GNN suspicious-subgraph AML | `financial/gnn.py` | **No** — same gap, and `torch` is deliberately absent from the deployed image (degrades to `GNNUnavailable` by design) | UNKNOWN live; known-absent by design |
 | ML-11 | DoWhy causal effects | `causal/effects.py` | Yes, this pass: confirmed declining with a precise reason (`dowhy` not installed in the deployed image) | BROKEN live (by design/image-size trade-off), correctly reported as such |
