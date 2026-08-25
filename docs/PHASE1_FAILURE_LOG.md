@@ -937,15 +937,65 @@ Determine which is true, then correct `CLAUDE.md`. Do not correct the document f
 
 Severity: P2
 Component: apps/api/routers/export.py
-Status: **OPEN**
+Status: **PARTIALLY FIXED — two real root causes found and fixed live; one platform
+question remains, precisely diagnosed, not resolved**
 
-### Reproduction
+### Reproduction (original)
 `POST /export/pdf` returns `text/html`, not a PDF — the local fallback renderer, not
 SmartBrowz.
 
 The console is not lying about it: `exportPdf()` names the download `.html` when the
-blob type is not PDF. So this is a degraded feature, not a false claim. `CLAUDE.md`'s
-service table listing SmartBrowz as the PDF path overstates what runs.
+blob type is not PDF. So this was a degraded feature, not a false claim. `CLAUDE.md`'s
+service table listing SmartBrowz as the PDF path overstated what ran.
+
+### Root causes found (North Star Phase 6)
+The original `except Exception: return None` made every SmartBrowz failure reason —
+misconfigured, network error, wrong request shape, an SDK bug — indistinguishable.
+Added diagnostic reason headers (`X-Veritas-Pdf-Smartbrowz-Reason` /
+`-Local-Reason`, logged server-side too) and deployed that alone first, which
+surfaced the real reason on the very next live request:
+
+1. **`app.smartbrowz()` — the method never existed on the SDK.**
+   `AttributeError: 'CatalystApp' object has no attribute 'smartbrowz'`. Confirmed
+   against the real installed `zcatalyst-sdk` (1.4.0) in an isolated venv, same
+   methodology as BUG-021: `CatalystApp` exposes `smart_browz()` (with underscore);
+   the module underneath is `smartbrowz` (without). `convert_to_pdf`'s signature and
+   `PdfOptions`/`PdfMargin` field names were already correct — only the method name
+   was wrong. **Fixed.**
+2. **A fresh, unbound `zcatalyst_sdk.initialize()`, not the request's own context.**
+   Fixing (1) changed the live failure to a real Catalyst API response for the first
+   time: `CatalystAPIError: {'code': 'INVALID_ID', 'message': 'No such User with the
+   given id exists'}`. `main.py`'s middleware already captures each request's
+   Catalyst context into `ds._sdk_app` via `bind_catalyst_request`; `_smartbrowz_pdf`
+   was building a second, separately-scoped app instead of reusing it. Switched to
+   `data.ds.catalyst_app()` — the same pattern `/jobs/refresh` already uses for
+   background work. **Fixed** (a genuine correctness improvement — avoids a stray
+   untracked SDK instance — though see below).
+
+### What remains open
+The exact same `INVALID_ID` / "No such User" error persists after fix (2), live-
+tested against the deployed system. This session's test sessions were created via
+the JWT dev-fallback auth path (`POST /auth/token`, badge-number sign-in), not a
+real Catalyst Authentication end-user sign-in — and SmartBrowz's API may require a
+genuine Catalyst User Management identity to attribute the render to, which a
+JWT-fallback session never has. This could not be tested further from this
+environment: it needs either a real Catalyst-Authentication browser sign-in (OAuth,
+not something drivable from this session's tooling) or Catalyst console/support
+access to confirm what identity SmartBrowz's `convert_to_pdf` actually requires.
+Documented precisely rather than guessed at further.
+
+### Regression test
+`test_export_reports_why_no_pdf_rendered`, `test_export_returns_a_real_pdf_when_a_renderer_is_available`,
+`test_export_requires_a_real_conversation` — no test existed for `/export/pdf` at
+all before this pass.
+
+### Verification
+`python -m pytest` green. **Live-verified**: the failure mode changed twice, in the
+direction the fixes intended (`AttributeError` → real Catalyst API error → same real
+Catalyst API error after the context fix, confirming call attribution rather than
+context was never the differentiator this time). The console still receives an
+honest, printable HTML document with the real reason in response headers — never a
+false PDF claim, at any point in this investigation.
 
 ---
 
@@ -1456,7 +1506,7 @@ matrix as DEP-12).
 | BUG-015 causal layer declines live | P2 | OPEN — **root cause now known: `dowhy` is not installed in the deployed image (by design, per the v7 changelog); the decline is itself now correctly the only citation (BUG-020)** |
 | BUG-016 Kannada latency | P2 | OPEN |
 | BUG-017 changelog vs deployed weights | P2 | OPEN |
-| BUG-018 PDF export returns HTML | P2 | OPEN |
+| BUG-018 PDF export returns HTML | P2 | **PARTIALLY FIXED** — 2 real root causes found+fixed live (wrong SDK method name; unbound SDK context); a third, platform-level identity question remains, precisely diagnosed (`INVALID_ID`/"No such User") |
 | BUG-019 "fir" matches "firs" | P3 | OPEN |
 | BUG-020 evaluator floor deleted authoritative refusals | P1 | **FIXED, verified live** (regression found and fixed within this same phase) |
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |

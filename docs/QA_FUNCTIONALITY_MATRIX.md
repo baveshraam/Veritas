@@ -37,10 +37,10 @@ that stated, not `VERIFIED`.
 | UI-10 | Command bar — health readout | `CommandBar.tsx` | Shows FIR/node/index counts, live-status dot | VERIFIED | Screenshot matches `/health` exactly |
 | UI-11 | Chat pane — send text query | `ChatPane.tsx:send` | Types, submits, streams SSE | VERIFIED | CDP: real query, real streamed answer, real citation |
 | UI-12 | Chat pane — push-to-talk mic | `ChatPane.tsx:toggleMic` | Records audio, waveform | UNKNOWN | No audio input device in this environment |
-| UI-13 | Chat pane — citation chip click | `ChatPane.tsx:withCitations` | Scrolls/highlights evidence rail item | UNKNOWN | Not driven interactively |
+| UI-13 | Chat pane — citation chip click | `ChatPane.tsx:withCitations` | Scrolls/highlights evidence rail item | PARTIAL, code-traced | `app/page.tsx:revealEvidence` confirmed wired end to end: chip → `onCite` → `setActiveEvidence` + `scrollIntoView` on the matching `ev-${id}` element. Not interactively driven — no browser/CDP tooling available this session |
 | UI-14 | Evidence rail — item expand | `EvidenceRail.tsx` | Shows full content + source query | VERIFIED | Visible in chat screenshot (1 cited, expanded) |
 | UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | PARTIAL | Not clicked directly; UI-22 confirms the Copilot overlay itself opens and renders correctly via the case-card route |
-| UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | UNKNOWN | Not verified visually |
+| UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | PARTIAL, code-traced | Driven by the same `activeEvidence` state `revealEvidence` sets (`app/page.tsx`) — wiring confirmed correct by reading the call chain, not verified visually (no browser/CDP tooling this session) |
 | UI-17 | Reasoning trace panel (expand/collapse) | `ReasoningTrace.tsx` | Plain-language agent trace, off by default | PARTIAL | Present in screenshot ("reasoning trace · 5 steps"), not expanded/inspected |
 | UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | PARTIAL | Typed into live; result not screenshotted before session ended |
 | UI-19 | Case explorer — crime-type filter chips | `CaseExplorer.tsx` | Toggles facet filter | VERIFIED | Live: clicked "Theft", chip highlighted, district count correctly narrowed 24->19, every visible card is Theft |
@@ -67,7 +67,7 @@ that stated, not `VERIFIED`.
 | API-05 | `GET /fir/{id}` | `records.py` | VERIFIED | Live, scoping + masking confirmed |
 | API-06 | `GET /person/{id}` | `records.py` | VERIFIED | Live, masking confirmed |
 | API-07 | `GET /copilot/{id}` | `copilot.py` | VERIFIED | Live, scoping + masking confirmed |
-| API-08 | `POST /export/pdf` | `export.py` | PARTIAL | Returns `text/html` (BUG-018), reachability not re-driven this pass |
+| API-08 | `POST /export/pdf` | `export.py` | PARTIAL, root-caused | Live-verified this pass: 2 real bugs found+fixed (wrong SDK method name, unbound SDK context — failure mode changed twice in the intended direction); still returns `text/html` due to a remaining `INVALID_ID`/"No such User" Catalyst identity question, only testable via a real Catalyst Auth sign-in this session's tooling cannot drive. Console still honest — never claims a PDF it didn't produce (BUG-018) |
 | API-09 | `WS /alerts` | `alerts.py` | BROKEN (live) | See BUG-005 |
 | API-10 | `POST /jobs/refresh` | `jobs.py` | **VERIFIED (fixed)** | BUG-024 fixed: moved to a background thread. Redeployed (`52852000000310022`) — see the failure log for the live re-verification |
 | API-11 | `GET /jobs/audit-verify` | `jobs.py` | VERIFIED | Triggered live with the real deployed job token: `{"intact":true,"first_bad_audit_id":null}` — the audit hash chain is genuinely intact |
