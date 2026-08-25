@@ -50,3 +50,6 @@ client/
 # transient deploy artefacts
 .objkey
 .appsail-deploy.log
+
+# VSCode Markdown Preview Enhanced local export cache (machine-specific)
+docs/*.html
