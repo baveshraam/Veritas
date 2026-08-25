@@ -449,7 +449,11 @@ other intents.
 `test_crime_type_extraction_prefers_the_longer_specific_match`.
 
 ### Verification
-`python -m pytest` green. Live re-verification pending deployment of this phase.
+`python -m pytest` green. **Live-verified** (deployment `52852000000310022`→relayed
+redeploy, Aug 25 2026): `POST /chat {"query": "How many theft cases are there in
+Mandya district?"}` → *"73 case(s) Theft in Mandya are recorded within your access
+scope."*, `authoritative: true`, trace: *"Vector Search Agent | Skipped — CRIME_SEARCH
+was answered directly from the record layer"*.
 
 ### Symptoms
 A counting question gets a list.
@@ -641,8 +645,14 @@ not offer a Copilot link the backend cannot serve.
 `test_model_predictions_carry_a_distinct_kind_from_their_own_reported_score`.
 
 ### Verification
-`python -m pytest` green, `npx tsc --noEmit` clean. Live re-verification pending
-deployment of this phase.
+`python -m pytest` green, `npx tsc --noEmit` clean. **Live-verified**, both API and
+console: a real vector search hit (`"Show me the money trail for Nithin Savadi"`, a
+name not on file) returned `confidence_kind: "similarity"` on every semantic
+candidate; the risk-score query below returned `confidence_kind: "model_estimate"`
+on the ML_PREDICTION items; the FIR-lookup and CRIME_SEARCH-count items above
+returned `confidence_kind: "support"`. Console redeployed and its served bundle
+grepped directly for the new UI strings ("model output", "text similarity",
+"evidence strength") — present, not just a green build exit code.
 
 ### Symptoms
 A semantically-similar but substantively unrelated record is shown with a "fair"
@@ -817,8 +827,17 @@ same value (the saturation signature).
 ### Verification
 `python -m pytest` green — the new test exercises the real calibration path against
 a real (if small) dataset and passed without falling back to the uncalibrated branch.
-Live re-verification (whether the deployed dataset's calibration split is large
-enough to calibrate, vs. falling back honestly) pending deployment of this phase.
+**Live-verified**: `POST /chat {"query": "What is the risk of Usha Naika
+reoffending?"}` on the live deployment returned *"The model suggests a risk score of
+1.00 for this person (NOT calibrated — a ranking score, not a probability)"* — the
+live dataset's calibration split does not have enough class balance to fit isotonic
+regression, so the honest fallback fired exactly as designed. The saturated 1.00
+itself persists on this dataset (a real, heavy-prior person can genuinely score at
+the top of the range), but it is no longer silently presented as a calibrated
+probability — which is the actual defect this bug named. The companion recidivism
+score, on the same person, *did* calibrate successfully and also reported ~100%,
+correctly labeled "(calibrated)" — a legitimate extreme value for a habitual
+offender, now distinguishable from the risk score's honest non-calibration.
 
 ### Reproduction
 ```
@@ -1372,13 +1391,13 @@ matrix as DEP-12).
 | BUG-005 unauthenticated /alerts WebSocket | P1 | FIXED in code (ASGI-level test); **live verification blocked — see BUG-005 above, apparent AppSail gateway limitation on WebSocket upgrades** |
 | BUG-006 unsupporting citations | **P0** | **FIXED, verified live** in the API and, separately, driven end to end in the browser |
 | BUG-007 intent misrouting | P1 | FIXED |
-| BUG-008 no count for "how many" | P1 | **FIXED** (final implementation pass, Phase 1) — exact structured count, authoritative, no vector padding; live verification pending deploy |
+| BUG-008 no count for "how many" | P1 | **FIXED, verified live** — exact structured count, authoritative, no vector padding |
 | BUG-009 capability question through retrieval | P1 | **FIXED, verified live** |
 | BUG-010 one refusal message for five situations | P1 | **FIXED, verified live** |
-| BUG-011 similarity shown as confidence | P1 | **FIXED** (final implementation pass, Phase 1) — `confidence_kind` axis; live verification pending deploy |
+| BUG-011 similarity shown as confidence | P1 | **FIXED, verified live** — `confidence_kind` axis; console redeployed and bundle-checked |
 | BUG-012 /health reported an unreached LLM | P1 | FIXED (reporting) — **root cause of the unreachability itself found and fixed, see BUG-021/BUG-022** |
 | BUG-013 money trail answered from a theft record | P1 | **FIXED, verified live** — negative finding is now the *only* citation |
-| BUG-014 saturated risk score | P2 | **FIXED** (final implementation pass, Phase 1) — isotonic calibration, honest fallback; live verification pending deploy |
+| BUG-014 saturated risk score | P2 | **FIXED, verified live** (reporting-level) — honest `calibrated:false` now shown live; underlying saturation on this dataset is a data-volume limit, not a code defect |
 | BUG-015 causal layer declines live | P2 | OPEN — **root cause now known: `dowhy` is not installed in the deployed image (by design, per the v7 changelog); the decline is itself now correctly the only citation (BUG-020)** |
 | BUG-016 Kannada latency | P2 | OPEN |
 | BUG-017 changelog vs deployed weights | P2 | OPEN |

@@ -85,7 +85,7 @@ Bug IDs reference `docs/PHASE1_FAILURE_LOG.md`.
 |----|-----------|-------------------|----|---------|------|-------|------|------|--------|--------|--------------------|
 | C1 | Intent classification | Route the question | — | Y | Y | Y | Y | — | Y | PARTIAL | C2 fixed; 2 new intents added (CAPABILITY, NOT_INFERABLE). C3 still has no branch |
 | C2 | `SIMILAR_CASES` intent | Similar-case search | — | Y | Y | N | Y | Y | Y | VERIFIED | Live: routes to `SIMILAR_CASES` correctly → **BUG-007** |
-| C3 | `CRIME_SEARCH` intent | Answer "how many / list" | — | Y | N | N | Y | — | Y | BROKEN | **No specialist branch exists.** "How many theft cases in Mandya?" is answered with 5 narratives and no count → **BUG-008 (P1)** |
+| C3 | `CRIME_SEARCH` intent | Answer "how many / list" | — | Y | N | N | Y | — | Y | **FIXED, live-verified** | An exact, role/station-scoped count (`sql_agent.count_firs`) + up to 5 supporting FIR samples, as authoritative evidence; vector search no longer runs on top of a settled count. Live: "How many theft cases in Mandya district?" → "73 case(s) Theft in Mandya", `authoritative:true`, vector search step shows "Skipped" → **BUG-008 fixed** |
 | C4 | Out-of-scope question | Say so intentionally | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Live, both deploys → **BUG-009** |
 | C5 | Under-specified question | Ask for the missing subject | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Live, both deploys → **BUG-010** |
 | C6 | Entity extraction (NER) | Persons, locations, IPC sections | — | Y | Y | Y | Y | — | Y | VERIFIED | Person and district extraction both drive live answers |
@@ -94,7 +94,7 @@ Bug IDs reference `docs/PHASE1_FAILURE_LOG.md`.
 | C9 | Think-on-Graph deep-dive | Beam search on low confidence | — | Y | Y | Y | Y | — | Y | VERIFIED | Runs on relational intents |
 | C10 | Graph traversal (associates) | Co-accused within depth cap | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Usha Naika → 12 associates, network renders |
 | C11 | Evidence assembly | Only supporting records | — | Y | Y | Y | Y | Y | Y | VERIFIED | `supporting()` is the one definition; extended to `authoritative` items (BUG-020) — live-verified on CAUSAL and FINANCIAL → **BUG-006 (P0)** |
-| C12 | Evidence confidence semantics | A support score | Y | Y | N | N | Y | Y | Y | FALSE CLAIM | Vector `confidence` is the raw hybrid similarity, rendered to the officer as evidential confidence → **BUG-011 (P1)** |
+| C12 | Evidence confidence semantics | A support score | Y | Y | N | N | Y | Y | Y | **FIXED, live-verified** | `EvidenceItem.confidence_kind` (support/similarity/model_estimate) set at each origin point; console labels each distinctly instead of one undifferentiated %. Live: vector hits show `confidence_kind:"similarity"`, risk/recidivism show `"model_estimate"`, exact/graph/authoritative items show `"support"` → **BUG-011 fixed** |
 | C13 | Reasoning trace | Plain-language agent trace | Y | Y | Y | Y | Y | — | Y | VERIFIED | Streams correctly; steps and timings match the code path |
 | C14 | Citation generation | 1-based, in evidence order | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Indices line up with the rail |
 | C15 | Refusal (CRAG REJECT) | Never answer on empty evidence | Y | Y | Y | Y | Y | — | Y | VERIFIED | Refuses on nonexistent FIR, unknown person, weak batches |
@@ -117,7 +117,7 @@ Bug IDs reference `docs/PHASE1_FAILURE_LOG.md`.
 | D8 | Financial tracing (named subject) | Sankey money flow | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Live: 1 citation (was 5) — the negative finding, and nothing else → **BUG-013** |
 | D9 | Financial tracing, no subject | Ask who | Y | Y | Y | Y | Y | Y | Y | VERIFIED | → **BUG-010** |
 | D10 | Suspicious-transaction detection | Rule + GNN | — | Y | Y | Y | N | — | — | UNKNOWN | Not reachable live in this audit (D8 blocks the path) |
-| D11 | Risk scoring | XGBoost + SHAP | Y | Y | Y | Y | Y | N | Y | PARTIAL | Returns 1.00 — a saturated score, not obviously calibrated → **BUG-014 (P2)** |
+| D11 | Risk scoring | XGBoost + SHAP | Y | Y | Y | Y | Y | N | Y | **PARTIAL, honestly so** | Isotonic-calibrated with a `calibrated` flag, same proven pattern as recidivism. Live: still returns 1.00 for a heavy-prior person, but now says so plainly — "(NOT calibrated — a ranking score, not a probability)" — because the live dataset's calibration split lacks enough class balance to fit isotonic regression, and the code falls back honestly rather than reporting a calibration that didn't happen → **BUG-014 fixed at the reporting level; the underlying saturation on this dataset is a data-volume limit, not a code defect** |
 | D12 | Recidivism (LightGBM) | 180-day, calibrated | — | Y | Y | Y | Y | N | Y | PARTIAL | Fires; value not validated against the answer key |
 | D13 | Causal layer (DoWhy) | Effect on real Census data | Y | Y | Y | Y | Y | Y | Y | PARTIAL | Live it **declines**, root cause now known (`dowhy` not installed in the deployed image, a deliberate v7 image-size trade-off), and the decline is now correctly the sole citation instead of being buried under noise (BUG-020) → **BUG-015 (P2)** |
 | D14 | Similarity search | Top-5 similar cases | Y | Y | Y | Y | Y | Y | Y | VERIFIED | Via copilot: 5 Hurt cases in Mandya, similarity 0.94 down |
@@ -198,13 +198,18 @@ the request) — C18/F3 is still BROKEN, now for a precisely diagnosed reason in
 unknown one. UNKNOWN dropped by one (F14, cold start, now measured twice: 22.72s and
 22.9s, both real forced restarts).
 
-Still BROKEN: C3 (`CRIME_SEARCH` answers "how many" with narratives and no count —
-BUG-008, deliberately left open), C18/F3 (LLM synthesis — auth fixed, gateway rejection
-open as BUG-022), and D13/BUG-015 stays PARTIAL rather than BROKEN because its decline is
-honest and, since BUG-020, no longer buried under noise.
-Still FALSE CLAIM: C12 (vector similarity displayed as evidential confidence — BUG-011)
-and E8 (the changelog says the model weights left the image; the live configuration says
-they did not — BUG-017).
+Still BROKEN: C18/F3 (LLM synthesis — auth fixed, gateway rejection open as BUG-022), and
+D13/BUG-015 stays PARTIAL rather than BROKEN because its decline is honest and, since
+BUG-020, no longer buried under noise.
+Still FALSE CLAIM: E8 (the changelog says the model weights left the image; the live
+configuration says they did not — BUG-017).
+
+**Final implementation pass, live-verified this session**: C3/BUG-008 (CRIME_SEARCH now
+returns an exact count), C12/BUG-011 (confidence_kind distinguishes similarity/support/
+model_estimate, console relabeled), D11/BUG-014 (risk scoring calibrated, with an honest
+`calibrated:false` reported live rather than a false calibration claim). Re-verified live
+in the same pass and unchanged: BUG-006 (exact FIR lookup — 1 citation, no padding),
+BUG-020 (causal refusal — 1 authoritative citation, no unrelated profiles).
 
 The single most consequential finding was **BUG-006**: unconditional vector search meant
 almost every answer in the system carried citations that did not support it. Fixed and

@@ -90,7 +90,7 @@ that stated, not `VERIFIED`.
 | RAG-11 | `RISK` | same | Yes (prior pass) | PARTIAL — answers correctly; the score's calibration is unvalidated (BUG-014) |
 | RAG-12 | `CAUSAL` | same | Yes, this pass | VERIFIED (correctly declines; BUG-020 fix confirmed) |
 | RAG-13 | `SIMILAR_CASES` | same | Yes, this pass | VERIFIED |
-| RAG-14 | `CRIME_SEARCH` | same | Yes, this pass (unit-level) | PARTIAL — now returns an exact structured count + samples, no vector padding (BUG-008 fixed); not yet re-driven live |
+| RAG-14 | `CRIME_SEARCH` | same | Yes, live this pass | VERIFIED — "How many theft cases in Mandya district?" → "73 case(s) Theft in Mandya", authoritative, vector search skipped (BUG-008 fixed) |
 | RAG-15 | `CAPABILITY` | same | Yes | VERIFIED |
 | RAG-16 | `NOT_INFERABLE` | same | Yes | VERIFIED |
 | RAG-17 | Pronoun/reference resolution ("does **he** have priors") | `intents.has_unresolved_reference` | Yes | VERIFIED — live 3-turn session: named subject, then "Does he have priors?", then "What about his money trail?", both pronouns correctly resolved against the session's carried-forward subject |
@@ -108,7 +108,7 @@ that stated, not `VERIFIED`.
 | ML-01 | Fellegi-Sunter entity resolution | `entity_resolution/fellegi_sunter.py` | Indirectly — `vx_person`/`vx_accused_identity` are its output, confirmed populated and referentially consistent (`test_integrity.py`) | PARTIAL — the F1=0.989 claim itself was not re-measured this session |
 | ML-02 | KDE + DBSCAN hotspots | `spatial/hotspots.py` | Yes (prior pass): named-district query returns real clusters + real incident points | VERIFIED (API level); map rendering UNKNOWN |
 | ML-03 | Prophet + MinT forecast | `forecasting/forecast.py` | Yes (prior pass): 30-day series, plausible values | VERIFIED (API level); chart rendering UNKNOWN |
-| ML-04 | XGBoost + SHAP risk scoring | `risk/scoring.py` | Yes: fires, returns a score + top contributors; calibration path exercised against the test dataset this pass | PARTIAL — now isotonic-calibrated with an honest `calibrated` flag (BUG-014 fixed); live re-verification against the deployed dataset's calibration split not yet done |
+| ML-04 | XGBoost + SHAP risk scoring | `risk/scoring.py` | Yes, live this pass | PARTIAL, honestly — live returns 1.00 for a heavy-prior person, correctly labeled "NOT calibrated" because the live dataset's calibration split lacks class balance to fit isotonic regression; the fallback fires exactly as designed (BUG-014 fixed at the reporting level) |
 | ML-05 | LightGBM recidivism | `risk/scoring.py` (via `predict_recidivism`) | Yes: fires alongside risk | PARTIAL — value not checked against the answer key |
 | ML-06 | Isolation Forest district-spike alerts | `risk/anomalies.py` | **No** — only reachable through `/alerts`, which is live-blocked | UNKNOWN |
 | ML-07 | Louvain community detection | (via `data/gds.py`, not ml_models directly) | Yes: person 803 → community 28, plural communities confirmed in prior pass | VERIFIED |
