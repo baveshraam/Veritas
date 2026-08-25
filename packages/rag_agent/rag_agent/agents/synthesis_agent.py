@@ -81,7 +81,11 @@ def build_visualization(intent: str, state) -> VisualizationPayload:
         nodes, edges, seen = [], [], set()
         root = state.active_entities.active_person
         if root:
-            nodes.append({"id": root, "label": "subject", "risk_score": 1.0})
+            # 1.0 is a display-sizing sentinel (the subject renders largest), not a
+            # real PageRank score — the field is real graph centrality for every
+            # other node, and was named "risk_score" here, which is a different
+            # concept the network view never actually measures (see BUG-011).
+            nodes.append({"id": root, "label": "subject", "pagerank": 1.0})
             seen.add(root)
         for r in state.graph_query_results:
             pid = r.get("person_id")
@@ -89,7 +93,7 @@ def build_visualization(intent: str, state) -> VisualizationPayload:
                 continue
             seen.add(pid)
             nodes.append({"id": pid, "label": r.get("name_en") or pid,
-                          "risk_score": float(r.get("pagerank") or 0.0)})
+                          "pagerank": float(r.get("pagerank") or 0.0)})
             if root:
                 edges.append({"source": root, "target": pid,
                               "type": "CO_ACCUSED_WITH",

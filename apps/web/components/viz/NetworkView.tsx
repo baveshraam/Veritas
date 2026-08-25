@@ -2,7 +2,7 @@
 import ReactECharts from "echarts-for-react";
 import { CHART_BASE, ACCENT, TEXT_DIM, ramp, rgba } from "./palette";
 
-type Node = { id: string; label: string; risk_score: number };
+type Node = { id: string; label: string; pagerank: number };
 type Edge = { source: string; target: string; type: string; strength: number };
 
 /** Force-directed criminal network. Node size and colour both encode influence,
@@ -10,7 +10,7 @@ type Edge = { source: string; target: string; type: string; strength: number };
 export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Edge[] } }) {
   const nodes = data.nodes ?? [];
   const edges = data.edges ?? [];
-  const max = Math.max(1e-6, ...nodes.map((n) => n.risk_score ?? 0));
+  const max = Math.max(1e-6, ...nodes.map((n) => n.pagerank ?? 0));
 
   const option = {
     ...CHART_BASE,
@@ -31,11 +31,11 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
       emphasis: { focus: "adjacency", label: { show: true } },
       lineStyle: { color: "source", opacity: 0.35, curveness: 0.12 },
       data: nodes.map((n) => {
-        const t = (n.risk_score ?? 0) / max;
+        const t = (n.pagerank ?? 0) / max;
         return {
           id: n.id,
           name: n.label,
-          value: n.risk_score ?? 0,
+          value: n.pagerank ?? 0,
           symbolSize: 12 + t * 30,
           itemStyle: {
             color: ramp(t),
