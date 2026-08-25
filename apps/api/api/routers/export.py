@@ -121,7 +121,15 @@ def _smartbrowz_pdf(page: str) -> tuple[bytes | None, str]:
         app = zcatalyst_sdk.initialize()
         # A4, KSP letterhead margins. The HTML is the same string the local renderer
         # gets, so the two paths cannot drift into producing different documents.
-        pdf = app.smartbrowz().convert_to_pdf(page, pdf_options={
+        #
+        # `smart_browz()`, not `smartbrowz()` — confirmed against the real installed
+        # SDK (zcatalyst-sdk's CatalystApp exposes `smart_browz`; the module
+        # underneath is spelled `smartbrowz`, no underscore, which is presumably how
+        # the mismatched call ended up here). Same class of bug as BUG-021's
+        # `_token()`: an attribute name that was never correct for this SDK, silently
+        # swallowed by a bare except until this was diagnosed against the real
+        # installed package rather than guessed at.
+        pdf = app.smart_browz().convert_to_pdf(page, pdf_options={
             "format": "A4",
             "margin": {"top": "15mm", "bottom": "15mm", "left": "12mm", "right": "12mm"},
             "print_background": True,
