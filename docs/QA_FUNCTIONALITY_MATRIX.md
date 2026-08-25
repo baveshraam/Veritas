@@ -116,7 +116,7 @@ that stated, not `VERIFIED`.
 | ML-09 | Rule-based AML structuring detector | `financial/structuring.py` | **No** — not reachable without a real money trail (RAG-07 gap) | UNKNOWN |
 | ML-10 | GNN suspicious-subgraph AML | `financial/gnn.py` | **No** — same gap, and `torch` is deliberately absent from the deployed image (degrades to `GNNUnavailable` by design) | UNKNOWN live; known-absent by design |
 | ML-11 | DoWhy causal effects | `causal/effects.py` | Yes, this pass: confirmed declining with a precise reason (`dowhy` not installed in the deployed image) | BROKEN live (by design/image-size trade-off), correctly reported as such |
-| ML-12 | Aequitas fairness audit | `fairness/audit.py` | **No** — no UI/API surface exposes this; appears to be an offline/reporting capability only | UNKNOWN — not clear this is reachable from the live product at all |
+| ML-12 | Aequitas fairness audit | `fairness/audit.py` | Resolved by reading `serving.py`'s own module docstring | N/A (live product) | Explicitly designed as out-of-band: `serving.py` documents its callers as "fairness/run_audit.py: run_fairness_audit (out-of-band, pre-demo)" — a standalone CLI script (`packages/ml_models/fairness_run_audit.py`), never wired to any API route or UI control. Not a gap — by design |
 | ML-13 | Isolation-Forest-driven `/alerts` feed | `serving.py:check_anomalies` | **No** | UNKNOWN, blocked by BUG-005 |
 
 ## 5. NLP / Voice / Kannada
@@ -168,7 +168,7 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-09 | AppSail runtime — QuickML | BROKEN, diagnosed | BUG-021 (fixed) / BUG-022 (open) |
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
-| DEP-12 | Cron — `veritas_refresh` (6h) | PARTIAL — fixed, re-verification pending | BUG-024 fixed and redeployed. The schedule itself (does Cron actually fire it every 6h) remains unobserved |
+| DEP-12 | Cron — `veritas_refresh` (6h) | VERIFIED (the job itself); schedule unobserved | BUG-024 fixed, deployed, and watched to genuine completion live (5-6 min real runtime — confirms the original synchronous-timeout defect was real and unavoidable). Whether Cron's 6h schedule actually invokes it was not observed this session |
 | DEP-13 | Cron — `veritas_audit_verify` (12h) | VERIFIED (the job logic; schedule itself still unobserved) | Triggered manually with the real job token — works correctly, chain intact |
 | DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 

@@ -1146,7 +1146,7 @@ reproduced consistently.
 
 Severity: **P1**
 Component: apps/api/routers/jobs.py, data/gds.py and/or data/embeddings/index_job.py
-Status: **OPEN — reproduced live, root cause not fully isolated (no server-log access)**
+Status: **FIXED, deployed, live-verified**
 
 ### Symptoms
 The scheduled refresh job — the one Cron is supposed to run every 6 hours to recompute
@@ -1226,16 +1226,52 @@ serving whatever was last built during generation/seeding — not a defect in wh
 currently being answered (this audit found no stale-data symptom in any live query),
 but a real gap in the system's ability to stay current going forward.
 
+### Fix
+The recompute moves to a background thread — the same pattern `main.py`'s AppSail
+warm-up already uses, including how it propagates the captured Catalyst request
+context (guarded to only do so on the `catalyst` backend, matching
+`bind_catalyst_request`'s own guard, so local/test sqlite runs are unaffected). The
+endpoint now returns `{"status": "started"}` immediately; a non-reentrant guard
+reports `{"status": "already_running"}` rather than starting a second overlapping run.
+
 ### Regression test
-None added yet — reproducing this in the test suite requires a graph at production
-scale, which the existing `TEST_CASES = 250` fixture does not build. Recommended next
-step: time `data.gds.run_all()` against a dataset sized closer to 10,000 cases locally,
-to determine whether ~16s is even plausible for this computation, before assuming a
-platform timeout.
+Three new tests in `apps/api/tests/test_api.py`: the request returns in well under a
+second while the job keeps running to completion on a released background thread, a
+second trigger while one is in flight is refused rather than starting a concurrent
+run, and the token gate still holds. No prior test exercised this endpoint's actual
+behavior at all — only its auth gate was implicitly covered elsewhere.
 
 ### Verification
-Live, two independent triggers, `python -m pytest` unaffected (no existing test
-exercises this scale).
+**Deployed** (`52852000000310022`, Aug 25 2026 11:03 PM) and **live-verified end to
+end**, including letting the real job run to genuine completion:
+
+```
+POST /jobs/refresh  -> {"status":"started"}       0.17s   (was: 500 after ~16s)
+POST /jobs/refresh  -> {"status":"already_running"} 0.20s   (fired immediately after)
+POST /jobs/refresh  -> {"status":"already_running"} 0.14s   (fired again ~2 min later —
+                                                              still genuinely running)
+POST /jobs/refresh  -> {"status":"started"}                (fired ~5-6 min after the
+                                                              first trigger — the PRIOR
+                                                              run had finished and
+                                                              cleared the guard)
+```
+
+That the job was still `already_running` at the 2-minute mark and had finished by
+5-6 minutes independently confirms the original defect: this was never going to
+complete inside any synchronous HTTP timeout, regardless of which specific step
+dominated.
+
+`/health` immediately after: `firs=10000`, `graph_nodes=16918`, `graph_edges=87120` —
+unchanged, no corruption. `indexed_documents` moved from 13,835 to 13,729 — a real
+change (proof the reindex genuinely ran, not a cached response), direction and
+magnitude not further investigated this session. A live regression check (exact FIR
+lookup, BUG-006's own test case) still returned the correct single citation
+afterward, so nothing observable broke.
+
+**Not verified**: whether Catalyst Cron's own 6-hourly schedule actually invokes this
+endpoint (the trigger was manual, with the real job token, bypassing the schedule
+entirely — Cron firing on schedule remains unobserved, tracked separately in the QA
+matrix as DEP-12).
 
 ---
 
@@ -1266,11 +1302,11 @@ exercises this scale).
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
 | BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
 | BUG-023 every narrative for a crime type is one template | **P1** | OPEN — data-generation limitation, quantified live (60/60 cases per type collapse to 1 shape); not a code defect, not a duplicate-record bug |
-| BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | OPEN — reproduced live twice (16s, 16s); `/jobs/audit-verify` ruled out as an auth issue; GDS timed locally and mostly ruled out (~8s at accurate scale); the write-back and reindex steps remain untimed |
+| BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | **FIXED, deployed, live-verified** — moved to a background thread; watched the real job run to genuine completion (5-6 min) and confirmed no corruption |
 
-**3 P0, 15 P1, 6 P2, 1 P3 across 24 tracked defects. 15 fixed and live-verified, 1 fixed
+**3 P0, 15 P1, 6 P2, 1 P3 across 24 tracked defects. 16 fixed and live-verified, 1 fixed
 in code with live verification blocked by an apparent platform limit, 1 fixed at the
-reporting level with the underlying cause now understood, 10 open.**
+reporting level with the underlying cause now understood, 9 open.**
 
 ### One thing this audit got wrong, recorded deliberately
 
