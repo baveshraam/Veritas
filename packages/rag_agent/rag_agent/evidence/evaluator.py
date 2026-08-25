@@ -110,3 +110,38 @@ NOT_FOUND_MESSAGE = (
     "I am reporting that no supporting evidence was retrieved — please refine the "
     "query, or check whether the record exists in the system."
 )
+
+# Five different situations were all reported with NOT_FOUND_MESSAGE, which tells the
+# officer to "check whether the record exists" when the actual problem is that the
+# question named no record to look for. Refusing is right; refusing for a reason that
+# is not the reason is a false statement about the records.
+#
+# Every message here still refuses. None of them answers, and none of them softens
+# "not found in the records" into "does not exist".
+REFUSAL_MESSAGES: dict[str, str] = {
+    "no_evidence": NOT_FOUND_MESSAGE,
+    "exact_lookup_missed": (
+        "No record with that number exists within your access scope. A record "
+        "identifier is a claim about one specific case, so I will not answer it from "
+        "similar cases — please check the number, or ask an officer with wider scope."
+    ),
+    "no_subject": (
+        "This question needs a subject before I can search for it: name the person, "
+        "the case, or the district. Choosing one myself would mean answering a "
+        "question you did not ask."
+    ),
+    "person_not_on_file": (
+        "No person of that name appears in the records available to you. I have not "
+        "substituted a similarly-spelled name — if you expected a match, the record "
+        "may be filed under a different spelling, or outside your access scope."
+    ),
+    "not_inferable": (
+        "The records do not answer this. They record who was accused, arrested and "
+        "charged; they do not nominate suspects, and I will not infer one. Ask about "
+        "a named person, a case, or the people already recorded as accused on a case."
+    ),
+}
+
+
+def refusal_message(reason: str) -> str:
+    return REFUSAL_MESSAGES.get(reason, NOT_FOUND_MESSAGE)

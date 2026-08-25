@@ -74,6 +74,10 @@ class InvestigationState(BaseModel):
     # record is then the whole answer, so semantic neighbours are not run — see
     # orchestrator._run_specialists.
     exact_lookup_hit: bool = False
+    # Which of the refusal situations applies, when one does. See
+    # evidence.evaluator.REFUSAL_MESSAGES — "no evidence retrieved" and "you named no
+    # subject to search for" are different facts and must not share a sentence.
+    refusal_reason: str = ""
     agent_trace: list[AgentTraceEntry] = Field(default_factory=list)
 
     # Internal routing (not part of the API surface).

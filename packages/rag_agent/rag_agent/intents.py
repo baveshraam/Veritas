@@ -36,13 +36,50 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "FIR_LOOKUP":        (("fir", "case number", "case details", "status of"), "none"),
 }
 
+# Intents that are meaningless without a subject. Asked without one, the engine used to
+# run the whole retrieval pipeline, come back with semantic neighbours, and refuse with
+# "check whether the record exists in the system" — which is not why it failed. The
+# orchestrator short-circuits these instead, and says which subject is missing.
+NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK"}
+
+# Questions asking the system to nominate a suspect. The records hold who was accused,
+# arrested and charged; they do not hold who "could be" guilty, and inferring it is the
+# one thing an evidence-grounded police tool must not do. This is a refusal with a
+# reason, not a retrieval that happens to fail.
+_NOT_INFERABLE = re.compile(
+    r"\b(who (could|might|may|would) (be|have)|likely (suspect|culprit|offender)|"
+    r"who did it|who is guilty|who committed)\b", re.I)
+
+# "What can you do" is a question about the tool, not about the records. Routed through
+# retrieval it returned five unrelated criminal profiles and then a refusal telling the
+# officer to check whether the record exists in the system.
+_CAPABILITY = re.compile(
+    # "what all could you answer" was the reported phrasing and the first version of
+    # this pattern missed it, because "all" sits between the interrogative and the
+    # auxiliary. Indian-English "what all" / "what all can" is common enough here that
+    # it is the phrasing to match, not the edge case.
+    r"\b(what (all )?(can|could|do|does|would) (you|it|this|veritas)"
+    r"|what (kind|sort|type)s? of (question|quer)"
+    r"|what are (you|your capabilit)|how do i use)", re.I)
+
 # Third-person pronouns that must resolve against the session focus stack.
 _PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b", re.I)
 
 
 def classify(query: str) -> str:
-    """Highest-scoring intent by keyword hits; UNKNOWN if nothing matches."""
+    """Highest-scoring intent by keyword hits; UNKNOWN if nothing matches.
+
+    The two regex branches run first because they are about the *shape* of the question,
+    not its topic. "who could be the suspect" contains no keyword that routes it
+    anywhere useful, and "what all could you answer" scores CRIME_SEARCH on the bare
+    word "answer" sitting near "cases" — both then ran the full retrieval pipeline and
+    refused with a message about records that were never the problem.
+    """
     q = (query or "").lower()
+    if _CAPABILITY.search(query or ""):
+        return "CAPABILITY"
+    if _NOT_INFERABLE.search(query or ""):
+        return "NOT_INFERABLE"
     scores: dict[str, int] = {}
     for intent, (keywords, _) in INTENTS.items():
         hits = sum(1 for k in keywords if k in q)
@@ -55,6 +92,27 @@ def classify(query: str) -> str:
 
 def visualization_for(intent: str) -> str:
     return INTENTS.get(intent, ((), "none"))[1]
+
+
+def capability_answer() -> str:
+    """What this engine can actually answer.
+
+    Deliberately not a chat feature: one paragraph, no retrieval, no citations —
+    because there is nothing to cite. It is scoped to what the INTENTS table above
+    actually implements, and it states the limits in the same breath as the
+    capabilities, since a capability list that omits them is a sales pitch.
+    """
+    return (
+        "I answer questions against the FIR records held in this system, and I cite "
+        "the record behind every claim. I can look up a case by its FIR number; give "
+        "a named person's prior cases, known associates and recorded aliases; trace "
+        "money between accounts; map crime hotspots and forecast case volume for a "
+        "district; score risk and recidivism; and find cases similar to one you name. "
+        "I answer in English or Kannada.\n\n"
+        "I do not name suspects, infer guilt, or answer from anything other than the "
+        "records — where they do not support an answer, I say so instead of guessing. "
+        "What I can show you is also limited by your rank and station."
+    )
 
 
 def has_unresolved_reference(query: str, entities: list[Entity]) -> bool:

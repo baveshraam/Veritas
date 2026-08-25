@@ -348,3 +348,137 @@ def test_an_exact_identifier_hit_suppresses_semantic_search():
     assert state.exact_lookup_hit is True
     assert called == [], "vector search ran despite an exact identifier hit"
     assert [e.evidence_id for e in out] == ["fir:1"]
+
+
+# --- BUG-009 / BUG-010: a refusal has to state the reason it actually refused -------
+#
+# Measured live before the fix, every one of these produced the same sentence -- "please
+# refine the query, or check whether the record exists in the system" -- after sweeping
+# the vector index and citing nothing:
+#
+#   "who could be the suspect"      asks for an inference the records do not license
+#   "what all could you answer"     is a question about the tool, not about the records
+#   "show me the money trail"       names no subject to trace
+#   "Tell me about <unknown name>"  names someone not on file
+#
+# Four different facts, one sentence, and the sentence was wrong for three of them.
+# Every branch below still REFUSES. None of them answers, and none softens "not found
+# in the records" into "does not exist".
+
+from rag_agent.evidence.evaluator import REFUSAL_MESSAGES, refusal_message
+from rag_agent.intents import NEEDS_SUBJECT, capability_answer
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("who could be the suspect", "NOT_INFERABLE"),
+    ("who might be the culprit", "NOT_INFERABLE"),
+    ("who committed this crime", "NOT_INFERABLE"),
+    ("what all could you answer", "CAPABILITY"),
+    ("what can you do", "CAPABILITY"),
+    ("what kind of questions do you support", "CAPABILITY"),
+])
+def test_questions_retrieval_cannot_answer_are_routed_before_retrieval(query, expected):
+    assert classify(query) == expected
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("Who are the associates of Usha Naika?", "PERSON_NETWORK"),
+    ("Show me the money trail for Usha Naika", "FINANCIAL"),
+    ("Does Usha Naika have priors?", "PERSON_HISTORY"),
+    ("What is the status of FIR 100222201202600022?", "FIR_LOOKUP"),
+    ("theft hotspots in Bengaluru Urban", "HOTSPOT"),
+])
+def test_the_new_branches_do_not_swallow_real_questions(query, expected):
+    """The regexes run before keyword scoring, so they must not capture ordinary work."""
+    assert classify(query) == expected
+
+
+def test_every_refusal_reason_has_its_own_message():
+    reasons = {"no_evidence", "exact_lookup_missed", "no_subject",
+               "person_not_on_file", "not_inferable"}
+    assert reasons <= set(REFUSAL_MESSAGES)
+    assert len(set(REFUSAL_MESSAGES.values())) == len(REFUSAL_MESSAGES)
+
+
+def test_an_unknown_reason_falls_back_to_the_general_refusal():
+    assert refusal_message("something_new") == NOT_FOUND_MESSAGE
+
+
+def test_no_refusal_message_claims_the_record_does_not_exist():
+    """Rule: "not found in the records" must never become "does not exist". The store
+    holds what it holds; absence from it is not absence from the world."""
+    for reason, msg in REFUSAL_MESSAGES.items():
+        low = msg.lower()
+        assert "does not exist" not in low or "within your access scope" in low, reason
+
+
+def test_the_capability_answer_states_its_limits_not_only_its_features():
+    text = capability_answer().lower()
+    assert "cite" in text
+    assert "do not name suspects" in text and "infer guilt" in text
+    assert "rank and station" in text
+
+
+def test_subject_less_relational_questions_stop_before_retrieval():
+    """BUG-010. These used to run the full pipeline and refuse for the wrong reason."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    for intent in sorted(NEEDS_SUBJECT):
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="show me the money trail")
+        state.intent = intent
+        called = []
+        saved = orch.vector_agent.search
+        orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+        try:
+            orch.node_retrieve(state)
+        finally:
+            orch.vector_agent.search = saved
+
+        assert state.refusal_reason == "no_subject", intent
+        assert called == [], f"{intent} searched the index with no subject to search for"
+        assert state.evidence_items == []
+
+
+def test_a_capability_question_is_answered_without_touching_the_records():
+    """BUG-009. It is the one of the three that gets an answer -- and it carries no
+    citations, because there is no record behind a description of the tool."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="what all could you answer")
+    state.intent = "CAPABILITY"
+
+    called = []
+    saved = orch.vector_agent.search
+    orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+    try:
+        orch.node_retrieve(state)
+        orch.node_evaluate(state)
+        orch.node_synthesize(state)
+    finally:
+        orch.vector_agent.search = saved
+
+    assert called == []
+    assert state.citations == []
+    assert state.final_answer == capability_answer()
+    assert NOT_FOUND_MESSAGE not in state.final_answer
+
+
+def test_a_suspect_question_refuses_for_the_right_reason():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="who could be the suspect")
+    state.intent = "NOT_INFERABLE"
+    orch.node_retrieve(state)
+    orch.node_evaluate(state)
+    orch.node_synthesize(state)
+
+    assert state.refusal_reason == "not_inferable"
+    assert state.citations == []
+    assert "do not nominate suspects" in state.final_answer
+    assert state.final_answer != NOT_FOUND_MESSAGE

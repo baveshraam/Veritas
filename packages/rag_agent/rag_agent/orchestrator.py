@@ -19,7 +19,7 @@ from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
     translation_agent, vector_agent, voice_agent,
 )
-from .evidence.evaluator import NOT_FOUND_MESSAGE, evaluate, supporting
+from .evidence.evaluator import evaluate, refusal_message, supporting
 from .retrieval import hipporag, tog
 from .state import AgentTraceEntry, EvidenceItem, InvestigationState
 
@@ -114,6 +114,7 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
             # Clearing it means retrieval finds nothing and the evaluator refuses —
             # which is the correct answer to "tell me about a person we have no file on".
             focus.active_person = None
+            state.refusal_reason = "person_not_on_file"
             resolved_note = f"no person matching '{named}' exists in the records"
     elif intents.has_unresolved_reference(query, entities):
         if state.active_entities.active_person:
@@ -146,6 +147,32 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     query = state.original_query or ""
     pid = state.active_entities.active_person
     evidence: list[EvidenceItem] = []
+
+    # Three questions that retrieval cannot answer, and must not be asked to try.
+    #
+    # Running them anyway is what produced the observed behaviour: "who could be the
+    # suspect" and "show me the money trail" both swept the vector index, came back with
+    # a handful of unrelated criminal profiles, and refused with a message telling the
+    # officer to check whether the record exists — when the actual problem was that the
+    # question named no record to check. Each of these now stops here with its own
+    # reason, and each still refuses; none of them answers.
+    if state.intent == "CAPABILITY":
+        # Not a refusal — the only one of the three that gets an answer. The reason is
+        # set so evaluate() and the conditional edge both leave the turn alone;
+        # node_synthesize branches on the intent before it looks at refusals.
+        state.refusal_reason = "capability"
+        _trace(state, "Orchestrator", "Question is about this tool, not the records", t0)
+        return state
+    if state.intent == "NOT_INFERABLE":
+        state.refusal_reason = "not_inferable"
+        _trace(state, "Orchestrator",
+               "Question asks for an inference the records do not license", t0)
+        return state
+    if state.intent in intents.NEEDS_SUBJECT and not pid and not state.refusal_reason:
+        state.refusal_reason = "no_subject"
+        _trace(state, "Orchestrator",
+               f"{state.intent} needs a named subject; none given", t0)
+        return state
 
     # 1. HippoRAG: seed personalized PageRank from the query's entities
     if pid:
@@ -400,18 +427,46 @@ def _dedupe(items: list[EvidenceItem]) -> list[EvidenceItem]:
 
 def node_evaluate(state: InvestigationState) -> InvestigationState:
     t0 = time.perf_counter()
+    # A turn that already stopped in node_retrieve was never a retrieval failure, so it
+    # does not get scored as one — running the evaluator over an empty batch would
+    # relabel "you named no subject" as "no supporting records found".
+    if state.refusal_reason:
+        state.requires_escalation = True
+        state.confidence_score = 0.0
+        return state
+
     verdict, confidence, detail = evaluate(state.evidence_items, state.retrieval_attempts - 1,
                                            state.exact_lookup_missed)
     state.confidence_score = confidence
     state.requires_escalation = verdict == "REJECT"
+    if verdict == "REJECT" and not state.refusal_reason:
+        state.refusal_reason = ("exact_lookup_missed" if state.exact_lookup_missed
+                                else "no_evidence")
     _trace(state, "Evidence Evaluator (CRAG)", detail, t0, confidence)
     return state
 
 
 def node_synthesize(state: InvestigationState) -> InvestigationState:
     t0 = time.perf_counter()
+
+    # A capability question is answered, not refused: the honest answer to "what can you
+    # do" is a description of this tool. It carries no citations because there is no
+    # record behind it, and the console renders a citation-free turn as a refusal — so
+    # the answer says plainly that it is about the system rather than the records.
+    if state.intent == "CAPABILITY":
+        answer = intents.capability_answer()
+        if state.language != "en":
+            answer, _ = translation_agent.to_language(answer, state.language)
+        state.final_answer = answer
+        state.citations = []
+        state.evidence_items = []
+        _trace(state, "Synthesis",
+               "Described this system's scope — no records were consulted", t0)
+        return state
+
     if state.requires_escalation:
-        answer = NOT_FOUND_MESSAGE
+        reason = state.refusal_reason or "no_evidence"
+        answer = refusal_message(reason)
         note = None
         if state.language != "en":
             answer, note = translation_agent.to_language(answer, state.language)
@@ -419,7 +474,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
             answer = f"{answer}\n\n{note}"
         state.final_answer = answer
         state.citations = []
-        _trace(state, "Synthesis", "Refused to answer — no supporting evidence", t0)
+        _trace(state, "Synthesis", f"Refused to answer — {reason}", t0)
         return state
 
     # Cite only what supports the answer. Retrieval deliberately casts wide and most of
@@ -487,6 +542,11 @@ def node_voice_out(state: InvestigationState) -> InvestigationState:
 
 def _after_evaluate(state: InvestigationState) -> str:
     """CRAG's conditional edge — the reason a weak batch can't reach synthesis."""
+    # Widening is for a batch that came back too thin. It is not a remedy for a question
+    # that named no subject, asked for an inference, or asked about the tool itself —
+    # retrying those searches the index twice and refuses on the second pass anyway.
+    if state.refusal_reason:
+        return "synthesize"
     verdict, _, _ = evaluate(state.evidence_items, state.retrieval_attempts - 1,
                              state.exact_lookup_missed)
     return "retrieve" if verdict == "REFINE" else "synthesize"
