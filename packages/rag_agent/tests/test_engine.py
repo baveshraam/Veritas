@@ -837,11 +837,10 @@ def test_aml_detectors_run_against_every_account_the_person_owns():
     ("How many theft cases are there in Mandya district?", "CRIME_SEARCH"),
     ("list the robbery cases", "CRIME_SEARCH"),
     ("count the theft cases", "CRIME_SEARCH"),
-    # NOTE: "show me murder FIRs" routes to FIR_LOOKUP, because keyword matching is by
-    # substring and "fir" is inside "firs". Harmless today — FIR_LOOKUP's branch is a
-    # no-op without a FIR number, so the turn falls through to the same semantic search
-    # CRIME_SEARCH would have run — but it is recorded in the failure log (BUG-019) as
-    # the kind of thing that stops being harmless the moment that branch grows.
+    # BUG-019, fixed: keyword matching used to be by substring, and "fir" is inside
+    # "firs" — "show me murder firs" scored FIR_LOOKUP on a query that named no FIR.
+    # Word-boundary matching now correctly leaves FIR_LOOKUP unmatched here.
+    ("show me murder firs", "CRIME_SEARCH"),
     # and the specific intents keep their questions
     ("Show me crime hotspots", "HOTSPOT"),
     ("show me the money trail", "FINANCIAL"),

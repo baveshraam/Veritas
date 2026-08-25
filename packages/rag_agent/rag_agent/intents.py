@@ -36,6 +36,15 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "FIR_LOOKUP":        (("fir", "case number", "case details", "status of"), "none"),
 }
 
+# Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
+# "firs" ("show me murder firs"), scoring FIR_LOOKUP on a query that named no FIR.
+# Harmless while FIR_LOOKUP's branch is a no-op without a matching FIR_NUMBER_RE, but
+# not a property to leave load-bearing by accident.
+_KEYWORD_RE = {
+    kw: re.compile(r"\b" + re.escape(kw) + r"\b")
+    for keywords, _ in INTENTS.values() for kw in keywords
+}
+
 # Intents that are meaningless without a subject. Asked without one, the engine used to
 # run the whole retrieval pipeline, come back with semantic neighbours, and refuse with
 # "check whether the record exists in the system" — which is not why it failed. The
@@ -82,7 +91,7 @@ def classify(query: str) -> str:
         return "NOT_INFERABLE"
     scores: dict[str, int] = {}
     for intent, (keywords, _) in INTENTS.items():
-        hits = sum(1 for k in keywords if k in q)
+        hits = sum(1 for k in keywords if _KEYWORD_RE[k].search(q))
         if hits:
             scores[intent] = hits
 
