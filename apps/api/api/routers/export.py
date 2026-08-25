@@ -122,14 +122,29 @@ def _smartbrowz_pdf(page: str) -> tuple[bytes | None, str]:
         # changelog), and `main.py`'s middleware already captured THIS request's
         # context into `ds._sdk_app` via `bind_catalyst_request`. Calling
         # `initialize()` fresh here built a second, differently-scoped app that
-        # resolved to no usable identity — measured live: `CatalystAPIError:
-        # {'code': 'INVALID_ID', 'message': 'No such User with the given id
-        # exists'}`, immediately after fixing the method-name bug below made the
-        # call reach a real Catalyst response for the first time. Reusing the
-        # request-bound app is the same pattern `/jobs/refresh` already uses for
-        # background work outside any request at all.
+        # resolved to no usable identity. Reusing the request-bound app is the
+        # same pattern `/jobs/refresh` already uses for background work outside
+        # any request at all.
         from data import ds
         app = ds.catalyst_app()
+        # `_switch_user("admin")` — the fix that resolved the identical class of
+        # bug for QuickML (BUG-021, `rag_agent/llm.py:_token`). `initialize(req=
+        # request)` derives identity from the *caller's own* Catalyst session
+        # cookie. Veritas's auth is hybrid (CLAUDE.md v8): a real Catalyst
+        # session first, a signed JWT as fallback — and a JWT-only session
+        # (every officer this project's own tooling can drive; there is no
+        # browser here to complete an interactive Catalyst sign-in) carries no
+        # Catalyst user cookie at all. SmartBrowz apparently resolves "the
+        # current user" the same way QuickML's credential path did, so with no
+        # real Catalyst user in the request it fails identically: `CatalystAPIError:
+        # {'code': 'INVALID_ID', 'message': 'No such User with the given id
+        # exists'}`. Switching the credential to the app's own admin scope —
+        # the same scope Data Store calls already run under — sidesteps needing
+        # a per-officer Catalyst identity that JWT-fallback sessions never have.
+        try:
+            app.credential._switch_user("admin")  # noqa: SLF001 — see above
+        except Exception:
+            pass  # not every credential type supports this; fall through and let the call itself fail informatively
         # A4, KSP letterhead margins. The HTML is the same string the local renderer
         # gets, so the two paths cannot drift into producing different documents.
         #
