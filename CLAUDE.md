@@ -684,3 +684,87 @@ volume justifies the training cost.
   - **Verified live after deploy**, all nine: bare hotspot → map/600 points/9 citations, bare
     forecast → trend/30 points/6 citations, named hotspot, network, refusal, real FIR, Kannada.
     Console redeployed; all 7 assets 200 and the new error handling is in the served bundle.
+- **v12 — an overnight pass closing platform-limitation bugs, and correcting a claim v8 got
+  wrong about its own image.**
+  - **`/alerts` moved off WebSocket to SSE, and now works live.** Prior sessions had verified
+    the WebSocket auth fix correct in-process but never live — a real `websocket-client` and
+    curl with explicit `Connection: Upgrade`/`Sec-WebSocket-*` headers both got Starlette's own
+    404 against the deployed AppSail gateway, while an ordinary REST route on the identical
+    domain returned 401 as expected. Rather than keep chasing an unconfirmed gateway question,
+    `/alerts` now uses `sse_starlette.EventSourceResponse` over `GET`, the transport `/chat`
+    already proves works live on this deployment, authenticated with the same
+    `Depends(current_officer)` every other route uses. **Verified live post-deploy**:
+    unauthenticated → 401; authenticated → real streaming district anomaly alerts.
+  - **v8's "the image now carries only code and CPU wheels" was wrong, and still is.**
+    `/health` now reports `model_weights` and `nllb_backend` — not inferred from response
+    latency (which is what let this claim go unchecked in the first place), but observed
+    directly. Live, post-deploy: `model_weights: "fetched from Catalyst File Store this cold
+    start"` (the File Store streaming path genuinely works — it had simply never been wired:
+    the AppSail app had no `VERITAS_MODELS_FOLDER_ID`/`_FILE_IDS`/`HF_HOME`, set this pass via
+    the configuration API) **and** `nllb_backend: "ctranslate2 (...local/baked directory)"` —
+    the image still bakes in a converted NLLB CTranslate2 directory at
+    `/opt/models/nllb-ct2`. The File Store copy (a raw Hugging Face hub cache, confirmed by
+    downloading and inspecting a chunk directly) is real and now fetched successfully, but
+    currently redundant for translation, since `translate.py` prefers the baked CTranslate2
+    directory when present. Left as-is rather than rebuilding the base image to remove it: the
+    baked path is faster (CTranslate2 vs. a raw transformers load) and working well — a round
+    trip that measured 13.4s in the v11-era audit measured 4.3s after this pass, partly from
+    this fast backend and partly from the warm-up fix below. Correcting the record, not the
+    architecture.
+  - **A cold NLLB/whisper load is ~20s of weight loading — profiled directly, not guessed.**
+    Two warm calls on the same process, immediately after, were 0.8-1.4s each. Nothing paid
+    that cost proactively, so it landed on whichever officer's Kannada query happened to be
+    first after a container start — indistinguishable from a hang at 20s.
+    `translate.warm()`/`speech.warm()` now run from the same background thread that already
+    fetches the Data Store mirror and File Store weights on startup. A separate, larger cost —
+    CPU-bound autoregressive generation time scaling with output length, measured at 10.7s for
+    translating one multi-sentence answer even on an already-warm model — is an inherent
+    property of running NLLB on CPU, not a bug this fix (or any code change short of a
+    smaller/faster model) touches.
+  - **DoWhy's deployability was measured, not re-asserted.** Installed `dowhy==0.14` into an
+    isolated venv and sized its dependency closure directly: genuinely new weight (excluding
+    numpy/scipy/pandas/sklearn/networkx, already present) is ≈405MB — dominated by
+    `llvmlite`+`numba` (≈149MB, the same dependency class the v7 changelog already removed
+    once, when SHAP's numba chain cost ≈240MB and was replaced with xgboost's own
+    `pred_contribs`), plus `cvxpy`, `statsmodels`, `sympy`, and (surprisingly, with no
+    "plotting" extra requested) `matplotlib`. Against the current 0.88GB image and the
+    empirically measured ~1.3GB bundle-sandbox ceiling, that lands at ≈1.28GB — inside the
+    ceiling on paper, with essentially no margin against a limit that has already killed two
+    prior deploys outright. Not attempted live: gambling a working, verified deployment to "see
+    if it fits" is exactly the trial-and-error this project's own rules exclude. `dowhy` stays
+    out of the image; the honest decline (v6's evaluator fix) remains correct.
+  - **QuickML's request failure narrowed to a named, documented-elsewhere requirement.**
+    Checked current Zoho documentation directly: QuickML's sibling "pipeline endpoints" REST
+    surface documents a required per-endpoint `X-QUICKML-ENDPOINT-KEY` header, obtained only
+    from that model's own console popup — the LLM Serving invoke contract itself is not
+    published anywhere reachable from here (checked the dedicated docs pages and the
+    machine-readable `llms-full.md` dump). `QUICKML_ENDPOINT` has no recorded provenance as
+    having been copied from that popup, and the live `PATTERN_NOT_MATCHED`/"zoho-inputstream"
+    gateway error is consistent with an unrecognised route, which is what a guessed URL with no
+    key produces. `llm.py` now sends the header when `QUICKML_ENDPOINT_KEY` is configured —
+    nothing fabricated, effective the moment someone copies the real key from the console.
+  - **PDF export's remaining identity question was tested, not left presumed.** Added
+    `_switch_user("admin")` before `smart_browz()` — the exact fix that resolved the identical
+    `INVALID_ID`/"No such User" failure class for QuickML (v11's BUG-021). Live-tested
+    post-deploy: the identical error persists byte-for-byte. This rules the hypothesis out
+    rather than leaving it assumed correct — Data Store/Cache/Graph calls already succeed under
+    that same admin scope, so the token itself is accepted; SmartBrowz's API layer appears to
+    need a genuine Catalyst User Management identity distinct from any service-token scope,
+    reachable only through an interactive Catalyst Authentication sign-in this environment has
+    no browser to drive.
+  - **BUG-019 fixed**: keyword intent matching used a bare substring check, so `"fir" in
+    "firs"` routed `"show me murder firs"` to `FIR_LOOKUP`. Word-boundary matching now, per
+    keyword, compiled once.
+  - **Both Catalyst Cron jobs had never once succeeded since being created (Jul 13, 2026) —
+    `success_count: 0`, `failure_count: 20`, and both disabled.** Listed them directly over the
+    Admin API rather than continuing to leave "does Cron actually fire on schedule" unobserved
+    (flagged as DEP-12 in the QA matrix since BUG-024). Two stacked causes: the configured
+    `job_meta.url` used the **org id** (`60077763394`) instead of the AppSail app's own id
+    (`50043864344`) — likely never resolved to the deployed app at all — and, after fixing
+    that, the configured `X-Veritas-Job-Token` header turned out to predate the current
+    `VERITAS_JOB_TOKEN` and no longer matched (401 "Bad job token"). Both jobs corrected via
+    `PUT /project/{id}/cron/{jobId}` and re-enabled; both endpoints then called directly with
+    the corrected URL+token and returned real success (`audit-verify`: chain intact;
+    `refresh`: started). `veritas_audit_verify` is the tamper-evidence claim's own enforcement
+    — "a tamper check nobody runs is not a tamper check" — and had been running zero times in
+    production.

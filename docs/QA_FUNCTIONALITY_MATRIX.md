@@ -168,8 +168,8 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-09 | AppSail runtime — QuickML | BROKEN, diagnosed | BUG-021 (fixed) / BUG-022 (open) |
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
-| DEP-12 | Cron — `veritas_refresh` (6h) | VERIFIED (the job itself); schedule unobserved | BUG-024 fixed, deployed, and watched to genuine completion live (5-6 min real runtime — confirms the original synchronous-timeout defect was real and unavoidable). Whether Cron's 6h schedule actually invokes it was not observed this session |
-| DEP-13 | Cron — `veritas_audit_verify` (12h) | VERIFIED (the job logic; schedule itself still unobserved) | Triggered manually with the real job token — works correctly, chain intact |
+| DEP-12 | Cron — `veritas_refresh` (6h) | **VERIFIED (BUG-025)** | Was never actually configured to succeed: wrong hostname (org id instead of app id) + a stale job token, `success_count: 0` / `failure_count: 20` since creation, disabled. Both defects found by listing the live Cron config directly, fixed via the Admin API, re-enabled, and confirmed by calling the corrected endpoint — `{"status":"started"}`. The schedule's own next unattended fire (up to 6h out) is what would confirm end-to-end; the configuration that was actually broken is fixed and verified |
+| DEP-13 | Cron — `veritas_audit_verify` (12h) | **VERIFIED (BUG-025)** | Same two defects, same fix, same verification: `{"intact":true,"first_bad_audit_id":null}` via the corrected URL+token. Had been silently non-functional since Jul 13, 2026 — the tamper-evidence claim's own enforcement mechanism had run zero times in production |
 | DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 
 ## 8. Data integrity (carried forward from Phase 1, re-confirmed this session)
@@ -201,7 +201,10 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
   session; pronoun resolution across turns is unit-tested only.
 - Whether Aequitas fairness auditing (ML-12) is reachable from the live product at all,
   or exists purely as an offline analysis script.
-- Cron jobs actually firing on schedule (DEP-12/13) vs. only their auth gate.
+- Cron jobs' unattended schedule firing (DEP-12/13) over real wall-clock time — their
+  configuration was found broken (wrong hostname + stale token, BUG-025), fixed, and
+  each endpoint re-verified by direct call; only the schedule actually firing
+  unattended, hours out, remains genuinely unobserved.
 - `BriefFacts` repetitiveness and its downstream effect on similarity/embeddings
   (DATA-06) — flagged by the user's own brief as a known concern, not yet traced.
 

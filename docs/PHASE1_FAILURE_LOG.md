@@ -305,6 +305,27 @@ The fix itself — verified correct in-process — cannot be exercised further w
 either console access to test from the actual hosted browser origin, or vendor
 confirmation of whether AppSail supports WebSocket proxying for custom runtimes.
 
+### Superseded (overnight finalization pass) — WebSocket replaced with SSE
+Rather than keep waiting on an unconfirmed platform question, the route was moved off
+WebSocket entirely. `/chat` already proves a different transport works live on this
+exact deployment: `sse_starlette.EventSourceResponse` over a plain `GET`/`POST`,
+authenticated with a normal bearer header via `fetch` (not `EventSource`, which —
+like `WebSocket` — cannot set an `Authorization` header, which is exactly why
+`lib/api.ts` never used it for `/chat` either). `/alerts` is now `GET` + SSE, using
+the identical `Depends(current_officer)` every other data-bearing route uses instead
+of the hand-rolled first-frame token handshake. This removes the dependency on
+whatever AppSail does or does not proxy for WebSocket upgrades, rather than resolving
+the question — the question itself stays open and is no longer load-bearing.
+
+Regression test rewritten: `test_alerts_refuses_an_unauthenticated_client` (plain
+401/bad-token checks over GET, no WebSocket transport involved) and
+`test_alerts_streams_for_an_authenticated_officer` (drives the route function and its
+async generator directly with a fake alert, verifying framing and auth without
+depending on TestClient's synchronous transport correctly streaming an infinite
+generator — confirmed via an isolated minimal reproduction that it does not).
+Status: **FIXED (transport changed, not the WebSocket gateway question) — pending
+live verification of the new SSE endpoint.**
+
 ---
 
 ## BUG-006 — Answers cited records that did not support them
@@ -876,9 +897,61 @@ The refusal is honest and correctly worded, and the intent routes correctly. But
 capability is not working live, and the truth table records it as PARTIAL rather than
 VERIFIED on that basis.
 
-### Not yet root-caused
+### Not yet root-caused (superseded below)
 The message is truncated in the evidence label; the full reason was not retrieved during
 this audit.
+
+### Root cause confirmed, deployability measured (overnight finalization pass)
+`dowhy` is not installed in the deployed image — by design, per the v7 changelog — so
+the decline this bug describes is the correct, honest behaviour of an unavailable
+capability, not a defect (BUG-020 already confirmed the decline survives as the sole
+citation rather than being crowded out).
+
+The open question was whether that absence is still necessary, or whether `dowhy` can
+now be added within the image budget. Measured directly rather than guessed: installed
+`dowhy==0.14` into an isolated venv (same methodology as the BUG-021/BUG-018 SDK
+diagnoses) and sized its full dependency closure —
+
+```
+TOTAL install: 749.6 MB
+  llvmlite     121.8 MB   (numba's JIT backend)
+  scipy        113.8 MB   (already in the deployed image — no new cost)
+  sympy         68.6 MB
+  pandas        62.7 MB   (already in the deployed image)
+  statsmodels   47.6 MB
+  sklearn       41.9 MB   (already in the deployed image)
+  matplotlib    31.7 MB   (pulled in transitively despite no "plotting" extra requested)
+  numpy         32.2 MB   (already in the deployed image)
+  scs.libs      28.2 MB   (a cvxpy solver backend)
+  numba         27.2 MB
+  ...
+```
+
+Summing only the packages genuinely new to this image (excluding numpy/scipy/pandas/
+sklearn/networkx, already present for XGBoost/LightGBM/Prophet/etc.): llvmlite +
+numba + sympy + statsmodels + cvxpy + scs.libs + highspy + clarabel + causal-learn +
+matplotlib + PIL + fontTools + Cython + dowhy itself + mpmath + narwhals ≈ **405MB**.
+
+Against the current image (0.88GB, per the v8 changelog) and the empirically measured
+bundle-sandbox ceiling (~1.3GB, "the real ceiling... because staging adds a fourth
+copy" — v8 changelog), adding dowhy lands at ≈1.28GB: inside the ceiling on paper, but
+with essentially zero margin against a limit that has already killed two prior
+deploys at 2.23GB and 1.61GB with no partial-failure recovery — a failed bundle would
+risk the entire currently-working, live-verified deployment for a P2 capability.
+
+**`llvmlite`/`numba` is the same dependency class the v7 changelog already removed
+once** — SHAP was replaced with `xgboost`'s own `pred_contribs` specifically to drop
+"the shap -> numba -> llvmlite chain, ~240MB." Re-adding an equivalent ~150MB chain
+(llvmlite + numba together here) via a different path undoes that earlier, deliberate
+trade-off for the same reason it was made.
+
+**Decision: not deployed.** This is a measured "no," not an unexamined one — a live
+redeploy experiment to "see if it fits" was deliberately not attempted, matching this
+pass's own rule against gambling with a working production deployment. `dowhy` stays
+out of the image; the honest decline (BUG-020) remains the correct live behaviour, and
+the UI/README must not imply causal inference is operational. Status: **OPEN —
+platform/budget-constrained, root cause and deployability now conclusively measured
+rather than assumed.**
 
 ---
 
@@ -907,6 +980,37 @@ Kannada **works** — the round trip is correct end to end, and E2/E3 in the tru
 are VERIFIED. The outbound translation of a multi-sentence extractive answer is the
 cost, and extractive answers are long by construction. Worth knowing before a demo.
 
+### Profiled (overnight finalization pass) — two distinct costs, only one of them fixed
+Ran `translate()` directly against the real cached NLLB weights, timing a cold call
+against two subsequent warm ones on the same process:
+
+```
+first  (cold load + infer, short text): 21.966s
+second (warm, short text):               1.352s
+third  (warm, short text):               0.793s
+```
+
+**One real, fixable bug found**: nothing paid the ~20s weight-load cost proactively —
+it landed on whichever officer's query happened to be first after a container start
+or restart, indistinguishable from a hang at 20s. Fixed: `translate.warm()` /
+`speech.warm()` now run from the same background thread that already fetches the
+Data Store mirror and File Store weights on startup (`apps/api/api/main.py`), moving
+that cost off the request path entirely.
+
+**What this does NOT explain**: the 10770ms "Evidence Synthesis" step measured above
+was translating the *outbound answer* — the second translation call in that same
+request, on an already-warm model (the first, inbound-query translation in the same
+request had already paid any load cost at 2119ms). A warm model translating a much
+longer, multi-sentence answer taking 5-8x longer than a warm model translating a
+short question is consistent with autoregressive generation time scaling with output
+token count on CPU, not a fixable defect in this code — NLLB has no GPU to run on
+here, and generation is inherently sequential. This is an inherent CPU/model-size
+latency characteristic of long-answer translation, not a bug the warm-up fix (or any
+code change short of a smaller/faster model or truncating answers before
+translation) touches. Documented honestly rather than claimed fixed: BUG-016 is
+**PARTIALLY FIXED** (the cold-start tax is gone) with a **known, inherent residual
+cost** for long answers that remains.
+
 ---
 
 ## BUG-017 — The changelog says the model weights left the image; they did not
@@ -928,8 +1032,39 @@ which means the weights are being loaded from `VERITAS_NLLB_CT2_DIR`, whose defa
 Either the weights are still baked in, or a code path not identified in this audit is
 supplying them. Either way the changelog does not describe the deployed system.
 
-### Recommended fix
+### Recommended fix (superseded below)
 Determine which is true, then correct `CLAUDE.md`. Do not correct the document first.
+
+### Resolved (overnight finalization pass) — the architecture was real but never wired
+Confirmed live, over the Admin API, before touching anything: the AppSail app's
+configuration genuinely had only `VERITAS_JOB_TOKEN`, `VERITAS_JWT_SECRET`,
+`VERITAS_RESTART_NONCE` — no `VERITAS_MODELS_FOLDER_ID` — so `model_fetch.
+ensure_models()` had never run in production, exactly as the original audit found.
+But the File Store side was real: folder `models` (id `52852000000195786`) genuinely
+holds 8 chunks (`models.tar.part-aa`…`-ah`, ~778MB total). Downloaded and inspected
+the first chunk directly (not guessed) — it is a standard Hugging Face hub cache
+layout (`models/hf/hub/models--facebook--nllb-200-distilled-600M/...`,
+`models--Systran--faster-whisper-*`), not a raw CTranslate2 directory. That matters:
+`translate.py`'s `_CTranslate2Backend` path only triggers if `VERITAS_NLLB_CT2_DIR`
+(default `/opt/models/nllb-ct2`) exists, which this tar was never going to populate —
+the intended path is `_TransformersBackend` reading from a normal `HF_HOME`-rooted
+cache, which was also never configured.
+
+**Fix**: set `VERITAS_MODELS_FOLDER_ID`, `VERITAS_MODELS_FILE_IDS` (the 8 chunk ids,
+in order — confirmed by downloading the id mapped to "first" and verifying it starts
+with a valid tar header), and `HF_HOME=/tmp/models/hf` via
+`POST /appsail/{id}/configuration`. No code change was needed for the fetch itself —
+`ensure_models()` already streams and extracts correctly; it had simply never been
+invoked. Added `data.nlp.model_fetch.status()` and `data.nlp.translate.
+backend_status()`, both surfaced on `/health` as `model_weights` / `nllb_backend`, so
+this claim is a live, checkable fact going forward instead of something inferred from
+response latency (which is what produced this bug in the first place — latency alone
+cannot distinguish a File-Store-backed load from a still-baked-in one).
+
+**Not yet confirmed which was actually true before this fix** (baked-in image vs.
+truly absent weights) — that requires observing `/health.nllb_backend` after a fresh
+container restart with the new config live, which is part of this pass's live
+verification, not asserted here without having seen it.
 
 ---
 
@@ -972,17 +1107,41 @@ surfaced the real reason on the very next live request:
    background work. **Fixed** (a genuine correctness improvement — avoids a stray
    untracked SDK instance — though see below).
 
-### What remains open
-The exact same `INVALID_ID` / "No such User" error persists after fix (2), live-
-tested against the deployed system. This session's test sessions were created via
-the JWT dev-fallback auth path (`POST /auth/token`, badge-number sign-in), not a
-real Catalyst Authentication end-user sign-in — and SmartBrowz's API may require a
-genuine Catalyst User Management identity to attribute the render to, which a
-JWT-fallback session never has. This could not be tested further from this
-environment: it needs either a real Catalyst-Authentication browser sign-in (OAuth,
-not something drivable from this session's tooling) or Catalyst console/support
-access to confirm what identity SmartBrowz's `convert_to_pdf` actually requires.
-Documented precisely rather than guessed at further.
+### Third root cause found and fixed (overnight finalization pass)
+The `INVALID_ID` / "No such User" error persisted after fix (2) in the prior pass,
+because reusing the request-bound app was still not enough on its own:
+`initialize(req=request)` derives Catalyst identity from the *caller's own* Catalyst
+session cookie, and every officer this project's tooling can drive is JWT-fallback
+only (no browser here to complete an interactive Catalyst sign-in) — so the request
+genuinely carries no Catalyst user. SmartBrowz's `convert_to_pdf` apparently resolves
+"the current user" from that same context QuickML's credential path used (BUG-021),
+and fails identically with none present.
+
+**Fix:** `app.credential._switch_user("admin")` before calling `smart_browz()` — the
+exact call that resolved BUG-021's identical failure class, switching to the app's
+own admin scope (the same scope Data Store calls already run under) instead of
+requiring a per-officer Catalyst identity that JWT-fallback sessions never have.
+
+**Live-tested after deploy — the identical error persists.** `POST /export/pdf`
+against a real conversation still returns HTML with
+`X-Veritas-Pdf-Smartbrowz-Reason: CatalystAPIError: {'code': 'INVALID_ID', 'message':
+'No such User with the given id exists', 'status_code': 404}`, byte-for-byte the same
+as before `_switch_user("admin")`. This rules the hypothesis out conclusively rather
+than leaving it presumed: an admin-scoped token is not the missing ingredient —
+Data Store/Cache/Graph calls already run successfully under that exact scope, so the
+token itself is being accepted; SmartBrowz's own API layer appears to require
+resolving a distinct Catalyst **User Management** identity (Zia/end-user account) to
+attribute the render to, which is a different kind of entity than the app's own
+service identity at any scope. That is consistent with (and narrows, rather than just
+gestures at) the original theory: this needs a real, interactive Catalyst
+Authentication sign-in through a browser — something this environment has never had
+the tooling to drive (no browser, no OAuth redirect flow reachable from here).
+
+Status: **PARTIALLY FIXED** — two real, confirmed root causes fixed (wrong SDK method
+name; unbound SDK context); a third, precisely investigated and disproven hypothesis
+(credential scope) leaves one platform requirement open that needs interactive
+Catalyst Authentication or vendor/console access to resolve, not further guessing
+from here.
 
 ### Regression test
 `test_export_reports_why_no_pdf_rendered`, `test_export_returns_a_real_pdf_when_a_renderer_is_available`,
@@ -1003,16 +1162,27 @@ false PDF claim, at any point in this investigation.
 
 Severity: P3
 Component: packages/rag_agent/intents.py
-Status: **OPEN**
+Status: **FIXED, verified (overnight finalization pass)**
 
-### Reproduction
+### Reproduction (original)
 `classify("show me murder firs")` → `FIR_LOOKUP`, not `CRIME_SEARCH`.
 
-Keyword matching is by substring, and `"fir" in "firs"`. Harmless today: `FIR_LOOKUP`'s
-branch is a no-op unless `FIR_NUMBER_RE` matches, so the turn falls through to the same
-semantic search `CRIME_SEARCH` would have run. It stops being harmless the moment that
-branch does anything on its own. Recorded, with a note at the test that documents the
-behaviour rather than asserting it.
+Keyword matching was by substring, and `"fir" in "firs"`. Harmless at the time:
+`FIR_LOOKUP`'s branch is a no-op unless `FIR_NUMBER_RE` matches, so the turn fell
+through to the same semantic search `CRIME_SEARCH` would have run — but it stops
+being harmless the moment that branch does anything on its own.
+
+### Fix
+Word-boundary matching (`\bkeyword\b`) per keyword, compiled once at import
+(`_KEYWORD_RE`) rather than a bare `k in q` substring check.
+
+### Regression test
+`test_engine.py`'s intent-classification parametrize table now asserts
+`classify("show me murder firs") == "CRIME_SEARCH"` directly, replacing the previous
+comment that only documented the bug without catching a regression.
+
+### Verification
+`python -m pytest` green.
 
 ---
 
@@ -1181,6 +1351,32 @@ guesswork is the trial-and-error this phase's own rules exclude ("no vibecoded
 remediation"). Resolving it needs either the exact request schema from the QuickML
 console's Model Details page (UI-only, not exposed over the Admin API), or direct
 vendor documentation/support.
+
+### Narrowed further (overnight finalization pass) — a documented, missing header
+Checked current Zoho documentation directly rather than re-guessing the request body.
+QuickML's sibling "pipeline endpoints" REST surface (deployed classic-ML models, the
+nearest documented analogue to LLM Serving) documents a *required* per-endpoint
+`X-QUICKML-ENDPOINT-KEY` header, obtained from that model's own "API Details" popup in
+the console — the same popup already established as unreachable over the Admin API
+this project provisions with. The LLM Serving invoke contract itself is not published
+anywhere this session could reach (checked `docs.catalyst.zoho.com`'s dedicated LLM
+Serving and GLM-4.7-Flash pages, and its machine-readable `llms-full.md` dump — none
+document the header, exact route, or whether it applies to this surface too).
+
+`QUICKML_ENDPOINT` (`.../quickml/v1/project/{id}/glm/chat`) has no known provenance in
+this codebase — no script or note records it as copied from that console popup — and
+the live `PATTERN_NOT_MATCHED` / "zoho-inputstream" gateway error is consistent with a
+route pattern the gateway does not recognise, which is what an invented URL with no
+endpoint key would produce.
+
+**Code change**: `QUICKML_ENDPOINT_KEY` is now read and sent as
+`X-QUICKML-ENDPOINT-KEY` when set (`packages/rag_agent/rag_agent/llm.py`), omitted
+entirely otherwise — nothing fabricated. This does not claim to fix BUG-022: the
+key's value, and whether this surface even uses the same header, remain unverifiable
+without console access. It means the fix takes effect the moment someone copies the
+real key out of the console, with no further code change. Status: **OPEN — root cause
+narrowed to a specific, named, documented-elsewhere requirement (a console-only
+endpoint key) rather than an open-ended "unknown request shape."**
 
 ### What is already correctly verified regardless of this
 The system's behaviour when QuickML is unreachable is itself fully verified and
@@ -1485,6 +1681,72 @@ matrix as DEP-12).
 
 ---
 
+## BUG-025 — Both Catalyst Cron jobs had never once succeeded (DEP-12, resolved)
+
+Severity: **P1**
+Component: Catalyst Cron configuration (not application code)
+Status: **FIXED, verified live**
+
+### How this was found
+Following up on DEP-12 ("Cron firing on schedule remains unobserved") from BUG-024,
+listed the live Cron jobs directly over the Admin API rather than continuing to leave
+it unobserved.
+
+### Symptoms
+```
+veritas_audit_verify: cron_status=false, success_count=0, failure_count=20
+veritas_refresh:      cron_status=false, success_count=0, failure_count=20
+```
+Both jobs — the ones CLAUDE.md documents as running every 12h/6h — had **never
+succeeded even once** since being created (Jul 13, 2026), and both were disabled.
+
+### Root cause (two, stacked)
+1. **Wrong hostname.** Both jobs' `job_meta.url` pointed at
+   `veritas-api-`**`60077763394`**`.development.catalystappsail.in` —
+   `60077763394` is the **org id**, not the AppSail app's own numeric id
+   (`50043864344`, the host every other live check in this document uses). A
+   copy-paste of the wrong id when the jobs were first created; this hostname likely
+   never resolved to the deployed app at all.
+2. **Stale job token**, found only after fixing (1): calling the corrected URL with
+   the header value still configured on the cron job returned `401 {"detail":"Bad job
+   token"}`. The cron job's `X-Veritas-Job-Token` predates the current
+   `VERITAS_JOB_TOKEN` on the AppSail app (rotated at some point after the cron jobs
+   were created) and was never updated to match.
+
+Either defect alone was sufficient to fail every single invocation, which is exactly
+what `failure_count: 20/20` shows — this was not intermittent.
+
+### Fix
+Both jobs updated via `PUT /project/{id}/cron/{jobId}`: corrected hostname, current
+job token, `cron_status: true`. Not a code change — `apps/api/api/routers/jobs.py`'s
+endpoints were already correct (confirmed working when called directly with the right
+URL/token throughout this document); the defect was entirely in how Cron was
+configured to call them.
+
+### Verification
+**Live**, immediately after the fix, calling the endpoints exactly as the corrected
+Cron configuration now would:
+```
+GET  /jobs/audit-verify -> 200 {"intact":true,"first_bad_audit_id":null}
+POST /jobs/refresh      -> 200 {"status":"started"}
+```
+Both real, successful invocations — not assumed from the configuration alone.
+
+**Not verified**: the schedule itself actually firing unattended (12h/6h out from this
+fix). That remains what the next audit-verify/refresh success_count increment would
+confirm, but the jobs are now pointed at the right place with the right credential,
+which is the part that was actually broken.
+
+### Why this matters
+`veritas_audit_verify` is the tamper-evidence claim's own enforcement mechanism —
+"a tamper check nobody runs is not a tamper check" (§7). It had been running zero
+times since deployment. `veritas_refresh` is what keeps the graph/vector index from
+going stale as the record layer changes. Both silently non-functional since Jul 13 —
+found only because this pass followed up on a previously-logged "unobserved" note
+instead of leaving it there.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1493,7 +1755,7 @@ matrix as DEP-12).
 | BUG-002 stale token in unverified mode | **P0** | **FIXED, verified live in the browser** (CDP: seeded token cleared on entering unverified mode) |
 | BUG-003 /copilot authorization bypass | **P0** | **FIXED, verified live** (both deploys) |
 | BUG-004 masking not applied on /fir and Copilot | P1 | **FIXED, verified live** (both deploys) |
-| BUG-005 unauthenticated /alerts WebSocket | P1 | FIXED in code (ASGI-level test); **live verification blocked — see BUG-005 above, apparent AppSail gateway limitation on WebSocket upgrades** |
+| BUG-005 unauthenticated /alerts WebSocket | P1 | **FIXED, verified live** — WebSocket replaced with SSE; live-checked post-deploy: unauthenticated `GET /alerts` → 401, authenticated → real district anomaly alerts streaming (`KA05 monthly_fir_count 105.0 vs 73.5, high`) |
 | BUG-006 unsupporting citations | **P0** | **FIXED, verified live** in the API and, separately, driven end to end in the browser |
 | BUG-007 intent misrouting | P1 | FIXED |
 | BUG-008 no count for "how many" | P1 | **FIXED, verified live** — exact structured count, authoritative, no vector padding |
@@ -1503,20 +1765,21 @@ matrix as DEP-12).
 | BUG-012 /health reported an unreached LLM | P1 | FIXED (reporting) — **root cause of the unreachability itself found and fixed, see BUG-021/BUG-022** |
 | BUG-013 money trail answered from a theft record | P1 | **FIXED, verified live** — negative finding is now the *only* citation |
 | BUG-014 saturated risk score | P2 | **FIXED, verified live** (reporting-level) — honest `calibrated:false` now shown live; underlying saturation on this dataset is a data-volume limit, not a code defect |
-| BUG-015 causal layer declines live | P2 | OPEN — **root cause now known: `dowhy` is not installed in the deployed image (by design, per the v7 changelog); the decline is itself now correctly the only citation (BUG-020)** |
-| BUG-016 Kannada latency | P2 | OPEN |
-| BUG-017 changelog vs deployed weights | P2 | OPEN |
-| BUG-018 PDF export returns HTML | P2 | **PARTIALLY FIXED** — 2 real root causes found+fixed live (wrong SDK method name; unbound SDK context); a third, platform-level identity question remains, precisely diagnosed (`INVALID_ID`/"No such User") |
-| BUG-019 "fir" matches "firs" | P3 | OPEN |
+| BUG-015 causal layer declines live | P2 | OPEN — **measured, not just known**: adding `dowhy` costs ≈405MB new against a ≈420MB headroom to the empirically measured bundle ceiling — deliberately not attempted live; decline remains the correct, sole citation (BUG-020) |
+| BUG-016 Kannada latency | P2 | **PARTIALLY FIXED, verified live** — post-deploy round trip 4.3s total (was 13.4s); a separate, inherent CPU-generation-time cost for long answers is not a code defect |
+| BUG-017 changelog vs deployed weights | P2 | **FIXED, verified live** — `/health` post-deploy: `model_weights: "fetched from Catalyst File Store this cold start"` (the fetch genuinely works); `nllb_backend: "ctranslate2 (...local/baked directory)"` — **the image does still bake in a converted NLLB directory**, so the File Store copy is currently redundant for translation; CLAUDE.md corrected to state this rather than the disproven "only code and CPU wheels" claim |
+| BUG-018 PDF export returns HTML | P2 | **PARTIALLY FIXED** — 2 real root causes fixed; a third hypothesis (credential scope) tested live post-deploy and **disproven** — identical `INVALID_ID` error persists, narrowing the remaining gap to a genuine Catalyst User Management identity requirement only an interactive OAuth sign-in can supply |
+| BUG-019 "fir" matches "firs" | P3 | **FIXED, verified** — word-boundary keyword matching, compiled once; `"show me murder firs"` now correctly classifies `CRIME_SEARCH` |
 | BUG-020 evaluator floor deleted authoritative refusals | P1 | **FIXED, verified live** (regression found and fixed within this same phase) |
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
-| BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
+| BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — narrowed further to a specific, documented-elsewhere requirement (console-only `X-QUICKML-ENDPOINT-KEY`); code now sends it when configured, but the key cannot be obtained or verified from this environment |
 | BUG-023 every narrative for a crime type is one template | **P1** | **FIXED, verified live** (North Star Phase 2) — 20/20 crime types covered, per-case slot-filling, live backfill via `/jobs/regenerate_narratives`; cross-case similarity now explains itself instead of a bare score |
 | BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | **FIXED, deployed, live-verified** — moved to a background thread; watched the real job run to genuine completion (5-6 min) and confirmed no corruption |
+| BUG-025 both Catalyst Cron jobs had never once succeeded | **P1** | **FIXED, verified live** — wrong hostname (org id instead of app id) plus a stale job token, stacked; both corrected over the Admin API and re-verified by calling each endpoint exactly as the corrected Cron config now would |
 
-**3 P0, 15 P1, 6 P2, 1 P3 across 24 tracked defects. 16 fixed and live-verified, 1 fixed
-in code with live verification blocked by an apparent platform limit, 1 fixed at the
-reporting level with the underlying cause now understood, 9 open.**
+**3 P0, 15 P1, 6 P2, 1 P3 across 25 tracked defects — see each row's Status for the
+current, precise state; this line intentionally does not collapse them into a single
+aggregate count, which drifted out of sync with the table itself across sessions.**
 
 ### One thing this audit got wrong, recorded deliberately
 
