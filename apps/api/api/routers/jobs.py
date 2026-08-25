@@ -35,6 +35,8 @@ log = logging.getLogger(__name__)
 
 _refresh_lock = threading.Lock()
 _refresh_running = False
+_narrative_lock = threading.Lock()
+_narrative_running = False
 
 
 def _authorise(token: str | None) -> None:
@@ -102,6 +104,54 @@ async def refresh(x_veritas_job_token: str | None = Header(default=None)):
         _run_refresh()
 
     threading.Thread(target=_work, name="jobs-refresh", daemon=True).start()
+    return {"status": "started"}
+
+
+def _run_narrative_backfill() -> None:
+    """BUG-023's live fix: recompute `CaseMaster.BriefFacts` in place (no case added,
+    removed, or renumbered; no accused/identity/financial/graph row touched — see
+    `narrative_backfill`'s own docstring for why a full regeneration is not needed
+    here), then rebuild the vector index the new text feeds."""
+    global _narrative_running
+    from data.embeddings.index_job import run_all as reindex
+    from data.generator.narrative_backfill import backfill_narratives
+
+    try:
+        updated = backfill_narratives()
+        indexed = reindex()
+        log.info("narrative backfill complete: %s cases updated, reindex=%s", updated, indexed)
+    except Exception:
+        log.exception("narrative backfill failed")
+    finally:
+        with _narrative_lock:
+            _narrative_running = False
+
+
+@router.post("/jobs/regenerate_narratives")
+async def regenerate_narratives(x_veritas_job_token: str | None = Header(default=None)):
+    """One-time (or repeatable) fix for BUG-023, run where the SDK actually works —
+    inside AppSail's request context — because the same operation cannot be driven
+    from a developer machine: the Data Store SDK authenticates from per-request
+    Catalyst headers, which only exist inside a real AppSail request (see
+    `data.ds.bind_catalyst_request`), not from a bare local script."""
+    _authorise(x_veritas_job_token)
+
+    global _narrative_running
+    with _narrative_lock:
+        if _narrative_running:
+            return {"status": "already_running"}
+        _narrative_running = True
+
+    from data import ds
+
+    app = ds.catalyst_app() if ds.backend() == "catalyst" else None
+
+    def _work() -> None:
+        if app is not None:
+            ds._sdk_app = app          # noqa: SLF001 — same pattern as /jobs/refresh
+        _run_narrative_backfill()
+
+    threading.Thread(target=_work, name="jobs-regenerate-narratives", daemon=True).start()
     return {"status": "started"}
 
 

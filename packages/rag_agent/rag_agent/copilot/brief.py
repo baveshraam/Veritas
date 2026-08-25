@@ -82,24 +82,106 @@ def _timeline(fir_id: str, case: dict, officer_role: str) -> list[dict]:
     return sorted(events, key=lambda e: e["date"])
 
 
+def _shared_ipc_sections(fir_id: str) -> set[str]:
+    rows = ds.query('SELECT "SectionID" FROM "ActSectionAssociation" WHERE "CaseMasterID" = :cid',
+                    {"cid": int(fir_id)})
+    return {r["SectionID"] for r in rows}
+
+
+def _time_bucket(value) -> str | None:
+    """Coarse enough to be a real match signal, not so fine it never matches: the
+    generator's own five buckets (see _narrative/_time_of_day in the generator)."""
+    dt = ds.to_dt(value)
+    if not dt:
+        return None
+    h = dt.hour
+    if h < 5:
+        return "early morning"
+    if h < 12:
+        return "morning"
+    if h < 17:
+        return "afternoon"
+    if h < 21:
+        return "evening"
+    return "night"
+
+
+def _explain_similarity(case: dict, candidate: dict, narrative_score: float) -> tuple[str, list[str]]:
+    """WHY two cases are similar — structured overlap, not a bare embedding number.
+
+    An embedding score alone cannot tell an officer whether two cases are alike
+    because they share a method, a location, or an outcome, or merely because both
+    narratives are short and generic. This compares the fields that actually carry a
+    reason: crime type, shared IPC sections, district, time-of-day, and — once the
+    narrative-diversity fix landed (BUG-023) — whether the case-specific MO clause
+    itself matches, which is the strongest single signal available."""
+    reasons: list[str] = []
+
+    same_type = bool(case.get("crime_type")) and case.get("crime_type") == candidate.get("crime_type")
+    if same_type:
+        reasons.append(f"same crime type ({candidate['crime_type']})")
+
+    shared_sections = _shared_ipc_sections(str(case["fir_id"])) & _shared_ipc_sections(str(candidate["fir_id"]))
+    if shared_sections:
+        reasons.append(f"shares IPC section(s) {', '.join(sorted(shared_sections))}")
+
+    same_district = bool(case.get("district")) and case.get("district") == candidate.get("district")
+    if same_district:
+        reasons.append(f"same district ({candidate['district']})")
+
+    # The MO clause is the middle sentence of the narrative, between "district. " and
+    # the trailing ", <time>, <offender count>." — comparing it directly is a
+    # structured check on the one field the generator writes as this case's method,
+    # not a re-run of the embedding.
+    case_mo = (case.get("narrative") or "").split("district. ", 1)[-1].split(",")[0]
+    cand_mo = (candidate.get("narrative") or "").split("district. ", 1)[-1].split(",")[0]
+    if case_mo and case_mo == cand_mo:
+        reasons.append(f"matching modus operandi (\"{case_mo}\")")
+
+    if not reasons:
+        # Nothing structured lined up — narrative similarity alone is not a reason,
+        # per BUG-023's finding that narrative text can be generic on its own. Say so
+        # honestly rather than dressing up a bare score as an explanation.
+        return ("no shared crime type, section, district or method — narrative text "
+                "similarity only; treat as a weak match", reasons)
+
+    return "; ".join(reasons), reasons
+
+
 def _similar_cases(case: dict, limit: int = 5) -> list[dict]:
-    """Narrative similarity over the vector index, each with its recorded outcome."""
+    """Structurally-explained similarity: retrieval casts a wide net over the vector
+    index (recall), but what is RETURNED is the structured reason two cases actually
+    match, not the raw embedding score on its own (BUG-023/North-Star cross-case
+    discovery: "same crime type" must not silently stand in for "genuinely similar
+    case"). The narrative score still rides along, clearly labeled as similarity."""
     probe = f"{case.get('crime_type') or ''}. {case.get('narrative') or ''}"
-    hits = hybrid_search(probe, collection="fir_narrative", k=limit + 1)
-    ids = [h["source_id"] for h in hits if h["source_id"] != str(case["fir_id"])][:limit]
+    hits = hybrid_search(probe, collection="fir_narrative", k=max(limit * 3, 15))
+    ids = [h["source_id"] for h in hits if h["source_id"] != str(case["fir_id"])]
     if not ids:
         return []
 
     scores = {h["source_id"]: h["score"] for h in hits}
-    out = []
+    candidates = []
     for cid in ids:
         rows = fir_by_id(cid, "SHO", "")
         if not rows:
             continue
         r = rows[0]
-        out.append({**r, "outcome": r["case_status"],
-                    "similarity": round(scores.get(cid, 0.0), 3)})
-    return out
+        explanation, reasons = _explain_similarity(case, r, scores.get(cid, 0.0))
+        candidates.append({
+            **r, "outcome": r["case_status"],
+            "similarity": round(scores.get(cid, 0.0), 3),
+            "similarity_kind": "narrative_text",
+            "explanation": explanation,
+            "matched_features": reasons,
+            "match_strength": len(reasons),
+        })
+
+    # Structurally-explained matches first (more shared features = stronger match),
+    # narrative score only as the tiebreaker within that — an embedding-only ranking
+    # is exactly what let "same crime type" pass as "genuinely similar".
+    candidates.sort(key=lambda c: (-c["match_strength"], -c["similarity"]))
+    return candidates[:limit]
 
 
 def _leads(fir_id: str, officer_role: str) -> list[str]:

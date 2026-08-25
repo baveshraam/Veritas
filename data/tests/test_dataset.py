@@ -91,6 +91,37 @@ def test_offenders_form_crews_not_a_random_graph(dataset):
         f"the co-offending graph has no crew structure")
 
 
+def test_narratives_do_not_collapse_to_one_shape_per_crime_type(dataset):
+    """BUG-023's regression guard. Measured live: 60/60 sampled cases per crime type
+    reduced to exactly one narrative shape once date/district were normalised out — 12
+    of 20 crime types had a fixed fallback string with zero descriptive content at
+    all. No test caught it, because nothing checked BriefFacts content beyond exact-
+    string uniqueness. This asserts real per-crime-type variety, for every crime type
+    present in the sample, not just the ones that happened to have MO text before.
+    """
+    rows = ds.query('SELECT "CrimeMinorHeadID", "BriefFacts" FROM "CaseMaster"')
+    counts: dict = {}
+    shapes: dict = {}
+    for r in rows:
+        # Normalise out the one genuinely case-identifying fact this check isn't
+        # about (the date) so two truly-identical-shape narratives can't hide behind
+        # a different date; district/time/MO/offender-count all stay in the string.
+        shape = r["BriefFacts"].split("district. ", 1)[-1]
+        ct = r["CrimeMinorHeadID"]
+        counts[ct] = counts.get(ct, 0) + 1
+        shapes.setdefault(ct, set()).add(shape)
+
+    assert len(shapes) >= 15, f"only {len(shapes)} crime subtypes appear in this sample"
+    # Only crime types with enough occurrences for diversity to be statistically
+    # meaningful — a subtype that drew exactly 1 case in this small fixture can only
+    # ever show 1 shape, and that is a sample-size artifact, not a collapsed template.
+    testable = {k: v for k, v in shapes.items() if counts[k] >= 5}
+    assert testable, "no crime subtype had enough occurrences to test diversity"
+    thin = {k: len(v) for k, v in testable.items() if len(v) < 2}
+    assert not thin, (
+        f"{len(thin)} crime subtype(s) with >=5 cases still collapse to one shape: {thin}")
+
+
 def test_incidents_cluster_rather_than_scatter_uniformly(dataset):
     """DBSCAN/KDE's precondition. Placing incidents uniformly inside a district leaves no
     hotspot to find, and the hotspot model then correctly reports none."""

@@ -40,16 +40,137 @@ from .names import full_record_name, sample_name, sample_patronym
 
 NOW = date(2026, 7, 1)
 
-_MO = {
-    "Theft": "Pickpocketing in a crowded market",
-    "House Burglary": "Entry via rear window after dark while occupants away",
-    "Motor Vehicle Theft": "Two-wheeler lifted from an unguarded parking lot",
-    "Robbery": "Chain-snatching from a two-wheeler pillion rider",
-    "Cheating": "Fake investment scheme collecting advance deposits",
-    "Cyber Crime": "OTP-phishing call impersonating a bank official",
-    "Murder": "Assault with a blunt weapon following a prior dispute",
-    "Narcotics": "Ganja transported concealed in a goods vehicle",
+# Modus-operandi text, per crime type. Several variants each — not decoration: a fixed
+# single sentence per type meant every case of that type in that district collapsed to
+# one narrative shape once date was normalised out (BUG-023, measured live: 60/60
+# sampled cases per crime type reduced to a single template). All 20 canonical crime
+# types are covered now, not the previous 8 — the other 12 fell back to a bare
+# "<crime type> — routine method", which carried zero descriptive content at all.
+_MO_VARIANTS: dict[str, list[str]] = {
+    "Theft": [
+        "Pickpocketing in a crowded market",
+        "Handbag snatched from a parked two-wheeler",
+        "Cash box lifted from an unattended shop counter",
+    ],
+    "Hurt": [
+        "Altercation over a parking dispute escalating to blows",
+        "Physical assault following a heated verbal argument",
+        "Scuffle between neighbours over a boundary dispute",
+    ],
+    "House Burglary": [
+        "Entry via rear window after dark while occupants away",
+        "Lock broken on the main door during a daytime absence",
+        "Compound wall scaled to reach an unlocked rear entrance",
+    ],
+    "Cheating": [
+        "Fake investment scheme collecting advance deposits",
+        "Impersonation of a government official to collect fees",
+        "Forged documents used to secure a fraudulent loan",
+    ],
+    "Criminal Breach of Trust": [
+        "Funds entrusted for a specific purpose diverted by the accused",
+        "Society office-bearer misappropriating collected subscriptions",
+        "Business partner withholding jointly-held proceeds",
+    ],
+    "Assault on Woman": [
+        "Outraging modesty during an unwanted physical advance",
+        "Verbal harassment escalating to unwanted physical contact",
+        "Molestation reported by the complainant at a public place",
+    ],
+    "Criminal Intimidation": [
+        "Threats issued over an unpaid debt",
+        "Threat of harm made during a property dispute",
+        "Intimidation delivered by phone following a business disagreement",
+    ],
+    "Motor Vehicle Theft": [
+        "Two-wheeler lifted from an unguarded parking lot",
+        "Car taken from outside the owner's residence overnight",
+        "Vehicle key duplicated and used to remove it from a public lot",
+    ],
+    "Robbery": [
+        "Chain-snatching from a two-wheeler pillion rider",
+        "Bag robbed at knife-point on a secluded stretch of road",
+        "Mobile phone snatched from a pedestrian at a bus stop",
+    ],
+    "Riot": [
+        "Unlawful assembly turning violent during a public gathering",
+        "Group clash breaking out during a local procession",
+        "Stone-pelting between two groups after a festival dispute",
+    ],
+    "Cyber Crime": [
+        "OTP-phishing call impersonating a bank official",
+        "Fraudulent online marketplace listing collecting advance payment",
+        "Unauthorised access to a social media account for extortion",
+    ],
+    "Rash Driving": [
+        "Overspeeding vehicle losing control on a residential road",
+        "Vehicle driven against oncoming traffic at a junction",
+        "Signal jumped at high speed causing a collision",
+    ],
+    "Extortion": [
+        "Demand for money under threat of harm to business premises",
+        "Payment demanded to prevent publication of private material",
+        "Protection money demanded from a roadside vendor",
+    ],
+    "Kidnapping": [
+        "Minor lured away from a public place on a false pretext",
+        "Person taken away by force during a personal dispute",
+        "Abduction reported following a failed ransom demand",
+    ],
+    "Attempt to Murder": [
+        "Assault with a sharp weapon following a prior dispute, victim survived",
+        "Attack with a blunt weapon during a property dispute, victim survived",
+        "Poisoning attempt reported by a family member, victim survived",
+    ],
+    "Murder": [
+        "Assault with a blunt weapon following a prior dispute",
+        "Fatal stabbing during a dispute between acquaintances",
+        "Death following an assault at the victim's residence",
+    ],
+    "Rape": [
+        "Sexual assault reported by the complainant against a known person",
+        "Assault reported following a promise of marriage later broken",
+        "Sexual assault reported at the accused's residence",
+    ],
+    "Dowry Death": [
+        "Unnatural death of a married woman within the statutory period, dowry harassment alleged",
+        "Death by burns reported at the matrimonial home, dowry demand alleged",
+        "Death reported following sustained harassment for dowry",
+    ],
+    "Dacoity": [
+        "Armed group robbing a residence at night",
+        "Group robbery of a commercial establishment after business hours",
+        "Armed gang intercepting a vehicle on a highway stretch",
+    ],
+    "Narcotics": [
+        "Ganja transported concealed in a goods vehicle",
+        "Contraband recovered during a routine vehicle check",
+        "Narcotic substance seized from a residential premises",
+    ],
 }
+
+_TIME_OF_DAY = [
+    (5, "in the early morning hours"),
+    (12, "during the morning"),
+    (17, "in the afternoon"),
+    (21, "in the evening"),
+    (24, "late at night"),
+]
+
+
+def _time_of_day(hour: int) -> str:
+    for ceiling, label in _TIME_OF_DAY:
+        if hour < ceiling:
+            return label
+    return _TIME_OF_DAY[-1][1]
+
+
+def _offender_count_phrase(n_accused: int) -> str:
+    if n_accused <= 1:
+        return "by a lone individual"
+    if n_accused == 2:
+        return "by two persons acting together"
+    return f"by a group of {n_accused} persons"
 
 RECIDIVISM_ALPHA = 4.0      # strength of preferential attachment to prior offenders
 LOCAL_WEIGHT = 15.0         # how much more likely an accused is to live in the case district
@@ -267,9 +388,24 @@ def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TrueP
     return chosen
 
 
-def _narrative(crime_type: str, district: str, filed: datetime, mo: str) -> str:
+def _narrative(rng: random.Random, crime_type: str, district: str, filed: datetime,
+               occ_from: datetime, n_accused: int) -> str:
+    """Case-specific narrative text, built entirely from facts this case already has:
+    the crime type, the district, when it was filed, when it actually occurred (for the
+    time-of-day phrase), and how many people were accused (for the offender-count
+    phrase) — no field here is invented; every one is a real, already-generated
+    attribute of this case. The MO clause is a per-case draw from a pool of variants
+    for this crime type (all 20 types now covered, not 8), so two cases of the same
+    type in the same district no longer collapse to one template once date is
+    normalised out (BUG-023).
+    """
+    variants = _MO_VARIANTS.get(crime_type)
+    mo = rng.choice(variants) if variants else f"{crime_type} — routine method"
+    when = _time_of_day(occ_from.hour)
+    who = _offender_count_phrase(n_accused)
     return (f"On {filed:%d %b %Y}, a case of {crime_type.lower()} was registered in "
-            f"{district} district. {mo}. Investigation is being carried out as per procedure.")
+            f"{district} district. {mo}, {when}, {who}. "
+            f"Investigation is being carried out as per procedure.")
 
 
 def generate(rng: random.Random, n_cases: int) -> Dataset:
@@ -319,8 +455,12 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
         occ_to = min(occ_from + timedelta(hours=rng.randint(0, 12)), filed)
         lat, lng = sample_point(rng, dc)
         dname = _district_name(dc)
-        mo = _MO.get(prior.crime_type, f"{prior.crime_type} — routine method")
         status = _case_status(rng, prior)
+
+        # Picked before CaseMaster so the narrative can honestly say how many people
+        # were accused — a real fact about this case, not an invented one.
+        complainant = rng.choice(people)
+        accused_list = _pick_accused(rng, people, complainant, dc, crews)
 
         ds.rows("CaseMaster").append({
             "CaseMasterID": case_id,
@@ -336,7 +476,8 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
             "IncidentFromDate": occ_from, "IncidentToDate": occ_to,
             "InfoReceivedPSDate": filed,
             "latitude": lat, "longitude": lng,
-            "BriefFacts": _narrative(prior.crime_type, dname, filed, mo),
+            "BriefFacts": _narrative(rng, prior.crime_type, dname, filed, occ_from,
+                                     len(accused_list)),
         })
 
         # ActSectionAssociation — the ER's replacement for a TEXT[] of IPC sections.
@@ -346,7 +487,6 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
                 "CaseMasterID": case_id, "ActID": act, "SectionID": sec,
                 "ActOrderID": 1, "SectionOrderID": order})
 
-        complainant = rng.choice(people)
         ids["comp"] += 1
         ds.rows("ComplainantDetails").append({
             "ComplainantID": ids["comp"], "CaseMasterID": case_id,
@@ -369,8 +509,7 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
                 "GenderID": rd.GENDER[v.gender],
                 "VictimPolice": "1" if rng.random() < 0.01 else "0"})
 
-        for n, person in enumerate(
-                _pick_accused(rng, people, complainant, dc, crews), start=1):
+        for n, person in enumerate(accused_list, start=1):
             person.offences += 1
             ids["acc"] += 1
             acc_id = ids["acc"]

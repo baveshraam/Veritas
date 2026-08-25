@@ -312,3 +312,81 @@ def test_refresh_still_requires_the_job_token(client, officers, monkeypatch):
     assert client.post("/jobs/refresh").status_code == 401
     assert client.post("/jobs/refresh",
                        headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401
+
+
+# --- BUG-023 live fix: /jobs/regenerate_narratives --------------------------------
+#
+# The Data Store SDK only authenticates from real per-request Catalyst headers, so
+# the narrative backfill (an ordinary in-place UPDATE, not a data regeneration —
+# see data.generator.narrative_backfill) cannot be driven from a developer's own
+# machine. It runs the same way /jobs/refresh does: triggered by a request, finishing
+# on a background thread after the response returns.
+
+def test_regenerate_narratives_returns_immediately_and_then_runs(client, officers, monkeypatch):
+    import time
+
+    from api.routers import jobs as jobs_router
+
+    started = {"backfill": False, "reindex": False}
+    gate = __import__("threading").Event()
+
+    def slow_backfill():
+        gate.wait(timeout=2)
+        started["backfill"] = True
+        return 1
+
+    monkeypatch.setattr("data.generator.narrative_backfill.backfill_narratives", slow_backfill)
+    monkeypatch.setattr("data.embeddings.index_job.run_all",
+                        lambda: started.__setitem__("reindex", True) or {"docs": 1})
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_narrative_running", False)
+
+    t0 = time.monotonic()
+    r = client.post("/jobs/regenerate_narratives", headers={"X-Veritas-Job-Token": "test-token"})
+    elapsed = time.monotonic() - t0
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "started"}
+    assert elapsed < 1.0, f"the request blocked for {elapsed:.2f}s waiting on the job"
+
+    gate.set()
+    for _ in range(50):
+        if all(started.values()):
+            break
+        time.sleep(0.05)
+    assert started == {"backfill": True, "reindex": True}, \
+        "the background thread never completed the job"
+
+
+def test_regenerate_narratives_refuses_to_overlap_a_run_already_in_flight(
+        client, officers, monkeypatch):
+    import threading
+
+    from api.routers import jobs as jobs_router
+
+    gate = threading.Event()
+    monkeypatch.setattr("data.generator.narrative_backfill.backfill_narratives",
+                        lambda: gate.wait(timeout=2) and 0)
+    monkeypatch.setattr("data.embeddings.index_job.run_all", lambda: {})
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_narrative_running", False)
+
+    try:
+        first = client.post("/jobs/regenerate_narratives",
+                            headers={"X-Veritas-Job-Token": "test-token"})
+        second = client.post("/jobs/regenerate_narratives",
+                             headers={"X-Veritas-Job-Token": "test-token"})
+        assert first.json() == {"status": "started"}
+        assert second.json() == {"status": "already_running"}
+    finally:
+        gate.set()
+
+
+def test_regenerate_narratives_still_requires_the_job_token(client, officers, monkeypatch):
+    from api.routers import jobs as jobs_router
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_narrative_running", False)
+
+    assert client.post("/jobs/regenerate_narratives").status_code == 401
+    assert client.post("/jobs/regenerate_narratives",
+                       headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401

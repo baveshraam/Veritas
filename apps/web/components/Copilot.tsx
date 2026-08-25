@@ -57,8 +57,17 @@ export default function Copilot({ firId, onClose }: { firId: string; onClose: ()
                     <span className="copilot-date">{c.fir_number}</span>
                     <span>
                       {c.crime_type} · {c.district} — <span className="chip chip-low">{c.outcome}</span>
-                      {" "}({Math.round((c.similarity ?? 0) * 100)}% similar)
                     </span>
+                    {/* WHY these two cases are similar, not a bare embedding score —
+                        "same crime type" alone is a weak reason, and a raw percentage
+                        cannot tell an officer whether it's method, section, or
+                        district that actually lined up. */}
+                    <div className="dim" style={{ fontSize: 12, marginTop: 2 }}>
+                      {c.explanation}
+                      {typeof c.similarity === "number" && (
+                        <span> · {Math.round(c.similarity * 100)}% text similarity</span>
+                      )}
+                    </div>
                   </div>
                 ))}
               </section>
