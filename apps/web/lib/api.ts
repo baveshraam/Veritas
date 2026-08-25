@@ -3,7 +3,6 @@ import type {
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-export const WS_BASE = BASE.replace(/^http/, "ws");
 
 let token: string | null = null;
 export function setToken(t: string | null) {
@@ -123,6 +122,56 @@ export async function streamChat(
         throw new Error([evt.message ?? "Investigation failed", evt.detail].filter(Boolean).join(" — "));
     }
   }
+}
+
+/**
+ * GET /alerts and parse the SSE stream of district anomaly alerts.
+ *
+ * Same fetch + manual SSE reader as streamChat, for the same reason: neither
+ * EventSource nor WebSocket can set an Authorization header, and — for
+ * WebSocket specifically — live checks against the deployed AppSail gateway
+ * (BUG-005) found it does not appear to proxy WebSocket upgrades to a
+ * custom-runtime app at all. This transport is the one already proven live
+ * for /chat on this exact deployment.
+ *
+ * Returns an abort function; call it on unmount to stop the stream.
+ */
+export function streamAlerts(onAlert: (a: any) => void, onError?: () => void): () => void {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/alerts`, { headers: authHeaders(), signal: controller.signal });
+      if (!res.ok || !res.body) throw new Error(`Alerts stream failed (${res.status})`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+        const frames = buffer.split("\n\n");
+        buffer = frames.pop() ?? "";
+        for (const frame of frames) {
+          const line = frame.split("\n").find((l) => l.startsWith("data:"));
+          if (!line) continue;
+          const payload = line.slice(5).trim();
+          if (!payload) continue;
+          try {
+            onAlert(JSON.parse(payload));
+          } catch {
+            /* keep-alive / non-JSON frame */
+          }
+        }
+      }
+    } catch (e) {
+      if ((e as any)?.name !== "AbortError") onError?.();
+    }
+  })();
+
+  return () => controller.abort();
 }
 
 export async function listCases(

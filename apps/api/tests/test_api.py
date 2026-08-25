@@ -80,6 +80,16 @@ def test_health_reports_what_is_actually_up(client, dataset):
     # fixes.
     assert body["llm"].startswith(("quickml", "deterministic"))
     assert "graph" in body
+    # BUG-017: the changelog claimed model weights left the image for File Store, but
+    # the only live evidence was Kannada response latency, which cannot actually tell
+    # a File-Store-backed load apart from a still-baked-in one. /health must report the
+    # real, observable state so this claim stays checkable instead of inferred.
+    assert "model_weights" in body
+    assert body["nllb_backend"] in (
+        "not yet loaded",
+        "ctranslate2 (VERITAS_NLLB_CT2_DIR present — local/baked directory)",
+        "transformers (HF cache — File Store or baked, see model_weights)",
+    )
 
 
 def test_an_io_sees_only_their_own_stations_cases(client, officers):
@@ -221,16 +231,59 @@ def test_an_accused_name_is_masked_on_every_endpoint_that_carries_it(client, off
             assert n not in blob, f"copilot leaked {n!r} to an SHO"
 
 
-def test_the_alerts_websocket_refuses_an_unauthenticated_client(client, dataset):
-    """BUG-005. The route called ws.accept() and began streaming district anomaly data
-    to anyone who connected. A transport that cannot carry an Authorization header does
-    not get to skip authentication — the token is the first frame instead."""
-    from starlette.websockets import WebSocketDisconnect
+def test_alerts_refuses_an_unauthenticated_client(client, dataset):
+    """BUG-005. The route originally called ws.accept() and began streaming district
+    anomaly data to anyone who connected. It is no longer a WebSocket at all — live
+    checks against the deployed AppSail gateway (curl with explicit Connection: Upgrade
+    / Sec-WebSocket-* headers, and a real websocket-client) both got Starlette's own 404
+    while an ordinary REST route on the identical domain correctly returned 401,
+    consistent with AppSail's gateway not proxying WebSocket upgrades to a custom-runtime
+    app at all. /alerts is now GET + SSE, the transport already proven live for /chat,
+    authenticated the same way every other data-bearing route is: a missing or bad
+    bearer token is rejected before any alert is ever produced."""
+    assert client.get("/alerts").status_code == 401
+    assert client.get("/alerts", headers={"Authorization": "Bearer not-a-real-token"}).status_code == 401
 
-    with pytest.raises(WebSocketDisconnect):
-        with client.websocket_connect("/alerts") as ws:
-            ws.send_text("not-a-real-token")
-            ws.receive_json()
+
+def test_alerts_streams_for_an_authenticated_officer(client, dataset, officers, monkeypatch):
+    """Exercises the route function and its SSE generator directly rather than through
+    TestClient's HTTP transport: an infinite generator (the poll loop only ends on
+    client disconnect) makes `client.stream(...)`'s __enter__ block indefinitely under
+    Starlette's sync TestClient — confirmed with a minimal FastAPI+EventSourceResponse
+    reproduction outside this project entirely, so it is a transport-layer property of
+    testing infinite SSE streams synchronously, not a defect in this route. Auth
+    enforcement is already covered end-to-end via real HTTP in the test above; this
+    covers what that transport can't: that an authenticated call actually produces a
+    live alert."""
+    import asyncio
+
+    from api.routers import alerts as alerts_router
+    from ml_models.serving import AnomalyAlert
+
+    fake_alert = AnomalyAlert(
+        alert_id="a1", district_code="KA01", metric="case_count",
+        observed=42.0, expected=10.0, severity="high",
+        detected_at=__import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+    )
+    monkeypatch.setattr(alerts_router, "_districts", lambda: ["KA01"])
+    monkeypatch.setattr(alerts_router, "check_anomalies", lambda dc: [fake_alert])
+
+    class _FakeRequest:
+        async def is_disconnected(self):
+            return False
+
+    from api.auth.jwt_auth import officer_from_token
+    token = _auth(client, officers["DSP"]["badge_no"])["Authorization"].split(" ", 1)[1]
+    off = officer_from_token(token)
+
+    async def run():
+        resp = await alerts_router.alerts(_FakeRequest(), off)
+        assert resp.media_type == "text/event-stream"
+        item = await asyncio.wait_for(resp.body_iterator.__anext__(), timeout=10)
+        assert item["event"] == "alert"
+        assert "KA01" in item["data"]
+
+    asyncio.run(run())
 
 
 # --- BUG-024: /jobs/refresh must not block the request on a multi-minute job -------
