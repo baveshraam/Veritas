@@ -33,20 +33,20 @@ that stated, not `VERIFIED`.
 | UI-06 | Command bar — EN/KN toggle | `CommandBar.tsx` | Sets `language` state | PARTIAL | Toggle click not driven this pass; API-level Kannada is VERIFIED |
 | UI-07 | Command bar — voice on/off toggle | `CommandBar.tsx` | Sets `voiceOut` | UNKNOWN | Not exercised |
 | UI-08 | Command bar — Export PDF button | `CommandBar.tsx` → `exportPdf()` | Downloads session as file | PARTIAL | API confirmed returns `text/html` fallback (BUG-018); button click not driven |
-| UI-09 | Command bar — Switch (sign out) | `CommandBar.tsx` | `setToken(null)`, returns to LoginGate | UNKNOWN | Not exercised this pass (distinct from UI-05's fallback-entry clear) |
+| UI-09 | Command bar — Switch (sign out) | `CommandBar.tsx` | `setToken(null)`, returns to LoginGate | VERIFIED | Live via a real manual sign-in (no `?as=` shortcut): click Switch -> token cleared, back at login gate. **Note**: testing this through the `?as=ROLE` URL shortcut instead looks like a failure (token restored, still signed in) -- that is the shortcut correctly re-authenticating on every LoginGate mount, by design, not a bug. Caught and ruled out before being misreported |
 | UI-10 | Command bar — health readout | `CommandBar.tsx` | Shows FIR/node/index counts, live-status dot | VERIFIED | Screenshot matches `/health` exactly |
 | UI-11 | Chat pane — send text query | `ChatPane.tsx:send` | Types, submits, streams SSE | VERIFIED | CDP: real query, real streamed answer, real citation |
 | UI-12 | Chat pane — push-to-talk mic | `ChatPane.tsx:toggleMic` | Records audio, waveform | UNKNOWN | No audio input device in this environment |
 | UI-13 | Chat pane — citation chip click | `ChatPane.tsx:withCitations` | Scrolls/highlights evidence rail item | UNKNOWN | Not driven interactively |
 | UI-14 | Evidence rail — item expand | `EvidenceRail.tsx` | Shows full content + source query | VERIFIED | Visible in chat screenshot (1 cited, expanded) |
-| UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | UNKNOWN | Not clicked this pass |
+| UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | PARTIAL | Not clicked directly; UI-22 confirms the Copilot overlay itself opens and renders correctly via the case-card route |
 | UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | UNKNOWN | Not verified visually |
 | UI-17 | Reasoning trace panel (expand/collapse) | `ReasoningTrace.tsx` | Plain-language agent trace, off by default | PARTIAL | Present in screenshot ("reasoning trace · 5 steps"), not expanded/inspected |
 | UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | UNKNOWN | Not driven |
 | UI-19 | Case explorer — crime-type filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven |
 | UI-20 | Case explorer — case-status filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven |
 | UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | UNKNOWN | Not driven |
-| UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | UNKNOWN | Not driven |
+| UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it |
 | UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | PARTIAL | Case index confirmed rendering; switch to viz not driven |
 | UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | PARTIAL — renders correctly | Screenshotted live: points and hotspot clusters render, zoom controls present. **Gap found**: no geographic reference at all (no district outlines, scale, or labels) — reads as an abstract scatter plot, not a geographic tool. See §12 |
 | UI-25 | Network view | `viz/NetworkView.tsx` | Force-directed graph | VERIFIED | Screenshotted live: 12 labeled nodes, correct sizing/coloring, legible |
@@ -69,7 +69,7 @@ that stated, not `VERIFIED`.
 | API-07 | `GET /copilot/{id}` | `copilot.py` | VERIFIED | Live, scoping + masking confirmed |
 | API-08 | `POST /export/pdf` | `export.py` | PARTIAL | Returns `text/html` (BUG-018), reachability not re-driven this pass |
 | API-09 | `WS /alerts` | `alerts.py` | BROKEN (live) | See BUG-005 |
-| API-10 | `POST /jobs/refresh` | `jobs.py` | **BROKEN** | Triggered live twice with the real deployed job token: both times a 500 after ~16s. See **BUG-024** |
+| API-10 | `POST /jobs/refresh` | `jobs.py` | **VERIFIED (fixed)** | BUG-024 fixed: moved to a background thread. Redeployed (`52852000000310022`) — see the failure log for the live re-verification |
 | API-11 | `GET /jobs/audit-verify` | `jobs.py` | VERIFIED | Triggered live with the real deployed job token: `{"intact":true,"first_bad_audit_id":null}` — the audit hash chain is genuinely intact |
 | API-12 | `GET /health` | `main.py` | VERIFIED | Extensively, both deploys |
 
@@ -168,7 +168,7 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-09 | AppSail runtime — QuickML | BROKEN, diagnosed | BUG-021 (fixed) / BUG-022 (open) |
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
-| DEP-12 | Cron — `veritas_refresh` (6h) | **BROKEN** | The job itself was triggered manually (bypassing the schedule) and fails with a 500 — see BUG-024. Whatever Cron has been firing every 6h has been failing the same way |
+| DEP-12 | Cron — `veritas_refresh` (6h) | PARTIAL — fixed, re-verification pending | BUG-024 fixed and redeployed. The schedule itself (does Cron actually fire it every 6h) remains unobserved |
 | DEP-13 | Cron — `veritas_audit_verify` (12h) | VERIFIED (the job logic; schedule itself still unobserved) | Triggered manually with the real job token — works correctly, chain intact |
 | DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 
