@@ -95,6 +95,16 @@ def person_network(person_id: str, officer_role: str) -> list[dict]:
     return sorted(rows, key=lambda r: (r["hops"], -r["pagerank"]))[:40]
 
 
+def owned_accounts(person_id: str) -> list[str]:
+    """Every account this person owns — not the trail's `from_account`, which for a
+    multi-hop transfer can be an intermediate account nobody in this case owns.
+    AML detection is per-account and, for structuring specifically, about deposits
+    INTO an account, so the account to check is the person's own, not whichever
+    account happened to appear first in an outbound trail."""
+    g = load_graph()
+    return [_uid(dst) for rel, dst, _ in _out_edges(g, _node(person_id)) if rel == "OWNS_ACCOUNT"]
+
+
 def money_trail(person_id: str, officer_role: str) -> list[dict]:
     """Money out of the person's accounts, to a depth the role is allowed to follow.
 

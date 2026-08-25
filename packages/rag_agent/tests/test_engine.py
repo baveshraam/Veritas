@@ -749,6 +749,42 @@ def test_model_predictions_carry_a_distinct_kind_from_their_own_reported_score()
     assert "calibrated" in ev[0].content
 
 
+# --- North Star Phase 5: AML detectors were unreachable via the conversational path -
+
+def test_aml_detectors_run_against_every_account_the_person_owns():
+    """`for acct in {r["from_account"] for r in rows}: ... break` checked at most one
+    account, and for a multi-hop transfer `from_account` can be an intermediate
+    account nobody in this case owns — for structuring specifically (deposits INTO an
+    account), that was never even the right side of the transfer to check. A person
+    who owns two accounts must have both checked, not one."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Show me the money trail for Usha Naika")
+    state.intent = "FINANCIAL"
+    state.active_entities.active_person = "803"
+
+    checked = []
+    saved = (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+            orch.prediction_agent.transactions, orch.vector_agent.search, orch._officer_ps)
+    orch.graph_agent.money_trail = lambda *a, **k: [
+        {"from_account": "acctA", "to_account": "intermediate", "amount": 1000, "hops": 1}]
+    orch.graph_agent.owned_accounts = lambda pid: ["acctA", "acctB"]
+    orch.prediction_agent.transactions = lambda acct: (checked.append(acct), (None, []))[1]
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    orch._officer_ps = lambda _oid: ""
+    try:
+        orch._run_specialists(state, widen=False)
+    finally:
+        (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+         orch.prediction_agent.transactions, orch.vector_agent.search,
+         orch._officer_ps) = saved
+
+    assert set(checked) == {"acctA", "acctB"}, (
+        f"expected both owned accounts checked, got {checked}")
+
+
 # --- BUG-007: a generic verb pair outvoting a specific topic word -----------
 
 @pytest.mark.parametrize("query,expected", [

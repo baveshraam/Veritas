@@ -291,10 +291,20 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                          "financial layer, not a finding that no money moved."),
                 confidence=0.9, authoritative=True))
         _trace(state, "Cypher Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
-        for acct in {r["from_account"] for r in rows}:
+        # AML detection runs against the accounts this PERSON owns, not the trail's
+        # `from_account` — which for a multi-hop transfer can be an intermediate
+        # account nobody in this case owns, and which for structuring specifically
+        # (deposits INTO an account) was never the side the detector needed to see.
+        # Checking only one owned account and stopping meant a person with several
+        # accounts had the rest silently unchecked; every owned account is checked now.
+        t3 = time.perf_counter()
+        n_flags = 0
+        for acct in graph_agent.owned_accounts(pid):
             _, ev = prediction_agent.transactions(acct)
             out += ev
-            break
+            n_flags += len(ev)
+        _trace(state, "AML Detectors (structuring + GNN)",
+               f"{n_flags} flag(s) across the person's own account(s)", t3)
 
     elif intent == "FIR_LOOKUP":
         # The classifier has always had this intent; the branch was missing, so
