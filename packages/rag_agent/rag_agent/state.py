@@ -70,6 +70,10 @@ class InvestigationState(BaseModel):
     # Set when the query named a specific record (a FIR number) that the store does
     # not hold. Semantic neighbours of a nonexistent FIR are not evidence about it.
     exact_lookup_missed: bool = False
+    # Set when the query named a record identifier and the store HELD it. The exact
+    # record is then the whole answer, so semantic neighbours are not run — see
+    # orchestrator._run_specialists.
+    exact_lookup_hit: bool = False
     agent_trace: list[AgentTraceEntry] = Field(default_factory=list)
 
     # Internal routing (not part of the API surface).

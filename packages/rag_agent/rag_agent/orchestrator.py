@@ -19,7 +19,7 @@ from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
     translation_agent, vector_agent, voice_agent,
 )
-from .evidence.evaluator import NOT_FOUND_MESSAGE, evaluate
+from .evidence.evaluator import NOT_FOUND_MESSAGE, evaluate, supporting
 from .retrieval import hipporag, tog
 from .state import AgentTraceEntry, EvidenceItem, InvestigationState
 
@@ -257,6 +257,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             # A named FIR that returns nothing must not be answered from semantic
             # neighbours — see FIR_NUMBER_RE and node_evaluate.
             state.exact_lookup_missed = not rows
+            state.exact_lookup_hit = bool(rows)
             state.sql_query_results += rows
             out += [EvidenceItem(
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
@@ -302,7 +303,16 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         _trace(state, "Prediction Agent (causal)",
                f"DoWhy backdoor adjustment on {factor}", t0)
 
-    # Vector search always contributes: narrative/MO semantics complement the graph
+    # Vector search complements the graph on narrative/MO semantics — but NOT when the
+    # question named one record and we found it. "What is the status of FIR X" is a
+    # yes/no claim about a single row; the nearest narratives to it are cases about
+    # something else, and attaching them to the answer makes a correct lookup look like
+    # a fishing expedition. An exact identifier hit is the whole answer.
+    if state.exact_lookup_hit:
+        _trace(state, "Vector Search Agent",
+               "Skipped — the query named a record and the exact lookup found it", t0)
+        return out
+
     t2 = time.perf_counter()
     k = 8 if widen else 5
     rows, ev = vector_agent.search(state.original_query or "", k=k)
@@ -412,7 +422,11 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
         _trace(state, "Synthesis", "Refused to answer — no supporting evidence", t0)
         return state
 
-    evidence = _rank_evidence(state)[:12]
+    # Cite only what supports the answer. Retrieval deliberately casts wide and most of
+    # what it returns is context; the evaluator already draws that line to decide whether
+    # to answer at all, and synthesis now honours the same line instead of citing the
+    # whole neighbourhood.
+    evidence = supporting(_rank_evidence(state))[:12]
     answer, citations = synthesis_agent.synthesize(state.original_query or "", evidence)
 
     note = None

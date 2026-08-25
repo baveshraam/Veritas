@@ -286,3 +286,65 @@ def test_district_fallback_emits_a_code_the_models_can_parse(monkeypatch):
     code = sql_agent.crime_counts_by_district(limit=1)[0]["district_code"]
     assert code == "KA05"
     assert queries.district_id(code) == 5
+
+
+# --- BUG-006: an answer must cite only what supports it ---------------------
+#
+# Measured live before the fix: "What is the status of FIR 100050510202600037?"
+# returned the right FIR at [1] (a Hurt case in Bengaluru Urban, confidence 0.97) and
+# then five cyber-crime cases from Shivamogga at [2]-[6], each at ~0.49. Every one was
+# a real record. None was evidence for the question. The evaluator had already drawn
+# that line — RELEVANCE_FLOOR — to decide *whether* to answer, and synthesis then
+# cited the whole batch anyway.
+
+from rag_agent.evidence.evaluator import RELEVANCE_FLOOR, supporting
+
+
+def test_only_supporting_evidence_is_citable():
+    exact = _ev(0.97, "FIR_RECORD", "fir:9940")
+    neighbours = [_ev(0.49, "FIR_RECORD", f"vec:fir_narrative:{i}") for i in range(5)]
+    kept = supporting([exact] + neighbours)
+    assert [e.evidence_id for e in kept] == ["fir:9940"]
+
+
+def test_a_batch_that_supports_nothing_is_not_accepted_by_averaging():
+    """Five neighbours just under the floor used to average their way past
+    ACCEPT_THRESHOLD (0.45) and be cited as though they answered the question."""
+    batch = [_ev(RELEVANCE_FLOOR - 0.01) for _ in range(5)]
+    assert supporting(batch) == []
+    assert evaluate(batch, attempts=1)[0] == "REJECT"
+    assert evaluate(batch, attempts=0)[0] == "REFINE"
+
+
+def test_one_exact_record_is_still_enough_on_its_own():
+    """The fix must not swing the other way: a single decisive record answers."""
+    assert evaluate([_ev(0.97)], attempts=0)[0] == "ACCEPT"
+
+
+def test_an_exact_identifier_hit_suppresses_semantic_search():
+    """'What is the status of FIR X' is a yes/no claim about one row. The nearest
+    narratives to it are cases about something else, so they are not run at all."""
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What is the status of FIR 100222201202600022?")
+    state.intent = "FIR_LOOKUP"
+
+    import rag_agent.orchestrator as orch
+
+    hit = {"fir_id": 1, "fir_number": "100222201202600022", "ps_code": "2201",
+           "district": "Mandya", "crime_type": "Hurt", "date_filed": "2026-06-30",
+           "case_status": "Under Investigation", "narrative": "n"}
+    called = []
+    saved = (orch.sql_agent.fir_by_number, orch.vector_agent.search, orch._officer_ps)
+    orch.sql_agent.fir_by_number = lambda *a, **k: [hit]
+    orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.sql_agent.fir_by_number, orch.vector_agent.search, orch._officer_ps = saved
+
+    assert state.exact_lookup_hit is True
+    assert called == [], "vector search ran despite an exact identifier hit"
+    assert [e.evidence_id for e in out] == ["fir:1"]

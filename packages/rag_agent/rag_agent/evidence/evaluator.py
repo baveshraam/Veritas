@@ -25,6 +25,19 @@ TOP_K = 5
 RELEVANCE_FLOOR = 0.5      # below this an item is context, not support
 
 
+def supporting(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    """The items that actually support an answer, as opposed to surrounding context.
+
+    This is the distinction CRAG's evaluator exists to draw, and it was being computed
+    and then discarded: score_batch() used it to decide *whether* to answer, and
+    synthesis then cited the whole batch anyway. That is how "what is the status of FIR
+    100050510202600037?" came back with the right FIR at [1] and five cyber-crime cases
+    from another district at [2]-[6] — every one of them a real record, none of them
+    evidence for the question asked. One floor, one meaning, used in both places.
+    """
+    return [e for e in evidence if e.confidence >= RELEVANCE_FLOOR]
+
+
 def score_batch(evidence: list[EvidenceItem]) -> float:
     """Score the RELEVANT evidence, not everything retrieved.
 
@@ -42,7 +55,7 @@ def score_batch(evidence: list[EvidenceItem]) -> float:
     """
     if not evidence:
         return 0.0
-    relevant = [e for e in evidence if e.confidence >= RELEVANCE_FLOOR]
+    relevant = supporting(evidence)
     if not relevant:
         return max(e.confidence for e in evidence)      # too weak — will be rejected
 
@@ -71,9 +84,14 @@ def evaluate(evidence: list[EvidenceItem], attempts: int,
         return ("REJECT", 0.0,
                 "The FIR number in the query matches no record within policy scope")
 
-    if len(evidence) < MIN_ITEMS:
+    if len(supporting(evidence)) < MIN_ITEMS:
+        # Note "supporting", not "evidence". A batch can be full and still support
+        # nothing — a dozen semantic neighbours a shade under the floor used to average
+        # their way past ACCEPT_THRESHOLD and be cited as though they answered the
+        # question. score_batch()'s own docstring already said a batch that clears
+        # nothing is context-only; the code did not act on it.
         if attempts < 1:
-            return "REFINE", confidence, "No evidence retrieved — widening the query"
+            return "REFINE", confidence, "Nothing retrieved supports an answer — widening"
         return "REJECT", 0.0, "No supporting records found after widening"
 
     if confidence < ACCEPT_THRESHOLD:
