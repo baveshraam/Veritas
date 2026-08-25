@@ -73,6 +73,18 @@ def _load_whisper(name: str):
     return WhisperModel(name, device="cpu", compute_type="int8")
 
 
+def warm() -> None:
+    """BUG-016. Same reasoning as translate.warm(): pay the one-time model-load cost
+    during container warm-up, not on an officer's first voice query. Only the two
+    whisper checkpoints this deployment actually depends on (Vakyansh/IndicTTS/Kokoro
+    are out-of-band-provisioned and not assumed present)."""
+    try:
+        _load_whisper(os.getenv("VERITAS_WHISPER_MODEL", "base.en"))
+        _load_whisper(os.getenv("VERITAS_WHISPER_KN_MODEL", "small"))
+    except VoiceUnavailable:
+        pass    # faster-whisper not installed in this environment — nothing to warm
+
+
 # --- Kannada ASR / TTS, English TTS: weights provisioned out-of-band ---------
 
 def _vakyansh_transcribe(audio: bytes) -> str:

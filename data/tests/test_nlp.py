@@ -75,6 +75,41 @@ def test_translate_is_noop_same_lang_and_errors_clearly_without_weights(monkeypa
         translate("hello", "en", "kn")
 
 
+def test_translate_warm_forces_the_same_lazy_load_the_first_query_would(monkeypatch):
+    """BUG-016: warm() exists so a container pays the cold-load cost during startup,
+    not on an officer's first Kannada query. It must call the exact same _load() the
+    request path uses — not a separate, possibly-drifting warm-up path."""
+    import importlib
+    translate_mod = importlib.import_module("data.nlp.translate")
+
+    calls = []
+    monkeypatch.setattr(translate_mod, "_load", lambda: calls.append(1))
+    translate_mod.warm()
+    assert calls == [1]
+
+
+def test_backend_status_does_not_force_a_load():
+    import importlib
+    translate_mod = importlib.import_module("data.nlp.translate")
+    translate_mod._load.cache_clear()
+    assert translate_mod.backend_status() == "not yet loaded"
+    assert translate_mod._load.cache_info().currsize == 0
+
+
+def test_model_fetch_status_is_honest_about_why_it_never_ran(monkeypatch):
+    from data.nlp import model_fetch
+
+    monkeypatch.delenv("VERITAS_MODELS_FOLDER_ID", raising=False)
+    monkeypatch.setattr(model_fetch, "_DONE", False)
+    assert "not configured" in model_fetch.status()
+
+    monkeypatch.setenv("VERITAS_MODELS_FOLDER_ID", "123")
+    assert model_fetch.status() == "configured, not yet fetched"
+
+    monkeypatch.setattr(model_fetch, "_DONE", True)
+    assert "fetched from Catalyst File Store" in model_fetch.status()
+
+
 def test_unknown_names_are_still_detected_as_persons():
     """A name outside the KA pool must still be SEEN.
 

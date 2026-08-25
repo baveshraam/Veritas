@@ -97,6 +97,30 @@ def _load():
     return _TransformersBackend(DEFAULT_MODEL)
 
 
+def warm() -> None:
+    """BUG-016: profiled live, the ~2s Kannada round-trip already reported was a warm
+    container. A cold model load measured 22s locally (weight load, not inference —
+    the very next call on the same process was 0.8-1.4s); nothing had paid that cost
+    proactively, so it landed on whichever officer's query happened to be first after
+    a container start/restart. Loading eagerly during the same background warm-up that
+    already fetches the Data Store mirror and File Store weights moves the cost off
+    the request path entirely."""
+    _load()
+
+
+def backend_status() -> str:
+    """Which backend is active, without forcing a load — BUG-017's fix. The changelog
+    claimed weights left the image for Catalyst File Store; the live evidence for that
+    had been inferred from Kannada response latency, which cannot actually distinguish
+    a File-Store-backed transformers load from a still-baked-in one. This reports the
+    real, observable fact instead."""
+    if _load.cache_info().currsize == 0:
+        return "not yet loaded"
+    return ("ctranslate2 (VERITAS_NLLB_CT2_DIR present — local/baked directory)"
+            if isinstance(_load(), _CTranslate2Backend)
+            else "transformers (HF cache — File Store or baked, see model_weights)")
+
+
 class _CTranslate2Backend:
     """NLLB via CTranslate2 int8 — see module docstring for why.
 

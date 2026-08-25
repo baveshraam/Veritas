@@ -68,6 +68,23 @@ async def _catalyst_context(request: Request, call_next):
                 from data.nlp.model_fetch import ensure_models
                 ensure_models()
 
+            # BUG-016: profiled locally, a cold NLLB/whisper load is ~20s of weight
+            # loading (not inference — the next call on the same warm process was
+            # under 1.5s). Without this, that cost landed on whichever officer's query
+            # happened to be first after a container start. Best-effort: a query must
+            # never fail because warm-up is still in progress or failed.
+            try:
+                import importlib
+
+                from data.nlp import speech
+                # importlib, not `from data.nlp import translate`: data.nlp's __init__
+                # re-exports the `translate` FUNCTION under the same name, shadowing
+                # the submodule (see the /health handler above for the same trap).
+                importlib.import_module("data.nlp.translate").warm()
+                speech.warm()
+            except Exception:
+                pass
+
         threading.Thread(target=_warm, name="warm", daemon=True).start()
 
     return await call_next(request)
@@ -129,4 +146,21 @@ async def health() -> dict:
 
     from data.cache import _segment
     status["cache"] = "catalyst" if _segment() is not None else "in-process"
+
+    # BUG-017: don't force a model load just to report on it — report what is
+    # actually true of this container's state right now.
+    #
+    # importlib.import_module, not `from data.nlp import translate`: data.nlp's
+    # __init__ re-exports the `translate` FUNCTION under the same name, which shadows
+    # the submodule as a package attribute (the same trap test_nlp.py documents).
+    try:
+        import importlib
+        model_fetch = importlib.import_module("data.nlp.model_fetch")
+        translate_mod = importlib.import_module("data.nlp.translate")
+        status["model_weights"] = model_fetch.status()
+        status["nllb_backend"] = translate_mod.backend_status()
+    except Exception as e:
+        status["model_weights"] = f"unavailable: {type(e).__name__}"
+        status["nllb_backend"] = f"unavailable: {type(e).__name__}"
+
     return status

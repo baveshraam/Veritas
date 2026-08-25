@@ -80,6 +80,18 @@ class _ChunkStream(io.RawIOBase):
         return out
 
 
+def status() -> str:
+    """For /health — BUG-017. Reports the real, observable state instead of a
+    changelog claim: whether this container fetched weights from File Store this
+    cold start, has them queued to fetch, or was never configured to (local dev,
+    or an image that still bakes them in at their default in-image paths)."""
+    if _DONE:
+        return "fetched from Catalyst File Store this cold start"
+    if not os.getenv("VERITAS_MODELS_FOLDER_ID"):
+        return "not configured (VERITAS_MODELS_FOLDER_ID unset — local dev, or weights baked into the image)"
+    return "configured, not yet fetched"
+
+
 def ensure_models() -> bool:
     """Idempotent, thread-safe. True if the model directory is ready.
 
