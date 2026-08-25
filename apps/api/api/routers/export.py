@@ -117,8 +117,19 @@ def _smartbrowz_pdf(page: str) -> tuple[bytes | None, str]:
     if not enabled():
         return None, "catalyst not configured on this host"
     try:
-        import zcatalyst_sdk
-        app = zcatalyst_sdk.initialize()
+        # `data.ds.catalyst_app()`, not a fresh bare `zcatalyst_sdk.initialize()` —
+        # the SDK's context is per-request X-ZC-* headers (see CLAUDE.md's v8
+        # changelog), and `main.py`'s middleware already captured THIS request's
+        # context into `ds._sdk_app` via `bind_catalyst_request`. Calling
+        # `initialize()` fresh here built a second, differently-scoped app that
+        # resolved to no usable identity — measured live: `CatalystAPIError:
+        # {'code': 'INVALID_ID', 'message': 'No such User with the given id
+        # exists'}`, immediately after fixing the method-name bug below made the
+        # call reach a real Catalyst response for the first time. Reusing the
+        # request-bound app is the same pattern `/jobs/refresh` already uses for
+        # background work outside any request at all.
+        from data import ds
+        app = ds.catalyst_app()
         # A4, KSP letterhead margins. The HTML is the same string the local renderer
         # gets, so the two paths cannot drift into producing different documents.
         #
