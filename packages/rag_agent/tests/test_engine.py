@@ -182,6 +182,78 @@ def test_no_catalyst_credential_means_no_llm(monkeypatch):
         llm.generate("hello")
 
 
+# --- BUG (QuickML unreachable): _token() called a method that never existed --------
+#
+# Verified live: /health reported "quickml (glm-4.7-flash)" while every answer was
+# extractive. The actual cause was `catalyst_app()._app._credential.get_token()`:
+# `zcatalyst_sdk.initialize()` returns the CatalystApp object DIRECTLY (there is no
+# `._app` wrapper), and Credential subclasses expose `.token()`, never `.get_token()`
+# — confirmed by extracting the published zcatalyst-sdk 1.4.0 wheel and reading
+# credentials.py / catalyst_app.py directly, then round-tripping the fixed logic
+# against the real installed package with simulated AppSail request headers
+# (X-ZC-Admin-Cred-Token etc., per zcatalyst_sdk._constants.CredentialHeader). The old
+# code raised AttributeError on the first attribute lookup, every single call, in
+# every environment — this was never specific to being unreachable "in AppSail"; the
+# LLM had never actually been called successfully.
+#
+# Skipped where the SDK isn't installed (by design — see llm.py's own "Absent
+# everywhere else" and the test above). Run it anywhere the real dependency is present,
+# including inside the deployed image, to catch a regression against the actual
+# credential contract rather than a hand-rolled stand-in for it.
+
+class _FakeAppSailRequest:
+    def __init__(self, headers):
+        self.headers = headers
+
+
+def _fake_appsail_app(zcatalyst_sdk):
+    """A CatalystApp initialized exactly the way AppSail's middleware does it —
+    real SDK classes, simulated gateway headers."""
+    headers = {
+        "X-ZC-ProjectId": "52852000000013048",
+        "X-ZC-Project-Domain": "veritas-60077763394.development.catalystserverless.in",
+        "X-ZC-Project-Key": "k",
+        "X-ZC-Environment": "Development",
+        "X-ZC-PROJECT-SECRET-KEY": "s",
+        "X-ZC-Admin-Cred-Type": "token",
+        "X-ZC-Admin-Cred-Token": "REAL-ADMIN-TOKEN",
+        "X-ZC-User-Cred-Type": "token",
+        "X-ZC-User-Cred-Token": "REAL-USER-TOKEN",
+    }
+    return zcatalyst_sdk.initialize(name=f"test-{id(headers)}", req=_FakeAppSailRequest(headers))
+
+
+def test_the_old_credential_path_never_existed_on_the_real_sdk():
+    """Documents the actual defect against the real classes, not a guess about them.
+
+    A function-scoped import: pytest.importorskip must never sit at module level in
+    this file — doing so once already skipped collection of every test below it, all
+    93 of them, silently. That mistake is worth naming so it is not repeated: a skip
+    reason belongs to the one test that needs it, not to everything textually after it.
+    """
+    zcatalyst_sdk = pytest.importorskip("zcatalyst_sdk", reason="AppSail-only dependency")
+    app = _fake_appsail_app(zcatalyst_sdk)
+    assert not hasattr(app, "_app")
+    with pytest.raises(AttributeError):
+        app._app._credential.get_token()  # noqa: SLF001 — reproducing the old bug on purpose
+
+
+def test_token_reads_the_admin_credential_the_way_the_sdks_own_http_client_does(monkeypatch):
+    """The fixed _token(): same credential.token() call AuthorizedHttpClient makes
+    before every Data Store / Cache / graph request, picking the admin scope Data
+    Store operations already run under."""
+    zcatalyst_sdk = pytest.importorskip("zcatalyst_sdk", reason="AppSail-only dependency")
+    from rag_agent import llm
+
+    app = _fake_appsail_app(zcatalyst_sdk)
+    import data.ds as ds_module
+    monkeypatch.setattr(ds_module, "catalyst_app", lambda: app)
+
+    token = llm._token()
+    assert token == "REAL-ADMIN-TOKEN"
+    assert token != "REAL-USER-TOKEN"      # the app authenticates as itself, not as an officer
+
+
 # --- Exact FIR lookup: the number on the paper FIR --------------------------
 #
 # fir_by_number() has always taken the 18-digit CrimeNo — its docstring says so, and
@@ -577,3 +649,126 @@ def test_an_empty_money_trail_states_the_absence_rather_than_leaving_it_unsaid()
 ])
 def test_crime_search_is_the_fallback_not_a_competitor(query, expected):
     assert classify(query) == expected
+
+
+# --- Regression: authoritative findings vs. relevance-scored evidence --------------
+#
+# BUG-006's fix (supporting/RELEVANCE_FLOOR) introduced a real regression: it could not
+# tell a genuinely weak/irrelevant hit apart from a specialist's own authoritative
+# statement whose confidence field isn't a relevance score at all. Measured live before
+# this fix: "Why does crime correlate with literacy?" lost its honest
+# "a causal estimate cannot be produced" decline (confidence=0.0 by convention) and
+# answered instead from five unrelated criminal profiles that happened to clear 0.5.
+#
+# The fix adds a second axis — EvidenceItem.authoritative — rather than touching
+# RELEVANCE_FLOOR itself or special-casing CAUSAL by name.
+
+from rag_agent.evidence.evaluator import AUTHORITATIVE_CONFIDENCE, supporting
+
+
+def _authoritative_ev(conf: float = 0.0, eid: str = "auth") -> EvidenceItem:
+    return EvidenceItem(evidence_id=eid, source_type="ML_PREDICTION", source_id="s",
+                        content="an authoritative statement", confidence=conf,
+                        authoritative=True)
+
+
+def test_an_authoritative_item_survives_the_relevance_floor_regardless_of_confidence():
+    """The exact defect: a confidence=0.0 authoritative item must not be dropped."""
+    batch = [_authoritative_ev(0.0)] + [_ev(0.3) for _ in range(5)]   # all noise below floor
+    kept = supporting(batch)
+    assert "auth" in [e.evidence_id for e in kept]
+
+
+def test_a_batch_of_pure_noise_still_rejects_when_nothing_is_authoritative():
+    """Guards against over-correcting: ordinary weak evidence must still be filtered."""
+    batch = [_ev(0.3) for _ in range(5)]
+    assert supporting(batch) == []
+    assert evaluate(batch, attempts=1)[0] == "REJECT"
+
+
+def test_an_authoritative_item_alone_is_accepted_immediately_not_widened():
+    """Retrying cannot improve on an authoritative statement — evaluate() must not
+    REFINE a batch that already contains one, even on the very first attempt."""
+    verdict, confidence, detail = evaluate([_authoritative_ev(0.0)], attempts=0)
+    assert verdict == "ACCEPT"
+    assert confidence == AUTHORITATIVE_CONFIDENCE
+    assert "authoritative" in detail.lower()
+
+
+def test_an_authoritative_item_is_not_outvoted_by_surrounding_noise():
+    """The regression's exact shape: an authoritative decline plus several unrelated
+    vector hits that clear the floor on their own. The decline must still be present
+    and citable — not silently dropped in favour of the noise around it."""
+    batch = [_authoritative_ev(0.0, "causal:unavailable")] +             [_ev(0.55, eid=f"noise{i}") for i in range(5)]
+    verdict, _, _ = evaluate(batch, attempts=0)
+    assert verdict == "ACCEPT"
+    kept_ids = {e.evidence_id for e in supporting(batch)}
+    assert "causal:unavailable" in kept_ids
+
+
+def test_the_causal_decline_is_marked_authoritative(monkeypatch):
+    """prediction_agent.causal() must set authoritative=True on its own decline —
+    this is the actual production code path the regression was found in, not just the
+    evaluator in isolation."""
+    from rag_agent.agents import prediction_agent
+    from ml_models.causal.effects import SocioeconomicDataUnavailable
+
+    def _raise(*a, **k):
+        raise SocioeconomicDataUnavailable("no Census row for this district")
+
+    monkeypatch.setattr(prediction_agent, "_ml", lambda: type(
+        "M", (), {"estimate_causal_effect": staticmethod(_raise)})())
+
+    _, ev = prediction_agent.causal("literacy_rate", "KA99")
+    assert len(ev) == 1
+    assert ev[0].authoritative is True
+    assert ev[0].confidence == 0.0
+    assert "cannot be produced" in ev[0].content
+
+
+# --- BUG-013 residual: FINANCIAL must not pad an authoritative answer with noise ----
+
+def test_vector_search_is_skipped_once_a_relational_specialist_settles_the_question():
+    """Generalises the exact_lookup_hit suppression: FINANCIAL, ALIAS_CHECK,
+    PERSON_NETWORK and CAUSAL each produce their own complete answer once a subject is
+    resolved, and semantic neighbours of the subject are not evidence for it."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    for intent in ("FINANCIAL", "ALIAS_CHECK", "CAUSAL"):
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="irrelevant for this stub")
+        state.intent = intent
+        state.active_entities.active_person = "803"
+
+        called = []
+        saved = (orch.graph_agent.money_trail, orch.graph_agent.aliases,
+                 orch.prediction_agent.causal, orch.prediction_agent.transactions,
+                 orch.vector_agent.search, orch._officer_ps, orch._district_code)
+        orch.graph_agent.money_trail = lambda *a, **k: []          # empty -> authoritative negative
+        orch.graph_agent.aliases = lambda *a, **k: []               # empty -> authoritative negative
+        orch.prediction_agent.causal = lambda *a, **k: (None, [_authoritative_ev(0.0, "c")])
+        orch.prediction_agent.transactions = lambda *a, **k: (None, [])
+        orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+        orch._officer_ps = lambda _oid: ""
+        orch._district_code = lambda _state: "KA05"
+        try:
+            out = orch._run_specialists(state, widen=False)
+        finally:
+            (orch.graph_agent.money_trail, orch.graph_agent.aliases,
+             orch.prediction_agent.causal, orch.prediction_agent.transactions,
+             orch.vector_agent.search, orch._officer_ps, orch._district_code) = saved
+
+        assert called == [], f"{intent}: vector search ran despite a settled specialist answer"
+        assert out, f"{intent}: specialist produced no evidence at all"
+
+
+def test_person_history_and_hotspot_still_get_vector_corroboration():
+    """The suppression must stay scoped — PERSON_HISTORY/HOTSPOT/FORECAST/CRIME_SEARCH
+    are not in _SPECIALIST_SETTLES and must keep running vector search."""
+    from rag_agent.orchestrator import _RELATIONAL_INTENTS, _SPECIALIST_SETTLES
+    assert "PERSON_HISTORY" not in _SPECIALIST_SETTLES
+    assert "HOTSPOT" not in _SPECIALIST_SETTLES
+    assert "FORECAST" not in _SPECIALIST_SETTLES
+    assert "CRIME_SEARCH" not in _SPECIALIST_SETTLES
+    assert _RELATIONAL_INTENTS <= _SPECIALIST_SETTLES

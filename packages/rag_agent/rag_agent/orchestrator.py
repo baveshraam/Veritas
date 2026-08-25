@@ -39,6 +39,10 @@ FIR_NUMBER_RE = re.compile(r"\b(\d{3,4}/\d{4}|\d{12,20})\b")
 TOG_CONFIDENCE_FLOOR = 0.55      # below this, HippoRAG alone isn't trusted
 _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
 
+# Intents whose specialist branch, once it runs for a resolved subject, IS the
+# authoritative answer — see the Vector Search Agent skip in _run_specialists.
+_SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {"CAUSAL"}
+
 
 def _trace(state: InvestigationState, step: str, detail: str,
            t0: float, confidence: float | None = None) -> None:
@@ -255,7 +259,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 content=("No duplicate-identity (SAME_AS) links are recorded for this "
                          "person. Entity resolution found no other record matching them "
                          "under a different name or spelling."),
-                confidence=0.9))
+                confidence=0.9, authoritative=True))
         _trace(state, "Cypher Agent (SAME_AS)", f"{len(rows)} alias record(s)", t0)
 
     elif intent == "FINANCIAL" and pid:
@@ -282,7 +286,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 content=("No bank account is linked to this person in the records, and "
                          "no transfers are traceable to them. This is an absence in the "
                          "financial layer, not a finding that no money moved."),
-                confidence=0.9))
+                confidence=0.9, authoritative=True))
         _trace(state, "Cypher Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
         for acct in {r["from_account"] for r in rows}:
             _, ev = prediction_agent.transactions(acct)
@@ -345,14 +349,36 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         _trace(state, "Prediction Agent (causal)",
                f"DoWhy backdoor adjustment on {factor}", t0)
 
-    # Vector search complements the graph on narrative/MO semantics — but NOT when the
-    # question named one record and we found it. "What is the status of FIR X" is a
-    # yes/no claim about a single row; the nearest narratives to it are cases about
-    # something else, and attaching them to the answer makes a correct lookup look like
-    # a fishing expedition. An exact identifier hit is the whole answer.
+    # Vector search complements the graph on narrative/MO semantics — but not when a
+    # specialist has already produced the whole answer. Two shapes of that:
+    #
+    #  - an exact identifier hit (FIR_LOOKUP): the nearest narratives to a named record
+    #    are cases about something else, not evidence for it.
+    #  - a relational/statistical specialist that settles its question on its own
+    #    (PERSON_NETWORK, FINANCIAL, ALIAS_CHECK, CAUSAL): once one of these has run
+    #    for a resolved subject, its result — a real relationship, an authoritative
+    #    negative finding, or a declined estimate — IS the complete answer. Semantic
+    #    neighbours of the SUBJECT are not evidence for the RELATIONSHIP or the
+    #    ESTIMATE the question actually asked about. This is what let "show me the
+    #    money trail for Usha Naika" answer from a summary of her theft cases (real
+    #    record, cited, not about money), and "why does crime correlate with literacy"
+    #    lose its honest decline under five unrelated criminal profiles that happened
+    #    to clear the relevance floor.
+    #
+    # retrieval candidate != evidence: a specialist result speaks with the record
+    # layer's own authority, and padding it with unrelated semantic hits does not
+    # corroborate it — it just gives the officer more to wade through before finding
+    # the one citation that actually answers the question. Scoped to exactly the
+    # intents whose specialist branch IS the authoritative source for the question;
+    # PERSON_HISTORY, RISK, HOTSPOT, FORECAST and CRIME_SEARCH still want narrative
+    # corroboration from vector search, and still get it.
     if state.exact_lookup_hit:
         _trace(state, "Vector Search Agent",
                "Skipped — the query named a record and the exact lookup found it", t0)
+        return out
+    if state.intent in _SPECIALIST_SETTLES and out:
+        _trace(state, "Vector Search Agent",
+               f"Skipped — {state.intent} was answered directly from the record layer", t0)
         return out
 
     t2 = time.perf_counter()

@@ -150,6 +150,10 @@ def causal(factor: str, district_code: str):
             content=(f"A causal estimate for {factor} cannot be produced: {e} "
                      f"No correlation is being reported in its place."),
             confidence=0.0,
+            # This IS the answer, not a low-relevance hit — the confidence floor that
+            # separates support from noise elsewhere does not apply to a statement
+            # declining to estimate. See EvidenceItem.authoritative.
+            authoritative=True,
         )]
     lo, hi = est.confidence_interval
     # A CI spanning zero means the data cannot distinguish the effect from none. Say

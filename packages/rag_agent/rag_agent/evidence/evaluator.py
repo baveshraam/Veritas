@@ -24,9 +24,32 @@ MIN_ITEMS = 1
 TOP_K = 5
 RELEVANCE_FLOOR = 0.5      # below this an item is context, not support
 
+# The reported confidence when an authoritative finding — not a relevance score —
+# is what settled the turn. Matches the number the specialists already use for their
+# own high-confidence negative findings (ALIAS_CHECK's "no alias", FINANCIAL's "no
+# account linked"), so a batch driven by one of these reads the same in the trace
+# whether or not a numeric relevance score happens to exist alongside it.
+AUTHORITATIVE_CONFIDENCE = 0.9
+
+
+def _authoritative(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    return [e for e in evidence if e.authoritative]
+
+
+def _relevant(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
+    """Items whose confidence sits on the relevance scale and clears the floor.
+
+    Kept separate from supporting(): an authoritative item's confidence is not
+    necessarily a relevance score at all (the CAUSAL decline sets it to 0.0 by
+    convention — "not applicable", not "irrelevant"), so it must not be averaged in
+    here as though it were one.
+    """
+    return [e for e in evidence if e.confidence >= RELEVANCE_FLOOR]
+
 
 def supporting(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
-    """The items that actually support an answer, as opposed to surrounding context.
+    """The items that belong in the citation set: relevance-scored support, plus any
+    authoritative statement regardless of what its own confidence number says.
 
     This is the distinction CRAG's evaluator exists to draw, and it was being computed
     and then discarded: score_batch() used it to decide *whether* to answer, and
@@ -34,8 +57,17 @@ def supporting(evidence: list[EvidenceItem]) -> list[EvidenceItem]:
     100050510202600037?" came back with the right FIR at [1] and five cyber-crime cases
     from another district at [2]-[6] — every one of them a real record, none of them
     evidence for the question asked. One floor, one meaning, used in both places.
+
+    RELEVANCE_FLOOR alone then went on to silently drop a *different* class of item:
+    prediction_agent's CAUSAL branch sets confidence=0.0 by convention when no
+    estimate can be produced — a deliberate "not applicable" marker on an authoritative
+    refusal, not a relevance score that happens to be low. The floor doesn't know the
+    difference, so "why does crime correlate with literacy" lost its honest decline and
+    kept only the unrelated criminal profiles that happened to clear 0.5. `authoritative`
+    is the second axis this needs: true for exactly the specialist-produced statements,
+    positive or negative, that settle the question on their own.
     """
-    return [e for e in evidence if e.confidence >= RELEVANCE_FLOOR]
+    return _relevant(evidence) + [e for e in evidence if e.authoritative and e.confidence < RELEVANCE_FLOOR]
 
 
 def score_batch(evidence: list[EvidenceItem]) -> float:
@@ -51,12 +83,15 @@ def score_batch(evidence: list[EvidenceItem]) -> float:
         alone (one 0.95 FIR among four 0.05 neighbours averages to 0.23).
     A single exact record IS sufficient support. So: keep the items above the
     relevance floor and score those; if none clear it, the batch is context-only and
-    the honest answer is that nothing was found.
+    the honest answer is that nothing was found — unless an authoritative statement
+    is present, which evaluate() checks before this score is used to decide anything.
     """
     if not evidence:
         return 0.0
-    relevant = supporting(evidence)
+    relevant = _relevant(evidence)
     if not relevant:
+        if _authoritative(evidence):
+            return AUTHORITATIVE_CONFIDENCE
         return max(e.confidence for e in evidence)      # too weak — will be rejected
 
     top = sorted((e.confidence for e in relevant), reverse=True)[:TOP_K]
@@ -78,11 +113,22 @@ def evaluate(evidence: list[EvidenceItem], attempts: int,
     named identifier is a yes/no claim about one row, so a miss is a refusal
     regardless of how confident the neighbourhood looks.
     """
-    confidence = score_batch(evidence)
-
     if exact_lookup_missed:
         return ("REJECT", 0.0,
                 "The FIR number in the query matches no record within policy scope")
+
+    authoritative = _authoritative(evidence)
+    if authoritative:
+        # A specialist has already given its final, complete word on this question —
+        # a positive relationship, a stated negative finding, or a declined estimate.
+        # None of that is "weak evidence to be scored for relevance and possibly
+        # outvoted"; relevance isn't the axis it lives on. And widening cannot improve
+        # on an authoritative answer, so this accepts on the first pass rather than
+        # retrying — a second identical specialist call would just waste the round trip.
+        return ("ACCEPT", max(score_batch(evidence), AUTHORITATIVE_CONFIDENCE),
+                "An authoritative finding from the record layer settles this")
+
+    confidence = score_batch(evidence)
 
     if len(supporting(evidence)) < MIN_ITEMS:
         # Note "supporting", not "evidence". A batch can be full and still support

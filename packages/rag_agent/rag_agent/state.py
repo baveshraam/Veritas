@@ -20,6 +20,20 @@ class EvidenceItem(BaseModel):
     source_query: Optional[str] = None      # the exact SQL/Cypher that produced this
     content: str
     confidence: float
+    # confidence measures RELEVANCE — how strongly this item supports the claim it is
+    # cited for. It is not the right axis for a different kind of item: a specialist
+    # agent's own authoritative statement that it looked and found nothing (or that it
+    # cannot produce an estimate at all). That statement isn't "weak evidence" scored
+    # low because it's off-topic — it's the complete, correct answer, and its
+    # confidence field is either unused (0.0, "not applicable") or reused to mean
+    # something else ("certainty of the negative finding"). Conflating the two meant a
+    # floor built to separate support from noise also deleted honest refusals: the
+    # CAUSAL agent's "no estimate can be produced" (deliberately confidence=0.0) was
+    # silently dropped by the RELEVANCE_FLOOR check, leaving unrelated vector hits as
+    # the only citations for a causal question. `authoritative` is the second axis:
+    # true for exactly the specialist-produced statements (positive or negative) that
+    # settle the question on their own — see evidence.evaluator.supporting/evaluate.
+    authoritative: bool = False
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

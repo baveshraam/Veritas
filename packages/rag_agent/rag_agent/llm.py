@@ -57,11 +57,43 @@ class LLMUnavailable(RuntimeError):
 def _token() -> str | None:
     """The app's own Catalyst token. In AppSail the SDK context comes from the request
     headers the API middleware captured into data.ds — a bare initialize() would fail
-    with empty headers. Absent everywhere else."""
+    with empty headers. Absent everywhere else.
+
+    This used to read `catalyst_app()._app._credential.get_token()`, which cannot ever
+    have worked: `zcatalyst_sdk.initialize()` returns the CatalystApp object directly
+    (there is no `._app` wrapper — confirmed by reading the 1.4.0 wheel), and
+    `Credential` subclasses expose `.token()`, never `.get_token()` (that name exists
+    only on the unrelated cookie-auth `JwtTokenCredential`). Both attribute lookups
+    raised AttributeError on every call, in every environment, and the bare
+    `except Exception: return None` below turned that into a silent "no credential" —
+    which is exactly the symptom `/health` was reporting live. The LLM had never
+    actually been reached; this was never an AppSail-specific reachability problem.
+
+    The correct call is the one the SDK's own HTTP client makes on every Data Store /
+    Cache / graph request (zcatalyst_sdk._http_client.AuthorizedHttpClient.
+    _authenticate_request): `credential.token()`, dispatched by credential type. In
+    AppSail that credential is `CatalystCredential`, whose `.token()` returns
+    `(class_name, value)` rather than a bare string — `AccessTokenCredential` gives a
+    real bearer token; `TicketCredential`/`CookieCredential` do not, and there is
+    nothing this function can reuse from them.
+
+    `_switch_user('admin')` picks the same scope Data Store operations already run
+    under ("the SDK authenticates as the app itself" — no per-officer token exists to
+    call an LLM with). It is the SDK's own mechanism for this: AuthorizedHttpClient
+    calls the identical method internally before every authenticated request; there is
+    no public wrapper for a one-off manual call like this one.
+    """
     try:
         from data.ds import catalyst_app
-        cred = catalyst_app()._app._credential  # noqa: SLF001
-        return cred.get_token()
+        credential = catalyst_app().credential
+        credential._switch_user("admin")  # noqa: SLF001 — see docstring
+        token = credential.token()
+
+        from zcatalyst_sdk.credentials import CatalystCredential
+        if isinstance(credential, CatalystCredential):
+            cred_type, value = token
+            return value if cred_type == "AccessTokenCredential" else None
+        return token
     except Exception:
         return None
 
