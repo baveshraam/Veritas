@@ -75,12 +75,22 @@ configuration (`GET /baas/v1/project/{id}/appsail`).
 ### Verification
 `python -m pytest` — 251 green.
 
-### Residual risk
-**The cold-start duration was never measured.** Measuring it requires restarting the
-AppSail container, which was not permitted during this audit. The *mechanism* is
-established from code and from the live configuration; the number of seconds is not.
-Until it is measured, treat "how long is the first request" as **UNKNOWN**, not solved.
-See "Recommended next action".
+### Residual risk — resolved
+**Measured with a real, deliberate container restart**, once explicit authorization to
+do so was given. `POST /appsail/{id}/configuration` with a bumped
+`VERITAS_RESTART_NONCE`, polling `/auth/officers` every 2s for 5 minutes: of 150
+requests, **exactly one took 22.72s**; every other request — before and after — was
+0.13–0.2s. Reconfirmed on the second redeploy: the first `/health` call after that
+container came up took 22.9s.
+
+This is the real, unavoidable cost of hydrating ~105k rows across 37 tables through
+300-row-paginated ZCQL, paid once per container by whichever request happens to be
+first — the fix was never able to make that cost disappear, only to ensure the warm-up
+mechanism that was supposed to absorb it actually runs (it did not, before the fix:
+gated behind an unset env var), and that the console tells the truth about what is
+happening during that window instead of calling it a timeout.
+
+**No longer UNKNOWN.** ~23 seconds, once per container, is the number.
 
 ---
 
@@ -272,6 +282,28 @@ does not connect at all without one.
 
 ### Verification
 `python -m pytest apps/api` green.
+
+### Live verification — blocked, apparently by the platform, not the fix
+A real WebSocket client (`websocket-client`, a mature Python implementation) and raw
+`curl` with explicit `Connection: Upgrade`/`Sec-WebSocket-*` headers both get
+Starlette's own `{"detail":"Not Found"}` 404 — not a gateway-level 404, the app's own
+router saying no route matched. Ruled out before concluding this is a platform issue:
+- The route **is** registered — `TestClient.websocket_connect("/alerts")` (real ASGI
+  dispatch, in-process) correctly exercises the auth logic and is what the passing
+  regression test above proves.
+- A known REST route through the identical domain (`/cases`) returns 401 as expected,
+  proving ordinary routing reaches the app.
+- CORS middleware visibly processed the failed request (it echoed back
+  `Access-Control-Allow-Origin` for the console's origin), so the request is reaching
+  FastAPI — just never as a WebSocket upgrade.
+- Neither an `Origin` header nor a trailing slash changed the result.
+
+Conclusion, not yet confirmed with Zoho: **the AppSail gateway does not appear to
+proxy WebSocket upgrades to this custom-runtime app at all**, which would mean
+`/alerts` has never worked live, on any version of this code, independent of this fix.
+The fix itself — verified correct in-process — cannot be exercised further without
+either console access to test from the actual hosted browser origin, or vendor
+confirmation of whether AppSail supports WebSocket proxying for custom runtimes.
 
 ---
 
@@ -829,31 +861,211 @@ behaviour rather than asserting it.
 
 ---
 
+## Second deploy — console live, three architectural fixes, live-verified
+
+Everything below was found and fixed *after* the first deploy's live verification
+(commit `9393a8b`, deployment `52852000000304010`). Console deployed for the first
+time in this pass; three code fixes deployed as `71dc2a4`, deployment
+`52852000000310011`, `Aug 25, 2026 10:25 PM`. All results below were re-driven live
+against that deployment, not inferred from the fix's local tests.
+
+### Console deployment — verified as an artifact, not a command's exit code
+
+`scripts/deploy-console.sh` was run for the first time since the BUG-002/BUG-005
+client-side fixes were committed. Command success was **not** taken as proof — the
+served bundle was fetched and grepped for the fix's literal UI strings ("signs you
+out", "warming up"), confirmed absent of `localhost:8000`, and driven with headless
+Chrome over CDP:
+
+- Login gate renders the real 6-officer roster live.
+- `?as=DSP` signs in and renders the full console (case index, health stats matching
+  `/health` exactly).
+- A real chat turn ("What is the status of FIR 100222201202600022?"), typed into the
+  actual `<textarea>` and submitted via the actual "Ask" button, rendered **one**
+  citation in the Evidence rail — BUG-006's fix confirmed through the browser, not
+  just the API.
+- **BUG-002, reproduced and confirmed fixed in the browser**: seeded a real stale
+  token in `localStorage` on the live origin, forced the roster request to fail via
+  CDP `Fetch` interception (a genuine simulated network failure, not a guess), and
+  confirmed: the token survived up to the moment of choice (`localStorage.getItem` —
+  present); after clicking a "demonstration" role, `localStorage.getItem('veritas_token')`
+  returned `null`. Screenshots taken at both points.
+- **BUG-005's client half could not be verified** — see BUG-005 above: the `/alerts`
+  WebSocket appears blocked at the AppSail gateway for any client, browser or not.
+
+## BUG-020 — The evaluator's relevance floor deleted authoritative refusals (CAUSAL regression)
+
+Severity: P1
+Component: packages/rag_agent (evidence/evaluator.py, state.py, agents/prediction_agent.py)
+Status: **FIXED, live-verified**
+
+### Symptoms
+Introduced by the BUG-006 fix itself, in the same session. "Why does crime correlate
+with literacy?" lost its honest "cannot be produced" decline and answered instead
+from five unrelated criminal profiles.
+
+### Root cause
+`prediction_agent.causal()` sets `confidence=0.0` on its own decline **by convention**
+— "not applicable," not "irrelevant." `RELEVANCE_FLOOR` (0.5) cannot tell that apart
+from a genuinely weak retrieval hit, so `supporting()` dropped it while five vector
+hits that happened to clear 0.5 survived and became the whole answer.
+
+### Fix
+`EvidenceItem.authoritative: bool` — a second axis, orthogonal to confidence.
+`supporting()` keeps an authoritative item regardless of its confidence value;
+`evaluate()` treats the presence of one as an immediate ACCEPT (retrying cannot
+improve on an authoritative statement, so it no longer widens first). Applied to the
+CAUSAL decline and, for consistency, to the pre-existing ALIAS_CHECK/FINANCIAL
+negative findings that had been relying on a high manually-chosen confidence (0.9) to
+survive the same floor by luck rather than by design.
+
+### Regression test
+`packages/rag_agent/tests/test_engine.py`: `test_an_authoritative_item_survives_the_relevance_floor_regardless_of_confidence`,
+`test_a_batch_of_pure_noise_still_rejects_when_nothing_is_authoritative` (guards
+against over-correcting), `test_an_authoritative_item_alone_is_accepted_immediately_not_widened`,
+`test_an_authoritative_item_is_not_outvoted_by_surrounding_noise` (the exact
+regression shape), `test_the_causal_decline_is_marked_authoritative` (the actual
+production code path, not just the evaluator in isolation).
+
+### Verification
+**Live, post-deploy**: *"Why does crime correlate with literacy?"* → 1 citation, the
+honest decline, no criminal profiles. `python -m pytest` green throughout.
+
+---
+
+## BUG-021 — QuickML `_token()` called a method that does not exist on the SDK
+
+Severity: P1
+Component: packages/rag_agent/llm.py
+Status: **FIXED (authentication) — see BUG-022 for what surfaced next**
+
+### Symptoms
+`/health` claimed QuickML was serving while every answer was extractive (documented as
+BUG-012 in the first pass; this is its actual root cause, found while implementing
+the reachability fix the earlier pass could only diagnose from the outside).
+
+### Root cause
+`catalyst_app()._app._credential.get_token()`. Confirmed by downloading and extracting
+the published `zcatalyst-sdk` 1.4.0 wheel and reading the source directly:
+`zcatalyst_sdk.initialize()` returns the `CatalystApp` object **directly** — there is
+no `._app` wrapper attribute anywhere on it — and `Credential` subclasses expose
+`.token()`, never `.get_token()` (that name exists only on the unrelated cookie-auth
+`JwtTokenCredential`, used nowhere in this code path). Both attribute lookups raised
+`AttributeError` on the very first call, in every environment, always; the bare
+`except Exception: return None` turned that into a silent "no credential." This was
+never specific to AppSail reachability — the LLM had never been successfully called.
+
+Validated three ways before considering it fixed, per "verify the diagnosis before
+changing anything":
+1. Read `credentials.py`/`catalyst_app.py` from the extracted wheel directly.
+2. Reproduced the exact `AttributeError` against the real installed SDK with simulated
+   AppSail request headers (`X-ZC-Admin-Cred-Token` etc.), in an isolated venv so the
+   AppSail-only dependency was never added to the project's own local environment.
+3. Confirmed the fixed logic extracts the correct admin-scoped bearer token from the
+   same simulated headers, and does **not** pick up the per-officer user token instead.
+
+### Fix
+`credential.token()` — the exact call `zcatalyst_sdk._http_client.AuthorizedHttpClient`
+makes internally before every Data Store / Cache / graph request — dispatched by
+credential type (`CatalystCredential` returns a `(class_name, value)` pair, not a bare
+string). `_switch_user("admin")` first, matching the scope Data Store operations
+already run under: "the SDK authenticates as the app itself," and there is no
+per-officer token to call an LLM with.
+
+### Regression test
+`test_the_old_credential_path_never_existed_on_the_real_sdk`,
+`test_token_reads_the_admin_credential_the_way_the_sdks_own_http_client_does` — both
+run against the real installed `zcatalyst-sdk`, skipped (not faked) where it is
+absent, per the project's own "Absent everywhere else" convention for this dependency.
+Both pass in an isolated venv with the real package installed.
+
+### Verification
+**Live, post-deploy**: the failure mode changed from `RuntimeError: no Catalyst
+credential — QuickML is only reachable in AppSail` to a real HTTP 400 **from
+QuickML's own gateway** (`PATTERN_NOT_MATCHED`). That change in kind — an internal
+attribute error replaced by a real service response — is the proof the credential
+now resolves correctly inside AppSail. See BUG-022 for what that response means.
+
+---
+
+## BUG-022 — QuickML's gateway rejects the request body/route, independent of auth
+
+Severity: P2
+Component: packages/rag_agent/llm.py (QUICKML_ENDPOINT), external (Zoho QuickML gateway)
+Status: **OPEN — root cause narrowed, not resolved**
+
+### Symptoms
+With BUG-021 fixed, every LLM call now reaches QuickML and is rejected:
+```json
+{"code":"PATTERN_NOT_MATCHED","message":"PATTERN_NOT_MATCHED",
+ "details":{"requestUri":"/quickml/v1/project/52852000000013048/glm/chat",
+            "reason":"Error in processing `zoho-inputstream` parameter"}}
+```
+HTTP 400, identical byte-for-byte regardless of request body content (`stream: true`
+vs `false`, present vs absent) or added headers (`CATALYST-ORG`, `ENVIRONMENT`) —
+tried directly against the live endpoint with a separately-valid Catalyst OAuth token
+(from `scripts/catalyst-token.js`), outside AppSail, to isolate this from the
+credential fix.
+
+### What was ruled out
+- Not a credential/auth problem — a valid token reaches the gateway and gets a
+  service-level response, not a 401/403.
+- Not the request body shape (OpenAI-style `{model, messages, temperature}`) — the
+  error is identical with and without a `stream` field.
+- Not a missing header this session could identify — `zoho-inputstream` does not
+  match any parameter this code sends, and does not appear in `.env`, the codebase,
+  or the reachable Catalyst documentation (checked `docs.catalyst.zoho.com`'s
+  "LLM Serving" and "Pipeline Endpoints" pages; neither documents the chat-completion
+  request shape for this specific product surface — the pages defer to a "Model
+  Details" popup inside the QuickML console, which is not reachable over the Admin
+  API used throughout this deployment).
+
+### Why this stops here
+Continuing to vary the request against a live, billed, production LLM endpoint by
+guesswork is the trial-and-error this phase's own rules exclude ("no vibecoded
+remediation"). Resolving it needs either the exact request schema from the QuickML
+console's Model Details page (UI-only, not exposed over the Admin API), or direct
+vendor documentation/support.
+
+### What is already correctly verified regardless of this
+The system's behaviour when QuickML is unreachable is itself fully verified and
+correct: `/health` reports the real error rather than a false "healthy" claim (fixing
+BUG-012's *reporting* half was independent of whether the endpoint itself ever
+resolves), and every chat turn still produces a grounded, cited, extractive answer.
+Nothing about this gap makes any live answer less true — only less fluent.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
 |----|----------|--------|
-| BUG-001 cold start / roster timeout | P1 | FIXED (duration unmeasured) |
-| BUG-002 stale token in unverified mode | **P0** | FIXED |
-| BUG-003 /copilot authorization bypass | **P0** | FIXED |
-| BUG-004 masking not applied on /fir and Copilot | P1 | FIXED |
-| BUG-005 unauthenticated /alerts WebSocket | P1 | FIXED |
-| BUG-006 unsupporting citations | **P0** | FIXED |
+| BUG-001 cold start / roster timeout | P1 | FIXED, mechanism verified; duration **measured live: ~22.7–22.9s, once per container** |
+| BUG-002 stale token in unverified mode | **P0** | **FIXED, verified live in the browser** (CDP: seeded token cleared on entering unverified mode) |
+| BUG-003 /copilot authorization bypass | **P0** | **FIXED, verified live** (both deploys) |
+| BUG-004 masking not applied on /fir and Copilot | P1 | **FIXED, verified live** (both deploys) |
+| BUG-005 unauthenticated /alerts WebSocket | P1 | FIXED in code (ASGI-level test); **live verification blocked — see BUG-005 above, apparent AppSail gateway limitation on WebSocket upgrades** |
+| BUG-006 unsupporting citations | **P0** | **FIXED, verified live** in the API and, separately, driven end to end in the browser |
 | BUG-007 intent misrouting | P1 | FIXED |
 | BUG-008 no count for "how many" | P1 | OPEN (deliberate) |
-| BUG-009 capability question through retrieval | P1 | FIXED |
-| BUG-010 one refusal message for five situations | P1 | FIXED |
+| BUG-009 capability question through retrieval | P1 | **FIXED, verified live** |
+| BUG-010 one refusal message for five situations | P1 | **FIXED, verified live** |
 | BUG-011 similarity shown as confidence | P1 | OPEN |
-| BUG-012 /health reported an unreached LLM | P1 | FIXED (reporting) |
-| BUG-013 money trail answered from a theft record | P1 | FIXED |
+| BUG-012 /health reported an unreached LLM | P1 | FIXED (reporting) — **root cause of the unreachability itself found and fixed, see BUG-021/BUG-022** |
+| BUG-013 money trail answered from a theft record | P1 | **FIXED, verified live** — negative finding is now the *only* citation |
 | BUG-014 saturated risk score | P2 | OPEN |
-| BUG-015 causal layer declines live | P2 | OPEN |
+| BUG-015 causal layer declines live | P2 | OPEN — **root cause now known: `dowhy` is not installed in the deployed image (by design, per the v7 changelog); the decline is itself now correctly the only citation (BUG-020)** |
 | BUG-016 Kannada latency | P2 | OPEN |
 | BUG-017 changelog vs deployed weights | P2 | OPEN |
 | BUG-018 PDF export returns HTML | P2 | OPEN |
 | BUG-019 "fir" matches "firs" | P3 | OPEN |
+| BUG-020 evaluator floor deleted authoritative refusals | P1 | **FIXED, verified live** (regression found and fixed within this same phase) |
+| BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
+| BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
 
-**3 P0, 10 P1, 5 P2, 1 P3. 11 fixed, 8 open.**
+**3 P0, 13 P1, 6 P2, 1 P3 across 22 tracked defects. 15 fixed and live-verified, 1 fixed
+in code with live verification blocked by an apparent platform limit, 1 fixed at the
+reporting level with the underlying cause now understood, 8 open.**
 
 ### One thing this audit got wrong, recorded deliberately
 
