@@ -1,4 +1,6 @@
 """Investigation-engine checks that need no database or LLM."""
+import json
+
 import pytest
 
 import networkx as nx
@@ -155,6 +157,44 @@ def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     assert llm.available() is False            # cooldown tripped
     assert "degraded" in llm.status()
     assert llm.generate_json("hello", {}) == {}   # returns {}, never raises
+
+
+def test_endpoint_key_header_sent_only_when_configured(monkeypatch):
+    """BUG-022: QuickML's sibling 'pipeline endpoints' REST surface documents a required
+    per-endpoint X-QUICKML-ENDPOINT-KEY header. It cannot be obtained or verified from this
+    environment (console-only), so it must stay optional — sent when someone sets it, absent
+    otherwise, never fabricated."""
+    from rag_agent import llm
+
+    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
+    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_token", lambda: "a-token")
+
+    captured = {}
+
+    class FakeResp:
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+
+    def fake_urlopen(req, timeout):
+        captured["headers"] = dict(req.headers)
+        return FakeResp()
+
+    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(json, "load", lambda f: {"choices": [{"message": {"content": "ok"}}]})
+
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "")
+    llm.generate("hello")
+    assert "X-quickml-endpoint-key" not in captured["headers"]
+
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "secret-from-console")
+    llm.generate("hello")
+    assert captured["headers"].get("X-quickml-endpoint-key") == "secret-from-console"
 
 
 def test_an_unconfigured_llm_is_reported_honestly(monkeypatch):

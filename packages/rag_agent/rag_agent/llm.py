@@ -41,6 +41,18 @@ log = logging.getLogger(__name__)
 
 MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")
 ENDPOINT = os.getenv("QUICKML_ENDPOINT", "").strip()
+# QuickML's "pipeline endpoints" REST surface documents a required per-endpoint
+# X-QUICKML-ENDPOINT-KEY header (docs.catalyst.zoho.com/en/quickml/help/
+# pipeline-endpoints/); LLM Serving's own invoke contract is not published
+# anywhere this session could reach. BUG-022's live failure — PATTERN_NOT_MATCHED,
+# "Error in processing `zoho-inputstream` parameter" — is consistent with a route
+# the gateway does not recognise at all, which is what a guessed URL with no
+# endpoint key produces. The key itself lives only in the console's Model Details
+# -> API Details popup, unreachable over the Admin API this project provisions
+# with, so it cannot be obtained or verified from here. This constant exists so
+# that the day someone copies it out of the console, it takes effect with no
+# further code change — not a claim that it is confirmed correct.
+ENDPOINT_KEY = os.getenv("QUICKML_ENDPOINT_KEY", "").strip()
 TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
 
 COOLDOWN_SECONDS = 70.0
@@ -154,13 +166,12 @@ def _chat(messages: list[dict], temperature: float, json_mode: bool) -> str:
     if json_mode:
         body["response_format"] = {"type": "json_object"}
 
+    headers = {"Authorization": f"Zoho-oauthtoken {token}",
+               "Content-Type": "application/json"}
+    if ENDPOINT_KEY:
+        headers["X-QUICKML-ENDPOINT-KEY"] = ENDPOINT_KEY
     req = urllib.request.Request(
-        ENDPOINT,
-        data=json.dumps(body).encode(),
-        method="POST",
-        headers={"Authorization": f"Zoho-oauthtoken {token}",
-                 "Content-Type": "application/json"},
-    )
+        ENDPOINT, data=json.dumps(body).encode(), method="POST", headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             payload = json.load(resp)
