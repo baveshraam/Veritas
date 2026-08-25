@@ -340,14 +340,16 @@ different LLM service.
 
 ## Summary sequencing table
 
-| Phase | Workflow | Primary gate it closes | Depends on |
-|---|---|---|---|
-| 1 | Trusted single-record lookup | Evidence/trust bar (§1.3) genuinely solid | — |
-| 2 | Data foundation + cross-case discovery | BUG-023, the North Star's largest named gap | Phase 1's evaluator discipline, not its output |
-| 3 | Person network & leads | Entity/link/leads stages, trustworthy identity | Phase 2 (identity-key persistence) |
-| 4 | Geographic intelligence | Map usability, honest ground-truth disclosure | Independent of 2, 3 |
-| 5 | Financial intelligence | Two-detector differentiator, live-verified | Independent of 2, 3, 4 |
-| 6 | Full investigation briefing | Briefing/reporting stage, capstone integration | 1-5 all closed |
+| Phase | Workflow | Primary gate it closes | Depends on | Status |
+|---|---|---|---|---|
+| 1 | Trusted single-record lookup | Evidence/trust bar (§1.3) genuinely solid | — | **Done, live-verified** — BUG-008/011/014 fixed |
+| 2 | Data foundation + cross-case discovery | BUG-023, the North Star's largest named gap | Phase 1's evaluator discipline, not its output | **Done, live-verified** — narrative diversity + explainable similarity |
+| 3 | Person network & leads | Entity/link/leads stages, trustworthy identity | Phase 2 (identity-key persistence) | **Done, live-verified** — network/leads already solid; fixed a mislabeled `risk_score`→`pagerank` field |
+| 4 | Geographic intelligence | Map usability, honest ground-truth disclosure | Independent of 2, 3 | **Done, live-verified** — 31 real district labels + scale control; boundary polygons deliberately not fabricated |
+| 5 | Financial intelligence | Two-detector differentiator, live-verified | Independent of 2, 3, 4 | **Done, live-verified** — found & fixed a real bug making AML detectors structurally unreachable; GNN stays unavailable (documented platform constraint) |
+| 6 | Full investigation briefing | Briefing/reporting stage, capstone integration | 1-5 all closed | **Done, live-verified** — multi-turn context, Copilot orchestration, 9-investigation final acceptance pass all confirmed; PDF export 2/3 root causes fixed, 1 platform identity question remains open |
+
+All six phases complete and live-verified as of this pass. See `docs/PHASE1_FAILURE_LOG.md` and `docs/QA_FUNCTIONALITY_MATRIX.md` for the full evidence trail per fix.
 
 Phases 3, 4, and 5 have no dependency on each other and no dependency on Phase 2 beyond the
 identity-key persistence Phase 3 specifically needs — they may proceed in any order, or in
