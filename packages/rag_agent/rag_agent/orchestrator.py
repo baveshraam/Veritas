@@ -268,6 +268,21 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             content=(f"₹{r['amount']:,.0f} moved from account {r['from_account'][:8]}… "
                      f"to {r['to_account'][:8]}… across {r['hops']} transfer(s)."),
             confidence=0.8) for r in rows]
+        if not rows:
+            # A negative finding IS the answer, and it has to be stated — the same
+            # reason ALIAS_CHECK states its own. Left unsaid, the semantic hits below
+            # became the top citation, so "show me the money trail for X" was answered
+            # with a summary of X's theft cases: a real record, cited, and not about
+            # money at all. Measured live as visualization=none with zero flow evidence
+            # and a confident answer on top of it.
+            out.append(EvidenceItem(
+                evidence_id=f"flow:none:{pid}", source_type="GRAPH_RELATIONSHIP",
+                source_id=str(pid),
+                source_query="MATCH (p)-[:OWNS_ACCOUNT]->(a)-[:TRANSFERRED_TO*1..n]->(b)",
+                content=("No bank account is linked to this person in the records, and "
+                         "no transfers are traceable to them. This is an absence in the "
+                         "financial layer, not a finding that no money moved."),
+                confidence=0.9))
         _trace(state, "Cypher Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
         for acct in {r["from_account"] for r in rows}:
             _, ev = prediction_agent.transactions(acct)

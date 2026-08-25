@@ -482,3 +482,72 @@ def test_a_suspect_question_refuses_for_the_right_reason():
     assert state.citations == []
     assert "do not nominate suspects" in state.final_answer
     assert state.final_answer != NOT_FOUND_MESSAGE
+
+
+# --- BUG-012: /health reported a model it had never reached ------------------
+#
+# Live, every answer was extractive and the Copilot diary was the deterministic
+# string, while /health reported "quickml (glm-4.7-flash)". Two causes: status()
+# treated a configured endpoint URL as a working one, and the failure that was
+# actually occurring -- no Catalyst credential -- was raised straight out of _chat
+# without going through _degrade(), so the cooldown never tripped and the status
+# never changed.
+
+def test_a_missing_credential_degrades_the_reported_status(monkeypatch):
+    from rag_agent import llm
+
+    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
+    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_degraded_reason", "")
+    monkeypatch.setattr(llm, "_ever_succeeded", False)
+    monkeypatch.setattr(llm, "_token", lambda: None)
+
+    with pytest.raises(llm.LLMUnavailable):
+        llm.generate("hello")
+
+    assert "degraded" in llm.status()
+    assert not llm.available()
+
+
+def test_a_configured_but_uncontacted_endpoint_is_not_reported_as_serving(monkeypatch):
+    from rag_agent import llm
+
+    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
+    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_ever_succeeded", False)
+
+    assert "not yet contacted" in llm.status()
+
+
+# --- BUG-013: a money-trail question answered from a theft record ------------
+
+def test_an_empty_money_trail_states_the_absence_rather_than_leaving_it_unsaid():
+    """Measured live: "Show me the money trail for Usha Naika" returned
+    visualization=none, zero transfer evidence, and a confident answer whose top
+    citation was a summary of her theft cases. A real record, cited, and not about
+    money. The negative finding is the answer, so it has to be in the evidence -- the
+    same reason ALIAS_CHECK states its own."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Show me the money trail for Usha Naika")
+    state.intent = "FINANCIAL"
+    state.active_entities.active_person = "803"
+
+    saved = (orch.graph_agent.money_trail, orch.vector_agent.search, orch._officer_ps)
+    orch.graph_agent.money_trail = lambda *a, **k: []
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.graph_agent.money_trail, orch.vector_agent.search, orch._officer_ps = saved
+
+    assert len(out) == 1
+    assert out[0].evidence_id == "flow:none:803"
+    assert "No bank account is linked" in out[0].content
+    # and it must not overclaim: absence in the records is not absence in the world
+    assert "not a finding that no money moved" in out[0].content

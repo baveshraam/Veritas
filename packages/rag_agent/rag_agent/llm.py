@@ -47,6 +47,7 @@ COOLDOWN_SECONDS = 70.0
 
 _degraded_until = 0.0
 _degraded_reason = ""
+_ever_succeeded = False
 
 
 class LLMUnavailable(RuntimeError):
@@ -77,11 +78,23 @@ def available() -> bool:
 
 
 def status() -> str:
-    """Honest one-liner for /health. Never reports a model when it cannot be reached."""
+    """Honest one-liner for /health. Never reports a model when it cannot be reached.
+
+    It used to break that promise twice over. It reported `quickml (glm-4.7-flash)`
+    whenever an endpoint URL was merely *configured* — reachable or not, contacted or
+    not — and the one failure mode that was actually occurring in production ("no
+    Catalyst credential", raised straight out of _chat) bypassed _degrade(), so the
+    cooldown never tripped and the status never changed. Live, every answer was
+    extractive and the Copilot diary was the deterministic string, while /health
+    reported the model as serving. Configured is not the same as working, and this
+    now says which one it knows.
+    """
     if not _configured():
         return "deterministic (QuickML not configured)"
     if time.monotonic() < _degraded_until:
         return f"deterministic (LLM degraded: {_degraded_reason})"
+    if not _ever_succeeded:
+        return f"quickml ({MODEL}) — configured, not yet contacted"
     return f"quickml ({MODEL})"
 
 
@@ -95,9 +108,15 @@ def _degrade(exc: Exception) -> LLMUnavailable:
 
 
 def _chat(messages: list[dict], temperature: float, json_mode: bool) -> str:
+    global _ever_succeeded
+
     token = _token()
     if not token:
-        raise LLMUnavailable("no Catalyst credential — QuickML is only reachable in AppSail")
+        # Through _degrade(), not raised bare. Raised bare it left _degraded_until at
+        # zero, so status() went on reporting a serving model while every single call
+        # failed on this line — which is exactly what was happening in production.
+        raise _degrade(RuntimeError(
+            "no Catalyst credential — QuickML is only reachable in AppSail"))
 
     body: dict = {"model": MODEL, "messages": messages, "temperature": temperature}
     if json_mode:
@@ -119,9 +138,11 @@ def _chat(messages: list[dict], temperature: float, json_mode: bool) -> str:
         raise _degrade(e) from e
 
     try:
-        return (payload["choices"][0]["message"]["content"] or "").strip()
+        out = (payload["choices"][0]["message"]["content"] or "").strip()
     except (KeyError, IndexError, TypeError) as e:
         raise _degrade(RuntimeError(f"unexpected response shape: {str(payload)[:200]}")) from e
+    _ever_succeeded = True
+    return out
 
 
 def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -> str:
