@@ -69,8 +69,8 @@ that stated, not `VERIFIED`.
 | API-07 | `GET /copilot/{id}` | `copilot.py` | VERIFIED | Live, scoping + masking confirmed |
 | API-08 | `POST /export/pdf` | `export.py` | PARTIAL | Returns `text/html` (BUG-018), reachability not re-driven this pass |
 | API-09 | `WS /alerts` | `alerts.py` | BROKEN (live) | See BUG-005 |
-| API-10 | `POST /jobs/refresh` | `jobs.py` | PARTIAL | Auth-gated behavior verified (401 without token); the refresh logic itself (GDS, Stratus publish, reindex) not triggered this pass |
-| API-11 | `GET /jobs/audit-verify` | `jobs.py` | PARTIAL | Auth-gated behavior verified; not triggered |
+| API-10 | `POST /jobs/refresh` | `jobs.py` | **BROKEN** | Triggered live twice with the real deployed job token: both times a 500 after ~16s. See **BUG-024** |
+| API-11 | `GET /jobs/audit-verify` | `jobs.py` | VERIFIED | Triggered live with the real deployed job token: `{"intact":true,"first_bad_audit_id":null}` — the audit hash chain is genuinely intact |
 | API-12 | `GET /health` | `main.py` | VERIFIED | Extensively, both deploys |
 
 ## 3. Conversational RAG — every intent
@@ -168,9 +168,9 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-09 | AppSail runtime — QuickML | BROKEN, diagnosed | BUG-021 (fixed) / BUG-022 (open) |
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
-| DEP-12 | Cron — `veritas_refresh` (6h) | UNKNOWN | Not observed firing; endpoint's auth gate confirmed only |
-| DEP-13 | Cron — `veritas_audit_verify` (12h) | UNKNOWN | Same |
-| DEP-14 | Audit hash chain integrity | UNKNOWN | Unit-tested (`verify_chain`); never run against the live log |
+| DEP-12 | Cron — `veritas_refresh` (6h) | **BROKEN** | The job itself was triggered manually (bypassing the schedule) and fails with a 500 — see BUG-024. Whatever Cron has been firing every 6h has been failing the same way |
+| DEP-13 | Cron — `veritas_audit_verify` (12h) | VERIFIED (the job logic; schedule itself still unobserved) | Triggered manually with the real job token — works correctly, chain intact |
+| DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 
 ## 8. Data integrity (carried forward from Phase 1, re-confirmed this session)
 

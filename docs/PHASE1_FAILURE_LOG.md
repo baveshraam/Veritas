@@ -1142,6 +1142,103 @@ reproduced consistently.
 
 ---
 
+## BUG-024 — `POST /jobs/refresh` fails with a 500 against the live dataset
+
+Severity: **P1**
+Component: apps/api/routers/jobs.py, data/gds.py and/or data/embeddings/index_job.py
+Status: **OPEN — reproduced live, root cause not fully isolated (no server-log access)**
+
+### Symptoms
+The scheduled refresh job — the one Cron is supposed to run every 6 hours to recompute
+PageRank/Louvain/betweenness, republish the graph, and rebuild the vector index —
+fails when actually triggered against the live, full-size dataset.
+
+### Reproduction
+```bash
+curl -X POST -H "X-Veritas-Job-Token: <the deployed secret>" \
+  https://veritas-api-50043864344.development.catalystappsail.in/jobs/refresh
+```
+Two independent runs, ~15 minutes apart: both returned `500`, `Internal Server Error`,
+in 15.69s and 16.04s respectively.
+
+### What this rules out
+`GET /jobs/audit-verify`, triggered with the exact same token and header immediately
+before and after, works correctly both times — `{"intact":true,"first_bad_audit_id":null}`
+— so this is not an auth problem, not a wrong header/token, and not the job-endpoint
+mechanism in general. It is specific to `/jobs/refresh`'s own pipeline.
+
+`publish_graph()` (`data/graph.py`) and the vector index's `_bucket()`
+(`data/vectors.py`) are both already correctly guarded — `try/except Exception: return
+None`/`False` — against Stratus being unreachable (documented and expected: "Stratus
+bucket creation is scope-blocked over the Admin API"). Reading both confirms neither
+should raise.
+
+### What was not possible to isolate further
+No server-side traceback was available — there is no runtime/application log endpoint
+exposed over the Admin API (only the bundle-build pipeline log, confirmed earlier this
+session while investigating cold start). The response body is the generic plain-text
+`Internal Server Error` (`Content-Type: text/plain`), not FastAPI's usual JSON error
+shape, which is more consistent with a gateway-level response to a crashed or timed-out
+upstream than an application-level exception handler — but this could not be confirmed
+either way without log access.
+
+Timed locally, twice, to narrow this down further:
+
+1. **At the full graph's reported scale** (16,918 nodes / 87,120 edges, matching
+   `/health`) — a synthetic random graph of that size, run through the exact same
+   three calls `run_all()` makes: PageRank 0.42s, Louvain 4.10s, pivot-sampled
+   betweenness (`k=500`, matching `_BETWEENNESS_PIVOTS` in `data/gds.py`
+   exactly) **179.48s**. The code's own comment already names this risk — *"Exact
+   betweenness is O(V\*E) — minutes on ~19k nodes. Pivot sampling… is what keeps
+   this an interactive question instead of a batch job"* — but 179s for the
+   *sampled* version alone, at this scale, is already far past any plausible
+   request timeout.
+
+2. **`run_all()` does not actually run on the full graph** — it runs on
+   `co_offending()`, the person-only projection. Re-estimated at that more accurate
+   scale (~7,000 person nodes, from the generator's `people = 0.7 × case count`
+   ratio; ~5,700 edges, scaled from the 142 `CO_ACCUSED_WITH` edges measured in this
+   session's 250-case test fixture): PageRank + Louvain + betweenness together took
+   **8.23s** — comfortably under the ~15.7–16s observed failures.
+
+That second, more accurate estimate actually argues *against* GDS being the
+bottleneck: if the three-algorithm pass finishes in ~8s, the remaining ~7–8s (and the
+failure itself) more plausibly belongs to one of the pipeline's other two steps,
+neither of which was timed this session:
+- `ds.update("vx_person", "PersonUID", rows)` — writing ~7,000 rows back. ZCQL has no
+  bulk `UPDATE`; `data/data/ds.py`'s own documentation notes updates resolve key→ROWID
+  once and then bulk-write, but the real round-trip cost of that at ~7,000 rows against
+  the live Data Store was not measured.
+- `data.embeddings.index_job.run_all()` — rebuilding the vector index over 13,835+
+  documents, a completely separate cost this session did not estimate at all.
+
+Both remain open candidates. This audit could not distinguish between "a platform
+request timeout around 15–16s" and "a genuine slowness in the write-back or reindex
+step" without either log access or timing those two steps directly against a
+production-scale dataset — neither of which was done this session.
+
+### Why this matters
+This is the job the whole system's claim of staying current depends on: "Everything
+derived from the record layer goes stale the moment the record layer changes" (the
+job's own docstring). If it has never successfully completed against the live dataset,
+the graph metrics, the Stratus-published graph blob, and the vector index have been
+serving whatever was last built during generation/seeding — not a defect in what is
+currently being answered (this audit found no stale-data symptom in any live query),
+but a real gap in the system's ability to stay current going forward.
+
+### Regression test
+None added yet — reproducing this in the test suite requires a graph at production
+scale, which the existing `TEST_CASES = 250` fixture does not build. Recommended next
+step: time `data.gds.run_all()` against a dataset sized closer to 10,000 cases locally,
+to determine whether ~16s is even plausible for this computation, before assuming a
+platform timeout.
+
+### Verification
+Live, two independent triggers, `python -m pytest` unaffected (no existing test
+exercises this scale).
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1169,10 +1266,11 @@ reproduced consistently.
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
 | BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
 | BUG-023 every narrative for a crime type is one template | **P1** | OPEN — data-generation limitation, quantified live (60/60 cases per type collapse to 1 shape); not a code defect, not a duplicate-record bug |
+| BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | OPEN — reproduced live twice (16s, 16s); `/jobs/audit-verify` ruled out as an auth issue; GDS timed locally and mostly ruled out (~8s at accurate scale); the write-back and reindex steps remain untimed |
 
-**3 P0, 14 P1, 6 P2, 1 P3 across 23 tracked defects. 15 fixed and live-verified, 1 fixed
+**3 P0, 15 P1, 6 P2, 1 P3 across 24 tracked defects. 15 fixed and live-verified, 1 fixed
 in code with live verification blocked by an apparent platform limit, 1 fixed at the
-reporting level with the underlying cause now understood, 9 open.**
+reporting level with the underlying cause now understood, 10 open.**
 
 ### One thing this audit got wrong, recorded deliberately
 
