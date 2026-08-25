@@ -85,9 +85,19 @@ def classify(query: str) -> str:
         hits = sum(1 for k in keywords if k in q)
         if hits:
             scores[intent] = hits
+
+    # CRIME_SEARCH is scored last, because its keywords are not topic words — "show",
+    # "list", "find", "cases" are the verbs almost every question in this domain uses.
+    # Counting them alongside specific ones let a generic pair outvote a precise single:
+    # "Find cases similar to FIR 100222201202600022" scored CRIME_SEARCH 2 ("find",
+    # "cases") against SIMILAR_CASES 1 ("similar") and was answered with five unrelated
+    # criminal profiles. It is the fallback intent, so it behaves like one.
+    specific = {i: n for i, n in scores.items() if i != "CRIME_SEARCH"}
+    if specific:
+        return max(specific, key=lambda i: (specific[i], -list(INTENTS).index(i)))
     if not scores:
         return "UNKNOWN"
-    return max(scores, key=lambda i: (scores[i], -list(INTENTS).index(i)))
+    return "CRIME_SEARCH"
 
 
 def visualization_for(intent: str) -> str:

@@ -551,3 +551,29 @@ def test_an_empty_money_trail_states_the_absence_rather_than_leaving_it_unsaid()
     assert "No bank account is linked" in out[0].content
     # and it must not overclaim: absence in the records is not absence in the world
     assert "not a finding that no money moved" in out[0].content
+
+
+# --- BUG-007: a generic verb pair outvoting a specific topic word -----------
+
+@pytest.mark.parametrize("query,expected", [
+    # The reported failure: scored CRIME_SEARCH 2 ("find", "cases") against
+    # SIMILAR_CASES 1 ("similar") and returned five unrelated criminal profiles.
+    ("Find cases similar to FIR 100222201202600022", "SIMILAR_CASES"),
+    ("show me comparable cases", "SIMILAR_CASES"),
+    ("list cases with the same modus", "SIMILAR_CASES"),
+    # CRIME_SEARCH must still win when nothing more specific is present.
+    ("How many theft cases are there in Mandya district?", "CRIME_SEARCH"),
+    ("list the robbery cases", "CRIME_SEARCH"),
+    ("count the theft cases", "CRIME_SEARCH"),
+    # NOTE: "show me murder FIRs" routes to FIR_LOOKUP, because keyword matching is by
+    # substring and "fir" is inside "firs". Harmless today — FIR_LOOKUP's branch is a
+    # no-op without a FIR number, so the turn falls through to the same semantic search
+    # CRIME_SEARCH would have run — but it is recorded in the failure log (BUG-019) as
+    # the kind of thing that stops being harmless the moment that branch grows.
+    # and the specific intents keep their questions
+    ("Show me crime hotspots", "HOTSPOT"),
+    ("show me the money trail", "FINANCIAL"),
+    ("find his known associates", "PERSON_NETWORK"),
+])
+def test_crime_search_is_the_fallback_not_a_competitor(query, expected):
+    assert classify(query) == expected
