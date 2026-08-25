@@ -625,6 +625,130 @@ def test_an_empty_money_trail_states_the_absence_rather_than_leaving_it_unsaid()
     assert "not a finding that no money moved" in out[0].content
 
 
+# --- BUG-008: "how many" answered with narratives and never a number ---------
+
+def test_crime_search_returns_an_exact_count_and_supporting_samples():
+    """Measured live: 'how many theft cases in Mandya' returned five narrative
+    excerpts and no number anywhere. Counting is a question the structured layer
+    answers exactly; this asserts the count is now produced, is authoritative (so it
+    settles the turn on its own), and vector search does not run to pad it."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(
+        session_id="s", officer_id="1", officer_role="IG",
+        original_query="How many theft cases are there in Mandya district?")
+    state.intent = "CRIME_SEARCH"
+    state.active_entities.active_location = "Mandya"
+
+    sample = {"fir_id": "9", "fir_number": "1", "district": "Mandya",
+              "ps_code": "1", "crime_type": "Theft", "date_filed": "2026-01-01",
+              "case_status": "Under Investigation", "narrative": "n"}
+    called = []
+    saved = (orch.sql_agent.count_firs, orch.sql_agent.search_firs,
+            orch.vector_agent.search, orch._officer_ps)
+    orch.sql_agent.count_firs = lambda *a, **k: 7
+    orch.sql_agent.search_firs = lambda *a, **k: [sample]
+    orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.count_firs, orch.sql_agent.search_firs,
+         orch.vector_agent.search, orch._officer_ps) = saved
+
+    assert called == [], "vector search ran even though the count already settled the turn"
+    counts = [e for e in out if e.evidence_id.startswith("crime_count:")]
+    assert len(counts) == 1
+    assert counts[0].authoritative is True
+    assert "7 case(s)" in counts[0].content
+    assert any(e.evidence_id == "fir:9" for e in out)
+
+
+def test_crime_search_states_zero_plainly_rather_than_going_silent():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="How many dacoity cases in Kolar?")
+    state.intent = "CRIME_SEARCH"
+    state.active_entities.active_location = "Kolar"
+
+    called = []
+    saved = (orch.sql_agent.count_firs, orch.sql_agent.search_firs,
+            orch.vector_agent.search, orch._officer_ps)
+    orch.sql_agent.count_firs = lambda *a, **k: 0
+    orch.sql_agent.search_firs = lambda *a, **k: (called.append(1), [])[1]
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.count_firs, orch.sql_agent.search_firs,
+         orch.vector_agent.search, orch._officer_ps) = saved
+
+    assert called == [], "no need to fetch samples for a zero count"
+    assert len(out) == 1
+    assert "0 case(s)" in out[0].content
+    assert out[0].authoritative is True
+
+
+def test_crime_type_extraction_prefers_the_longer_specific_match():
+    from rag_agent.orchestrator import _crime_type_from_query
+
+    assert _crime_type_from_query("how many motor vehicle theft cases") == "Motor Vehicle Theft"
+    assert _crime_type_from_query("how many theft cases") == "Theft"
+    assert _crime_type_from_query("show me all cases") is None
+
+
+# --- BUG-011: vector similarity displayed as evidential confidence -----------
+
+def test_vector_hits_are_labeled_as_similarity_not_support():
+    """A record's textual closeness to the query is a real number, but it is not the
+    same claim as 'this record supports the answer'. The UI must be able to tell
+    them apart, which means the field carrying the distinction must be set correctly
+    at the one place a raw similarity score enters the evidence stream."""
+    from rag_agent.agents import vector_agent
+
+    saved = (vector_agent.hybrid_search, vector_agent._drop_dangling)
+    vector_agent.hybrid_search = lambda *a, **k: [
+        {"collection": "fir_narrative", "source_id": "1", "content": "c", "score": 0.8}]
+    vector_agent._drop_dangling = lambda rows: rows       # no DB in this unit test
+    try:
+        rows, evidence = vector_agent.search("query")
+    finally:
+        vector_agent.hybrid_search, vector_agent._drop_dangling = saved
+
+    assert evidence[0].confidence_kind == "similarity"
+
+
+def test_exact_and_authoritative_evidence_defaults_to_support_kind():
+    """Everything that is NOT a raw similarity score keeps the default — an exact FIR
+    lookup, a graph relationship, an authoritative negative finding all genuinely mean
+    'this backs the claim', so they must not be relabeled down to 'similarity'."""
+    fir = _ev(0.97)
+    assert fir.confidence_kind == "support"
+
+
+def test_model_predictions_carry_a_distinct_kind_from_their_own_reported_score():
+    """risk()/forecast()/causal() attach a fixed ranking weight as `confidence`, not
+    the model's own reported number (which lives in `content`). Displaying a fixed
+    0.6 as if it were the model's calibrated output would be exactly the category
+    error BUG-011 already names for vector similarity, just via a constant instead
+    of a computed score."""
+    from unittest.mock import patch
+
+    from rag_agent.agents import prediction_agent
+    from ml_models.types import RiskResult
+
+    with patch.object(prediction_agent, "_ml") as ml:
+        ml.return_value.score_risk.return_value = RiskResult(
+            person_id="1", score=0.62, top_factors=[("x", 0.1)], calibrated=True)
+        _, ev = prediction_agent.risk("1")
+    assert ev[0].confidence_kind == "model_estimate"
+    assert "calibrated" in ev[0].content
+
+
 # --- BUG-007: a generic verb pair outvoting a specific topic word -----------
 
 @pytest.mark.parametrize("query,expected", [
@@ -764,11 +888,14 @@ def test_vector_search_is_skipped_once_a_relational_specialist_settles_the_quest
 
 
 def test_person_history_and_hotspot_still_get_vector_corroboration():
-    """The suppression must stay scoped — PERSON_HISTORY/HOTSPOT/FORECAST/CRIME_SEARCH
-    are not in _SPECIALIST_SETTLES and must keep running vector search."""
+    """The suppression must stay scoped — PERSON_HISTORY/HOTSPOT/FORECAST are not in
+    _SPECIALIST_SETTLES and must keep running vector search. CRIME_SEARCH is the one
+    exception: once it has produced its own exact count (BUG-008's fix), semantic
+    neighbours cannot corroborate a count — they can only pad it — so it settles like
+    the relational intents do."""
     from rag_agent.orchestrator import _RELATIONAL_INTENTS, _SPECIALIST_SETTLES
     assert "PERSON_HISTORY" not in _SPECIALIST_SETTLES
     assert "HOTSPOT" not in _SPECIALIST_SETTLES
     assert "FORECAST" not in _SPECIALIST_SETTLES
-    assert "CRIME_SEARCH" not in _SPECIALIST_SETTLES
+    assert "CRIME_SEARCH" in _SPECIALIST_SETTLES
     assert _RELATIONAL_INTENTS <= _SPECIALIST_SETTLES

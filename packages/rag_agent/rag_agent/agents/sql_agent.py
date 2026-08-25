@@ -105,6 +105,29 @@ def search_firs(officer_role: str, officer_ps_code: str,
     return [_case(r) for r in rows]
 
 
+def count_firs(officer_role: str, officer_ps_code: str,
+               crime_type: Optional[str] = None, district: Optional[str] = None) -> int:
+    """The exact count for a "how many X cases in Y" question — ZCQL has no GROUP BY
+    over a join this deep, so this counts rows in Python over the same scoped WHERE
+    clause search_firs uses, rather than approximating from a sample page."""
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = [], dict(extra)
+    if crime_type:
+        clauses.append('AND "CrimeSubHead"."CrimeHeadName" LIKE :ct')
+        params["ct"] = f"%{crime_type}%"
+    if district:
+        clauses.append('AND "District"."DistrictName" LIKE :d')
+        params["d"] = f"%{district}%"
+    rows = ds.query(
+        'SELECT "CaseMaster"."CaseMasterID" FROM "CaseMaster" '
+        'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
+        'JOIN "District" ON "Unit"."DistrictID" = "District"."DistrictID" '
+        'LEFT JOIN "CrimeSubHead" '
+        '  ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID" '
+        f'WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}', params)
+    return len(rows)
+
+
 def person_record(person_id: str) -> list[dict]:
     """Every case a person is accused in — the question the ER cannot answer by itself.
 

@@ -13,6 +13,7 @@ export type EvidenceItem = {
   source_query: string | null;
   content: string;
   confidence: number;
+  confidence_kind: "support" | "similarity" | "model_estimate";
   timestamp: string;
 };
 

@@ -32,6 +32,8 @@ def hotspots(district_code: str) -> tuple[object, list[EvidenceItem]]:
             source_query="KDE (Scott) + DBSCAN(eps=500m, min_samples=10)",
             content=(f"The model identifies a hotspot in {district_code} containing "
                      f"{p.crime_count} incidents (relative density {p.intensity:.2f})."),
+            # Relative KDE density of THIS cluster — a real per-cluster measurement,
+            # not a placeholder weight, so it keeps the default "support" kind.
             confidence=float(p.intensity),
         )
         for i, p in enumerate(polys, 1)
@@ -55,6 +57,7 @@ def forecast(district_code: str, horizon_days: int = HORIZON_DAYS):
                  f"({'MinT-reconciled' if fc.reconciled else 'unreconciled'}). "
                  f"This is a projection, not a record."),
         confidence=0.7 if fc.reconciled else 0.5,
+        confidence_kind="model_estimate",
     )]
     return fc, ev
 
@@ -68,10 +71,12 @@ def risk(person_id: str):
         source_type="ML_PREDICTION",
         source_id=person_id,
         source_query="XGBoost + SHAP",
-        content=(f"The model suggests a risk score of {r.score:.2f} for this person. "
+        content=(f"The model suggests a risk score of {r.score:.2f} for this person "
+                 f"({'calibrated — read as an approximate probability' if r.calibrated else 'NOT calibrated — a ranking score, not a probability'}). "
                  f"Top contributing factors: {factors}. This is decision-support, "
                  f"not a finding of fact."),
         confidence=0.6,
+        confidence_kind="model_estimate",
     )]
     return r, ev
 
@@ -87,6 +92,7 @@ def recidivism(person_id: str):
         content=(f"The model estimates a {r.probability_180d:.0%} probability of "
                  f"re-offence within 180 days (calibrated). Decision-support only."),
         confidence=0.6,
+        confidence_kind="model_estimate",
     )]
     return r, ev
 
@@ -196,6 +202,10 @@ def causal(factor: str, district_code: str):
         source_id=district_code,
         source_query=f"DoWhy backdoor, adjusted for {est.confounders_adjusted}",
         content=claim,
+        # A fixed weight by significance tier (established/failed-refutation/not-
+        # established), not a per-estimate score — the real numbers (effect size, CI)
+        # are in `claim`. Same reasoning as risk/forecast below.
         confidence=confidence,
+        confidence_kind="model_estimate",
     )]
     return est, ev

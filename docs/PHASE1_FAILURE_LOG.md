@@ -426,8 +426,30 @@ assert `CRIME_SEARCH` still wins when nothing more specific is present.
 ## BUG-008 — "How many …" is answered with narratives and never a number
 
 Severity: P1
-Component: packages/rag_agent/orchestrator.py
-Status: **OPEN — deliberately not fixed in Phase 1**
+Component: packages/rag_agent/orchestrator.py, packages/rag_agent/agents/sql_agent.py
+Status: **FIXED (final implementation pass, Phase 1)**
+
+### Fix
+`sql_agent.count_firs()` — an exact, role/station-scoped count over the same WHERE
+clause `search_firs` uses, counted in Python because ZCQL has no GROUP BY over a join
+this deep (same pattern `case_counts_by_district` already uses). `orchestrator.py`'s
+`_run_specialists` gained a `CRIME_SEARCH` branch: extracts a crime type from the
+query (`_crime_type_from_query`, matched against the 20 canonical types, longest
+match wins so "Motor Vehicle Theft" is not shadowed by "Theft"), an optional district
+from the session's active location, and emits the count as an **authoritative**
+evidence item plus up to 5 matching FIR records as supporting samples. `CRIME_SEARCH`
+joins `_SPECIALIST_SETTLES`, so — like the relational intents — vector search does
+not run once the count has settled the turn: semantic neighbours cannot corroborate a
+count, they can only pad it, which is exactly the anti-pattern BUG-006 fixed for
+other intents.
+
+### Regression test
+`test_crime_search_returns_an_exact_count_and_supporting_samples`,
+`test_crime_search_states_zero_plainly_rather_than_going_silent`,
+`test_crime_type_extraction_prefers_the_longer_specific_match`.
+
+### Verification
+`python -m pytest` green. Live re-verification pending deployment of this phase.
 
 ### Symptoms
 A counting question gets a list.
@@ -586,8 +608,41 @@ and there is a test asserting exactly that.
 ## BUG-011 — Vector similarity is displayed to the officer as evidential confidence
 
 Severity: P1
-Component: packages/rag_agent/agents/vector_agent.py, apps/web
-Status: **OPEN**
+Component: packages/rag_agent/agents/vector_agent.py, packages/rag_agent/agents/prediction_agent.py, packages/rag_agent/state.py, apps/web
+Status: **FIXED (final implementation pass, Phase 1)**
+
+### Fix
+`EvidenceItem` gained `confidence_kind: Literal["support", "similarity", "model_estimate"]`
+— not a calibration, a category. It answers "what does this number actually
+measure", set at the one place each kind of number is produced:
+- `vector_agent.search()` — raw hybrid dense+BM25 similarity → `"similarity"`.
+- `prediction_agent`'s risk/recidivism/forecast/causal items — a fixed ranking-weight
+  constant the evaluator uses to corroborate/rank (0.6, 0.7, 0.5, 0.3, 0.1 — never the
+  model's own reported score, which lives in `content`) → `"model_estimate"`. KDE
+  hotspot intensity and AML transaction-flag confidence are per-instance, genuinely
+  computed-from-this-record numbers, so they keep the default.
+- Everything else (exact FIR/person lookups, graph relationships, authoritative
+  findings) → default `"support"`, unchanged — these already meant what they said.
+
+`apps/web`: `EvidenceRail.tsx` no longer renders one undifferentiated "confidence"
+percentage. `"similarity"` items show a labeled "% text similarity" chip;
+`"model_estimate"` items show a plain "model output" tag with no percentage, because
+the model's real number already appears in the citation body and a second,
+differently-scaled percentage next to it would just be a second unlabeled number.
+`"support"` items keep the existing strong/fair/weak percentage band, now explicitly
+labeled "evidence strength". The "Open Investigation Copilot" button (previously
+shown for any `FIR_RECORD` item) is now also guarded to only render for a genuine
+numeric FIR id, so a non-record `FIR_RECORD`-typed item (the CRIME_SEARCH count) does
+not offer a Copilot link the backend cannot serve.
+
+### Regression test
+`test_vector_hits_are_labeled_as_similarity_not_support`,
+`test_exact_and_authoritative_evidence_defaults_to_support_kind`,
+`test_model_predictions_carry_a_distinct_kind_from_their_own_reported_score`.
+
+### Verification
+`python -m pytest` green, `npx tsc --noEmit` clean. Live re-verification pending
+deployment of this phase.
 
 ### Symptoms
 A semantically-similar but substantively unrelated record is shown with a "fair"
@@ -731,8 +786,39 @@ both the presence of the negative finding and that it does not overclaim.
 ## BUG-014 — Risk score returns a saturated 1.00
 
 Severity: P2
-Component: packages/ml_models/risk
-Status: **OPEN**
+Component: packages/ml_models/risk/scoring.py
+Status: **FIXED (final implementation pass, Phase 1)**
+
+### Root cause
+`_risk_model()` fit a raw `XGBClassifier` and returned `predict_proba` directly.
+Unlike `_recidivism_model()` one function below (already isotonic-calibrated via
+`CalibratedClassifierCV`), the risk model had no calibration step at all — a raw
+XGBoost margin-derived score is known to saturate near 0/1 on skewed data, which is
+exactly the symptom measured live (a reported 1.00 with no way to tell "very likely"
+from "the model is just confident it's confident").
+
+### Fix
+Same isotonic-calibration pattern the recidivism model already uses, adapted to
+`cv="prefit"` so TreeSHAP still explains the real fitted booster rather than an
+ensemble of calibration folds: `base` is fit on a training split, a `CalibratedClassifierCV`
+wraps it and is fit on a held-out calibration split, and `score_risk()` reports from
+the calibrated wrapper. `RiskResult.calibrated: bool` is now honest about which
+happened — if the calibration split lacks at least 5 of both classes, or isotonic
+fitting itself fails, the raw model is used and `calibrated=False` is reported rather
+than silently claiming a calibration that didn't happen (a failed calibration must
+not be reported as a successful one). The evidence text now says which case applies.
+
+### Regression test
+`test_risk_scores_are_calibrated_not_a_raw_saturated_margin` — fits the real model
+against the test dataset, scores a sample of people, asserts every score is in
+`[0, 1]`, and that a calibrated run does not produce every score rounding to the
+same value (the saturation signature).
+
+### Verification
+`python -m pytest` green — the new test exercises the real calibration path against
+a real (if small) dataset and passed without falling back to the uncalibrated branch.
+Live re-verification (whether the deployed dataset's calibration split is large
+enough to calibrate, vs. falling back honestly) pending deployment of this phase.
 
 ### Reproduction
 ```
@@ -1286,13 +1372,13 @@ matrix as DEP-12).
 | BUG-005 unauthenticated /alerts WebSocket | P1 | FIXED in code (ASGI-level test); **live verification blocked — see BUG-005 above, apparent AppSail gateway limitation on WebSocket upgrades** |
 | BUG-006 unsupporting citations | **P0** | **FIXED, verified live** in the API and, separately, driven end to end in the browser |
 | BUG-007 intent misrouting | P1 | FIXED |
-| BUG-008 no count for "how many" | P1 | OPEN (deliberate) |
+| BUG-008 no count for "how many" | P1 | **FIXED** (final implementation pass, Phase 1) — exact structured count, authoritative, no vector padding; live verification pending deploy |
 | BUG-009 capability question through retrieval | P1 | **FIXED, verified live** |
 | BUG-010 one refusal message for five situations | P1 | **FIXED, verified live** |
-| BUG-011 similarity shown as confidence | P1 | OPEN |
+| BUG-011 similarity shown as confidence | P1 | **FIXED** (final implementation pass, Phase 1) — `confidence_kind` axis; live verification pending deploy |
 | BUG-012 /health reported an unreached LLM | P1 | FIXED (reporting) — **root cause of the unreachability itself found and fixed, see BUG-021/BUG-022** |
 | BUG-013 money trail answered from a theft record | P1 | **FIXED, verified live** — negative finding is now the *only* citation |
-| BUG-014 saturated risk score | P2 | OPEN |
+| BUG-014 saturated risk score | P2 | **FIXED** (final implementation pass, Phase 1) — isotonic calibration, honest fallback; live verification pending deploy |
 | BUG-015 causal layer declines live | P2 | OPEN — **root cause now known: `dowhy` is not installed in the deployed image (by design, per the v7 changelog); the decline is itself now correctly the only citation (BUG-020)** |
 | BUG-016 Kannada latency | P2 | OPEN |
 | BUG-017 changelog vs deployed weights | P2 | OPEN |

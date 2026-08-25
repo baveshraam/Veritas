@@ -34,6 +34,16 @@ class EvidenceItem(BaseModel):
     # true for exactly the specialist-produced statements (positive or negative) that
     # settle the question on their own — see evidence.evaluator.supporting/evaluate.
     authoritative: bool = False
+    # What `confidence` actually measures for this item — a category, not a
+    # calibration claim. "support": an exact/structural match (a FIR record, a graph
+    # relationship, a stated finding) — the number genuinely means "how strongly this
+    # backs the claim". "similarity": raw hybrid dense+BM25 text similarity to the
+    # query — a real number, but it measures textual proximity, not evidential
+    # support, and must never be displayed or reasoned about as if it were the same
+    # thing as "support". "model_estimate": an ML_PREDICTION item's ranking weight —
+    # a heuristic the evaluator uses to corroborate/rank, distinct from the model's
+    # own reported score/probability, which lives in `content`, not here.
+    confidence_kind: Literal["support", "similarity", "model_estimate"] = "support"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 

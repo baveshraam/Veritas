@@ -53,6 +53,12 @@ def search(query: str, collection: str | None = None, k: int = 5
             source_query=f"hybrid dense+BM25 over '{r['collection']}'",
             content=r["content"],
             confidence=float(min(1.0, max(0.0, r["score"]))),
+            # This is cosine/BM25 similarity to the query text, not evidential
+            # support — a semantically close record can be about a different crime
+            # entirely (see BUG-011). It still drives the evaluator's relevance
+            # floor and gets cited when it clears it, but the UI must render it as
+            # what it is, not as "confidence this claim is true".
+            confidence_kind="similarity",
         )
         for r in rows
     ]

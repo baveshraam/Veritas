@@ -63,19 +63,46 @@ class _XGBShap:
         return contribs[:, :-1]                     # last column is the bias term
 
 
-@lru_cache(maxsize=1)
-def _risk_model():
+def _fit_base(Xtr, ytr):
     from xgboost import XGBClassifier
 
-    X, y, _, _ = _training_set(window_days=None, holdout_days=_RISK_HOLDOUT_DAYS)
-    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
     model = XGBClassifier(
         n_estimators=200, max_depth=4, learning_rate=0.08,
         subsample=0.9, colsample_bytree=0.9, eval_metric="logloss",
         random_state=0,
     )
     model.fit(Xtr, ytr)
-    return model, _XGBShap(model)
+    return model
+
+
+@lru_cache(maxsize=1)
+def _risk_model():
+    """Calibrated on a held-out split, same reasoning as `_recidivism_model` below.
+
+    Raw XGBoost `predict_proba` is a margin-derived score, not a probability — it
+    routinely saturates near 0/1 on skewed data (observed live: a reported 1.00 with
+    no way to tell "very likely" from "the model is just confident it's confident").
+    `cv="prefit"` calibrates a *second* fit on a held-out split while leaving `base`
+    itself untouched, so TreeSHAP still explains the real fitted booster rather than
+    an ensemble of calibration folds. If the calibration split lacks enough of both
+    classes to fit isotonic regression, the raw (uncalibrated) model is used instead
+    and reported as such — a failed calibration must not be reported as a successful
+    one.
+    """
+    X, y, _, _ = _training_set(window_days=None, holdout_days=_RISK_HOLDOUT_DAYS)
+    Xtr, Xcal, ytr, ycal = train_test_split(X, y, test_size=0.3, random_state=0, stratify=y)
+    base = _fit_base(Xtr, ytr)
+    explainer = _XGBShap(base)
+
+    if ycal.sum() < 5 or (len(ycal) - ycal.sum()) < 5:
+        return base, explainer, False
+
+    try:
+        calibrated = CalibratedClassifierCV(base, method="isotonic", cv="prefit")
+        calibrated.fit(Xcal, ycal)
+    except ValueError:
+        return base, explainer, False
+    return calibrated, explainer, True
 
 
 @lru_cache(maxsize=1)
@@ -105,7 +132,7 @@ def _current_features(person_id: str):
 
 
 def score_risk(person_id: str) -> RiskResult:
-    model, explainer = _risk_model()
+    model, explainer, calibrated = _risk_model()
     row = _current_features(person_id)
     x = row.x.reshape(1, -1)
 
@@ -117,7 +144,8 @@ def score_risk(person_id: str) -> RiskResult:
          for i in range(len(FEATURE_NAMES))),
         key=lambda t: -abs(t[1]),
     )[:4]
-    return RiskResult(person_id=person_id, score=round(score, 4), top_factors=factors)
+    return RiskResult(person_id=person_id, score=round(score, 4), top_factors=factors,
+                      calibrated=calibrated)
 
 
 def predict_recidivism(person_id: str) -> RecidivismResult:

@@ -24,6 +24,9 @@ class RiskResult(BaseModel):
     person_id: str
     score: float                          # 0-1
     top_factors: list[tuple[str, float]]  # SHAP feature -> contribution
+    # False means `score` is a raw XGBoost predict_proba value, which is known to
+    # saturate near 0/1 on skewed data and should not be read as a probability.
+    calibrated: bool = True
 
 
 class RecidivismResult(BaseModel):

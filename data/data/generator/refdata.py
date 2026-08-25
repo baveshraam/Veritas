@@ -130,6 +130,12 @@ _SECTION_DESC = {
 }
 
 
+def crime_type_names() -> list[str]:
+    """The 20 canonical crime-type labels a query can name — used to recognise which
+    one (if any) a free-text question is asking about, e.g. for CRIME_SEARCH counting."""
+    return list(_CRIME_MAP)
+
+
 def crime_head_id(crime_type: str) -> int:
     return _CRIME_MAP[crime_type][0]
 

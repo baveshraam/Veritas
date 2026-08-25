@@ -41,7 +41,10 @@ _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
 
 # Intents whose specialist branch, once it runs for a resolved subject, IS the
 # authoritative answer — see the Vector Search Agent skip in _run_specialists.
-_SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {"CAUSAL"}
+# CRIME_SEARCH joins this set once it has produced its own exact count (below):
+# unlike PERSON_HISTORY/RISK/HOTSPOT/FORECAST, a counting question has one correct
+# number, and semantic neighbours cannot corroborate a count — they can only pad it.
+_SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {"CAUSAL", "CRIME_SEARCH"}
 
 
 def _trace(state: InvestigationState, step: str, detail: str,
@@ -316,6 +319,35 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             _trace(state, "SQL Agent (FIR lookup)",
                    f"{len(rows)} record(s) for FIR {m.group(1)} within policy scope", t0)
 
+    elif intent == "CRIME_SEARCH":
+        # The classifier has always had this intent; until now nothing answered it —
+        # every turn fell through to semantic search alone, so "how many theft cases
+        # in Mandya" got five narrative excerpts and no number anywhere (BUG-008).
+        # Counting is a question the structured layer answers exactly; vector search
+        # cannot corroborate a count, it can only pad it.
+        ct = _crime_type_from_query(state.original_query or "")
+        district_name = state.active_entities.active_location
+        count = sql_agent.count_firs(role, ps, crime_type=ct, district=district_name)
+        scope_bits = [x for x in (ct, f"in {district_name}" if district_name else None) if x]
+        scope_desc = " ".join(scope_bits) if scope_bits else "within your access scope"
+        out.append(EvidenceItem(
+            evidence_id=f"crime_count:{ct or 'any'}:{district_name or 'any'}",
+            source_type="FIR_RECORD", source_id="count",
+            source_query="COUNT over CaseMaster, scoped by role/station",
+            content=f"{count} case(s) {scope_desc} are recorded within your access scope.",
+            confidence=0.95, authoritative=True))
+        if count:
+            samples = sql_agent.search_firs(role, ps, crime_type=ct, district=district_name,
+                                            limit=5)
+            state.sql_query_results += samples
+            out += [EvidenceItem(
+                evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
+                source_id=r["fir_id"], source_query="SELECT ... matching the count above",
+                content=_fir_content(r), confidence=0.9) for r in samples]
+        _trace(state, "SQL Agent (crime count)",
+               f"{count} matching case(s){f' for {ct}' if ct else ''}"
+               f"{f' in {district_name}' if district_name else ''}", t0)
+
     elif intent == "HOTSPOT":
         dc = _district_code(state)
         if dc:
@@ -403,6 +435,16 @@ def _officer_ps(officer_id: str) -> str:
         return str(r["UnitID"]) if r else ""
     except Exception:
         return ""
+
+
+def _crime_type_from_query(query: str) -> str | None:
+    """Which of the 20 canonical crime types (if any) a question names — the longest
+    match wins so "Motor Vehicle Theft" is not shadowed by the bare "Theft" it
+    contains."""
+    from data.generator.refdata import crime_type_names
+    q = (query or "").lower()
+    matches = [ct for ct in crime_type_names() if ct.lower() in q]
+    return max(matches, key=len) if matches else None
 
 
 def _district_code(state: InvestigationState) -> str | None:

@@ -138,6 +138,37 @@ def test_labels_come_only_from_after_the_cutoff(dataset):
     assert within <= ever, "a 180-day re-offender must also be an eventual re-offender"
 
 
+def test_risk_scores_are_calibrated_not_a_raw_saturated_margin(dataset):
+    """BUG-014: a live risk score pinned at 1.00 with no way to tell 'very likely' from
+    'the model is confident it's confident'. Raw XGBoost predict_proba is known to
+    saturate on skewed data; this asserts the score actually comes from the calibrated
+    wrapper (same isotonic pattern already proven for recidivism just below), not the
+    raw booster, whenever the calibration split has enough of both classes to fit it."""
+    from ml_models.risk.scoring import _risk_model, score_risk
+
+    model, explainer, calibrated = _risk_model()
+    assert hasattr(model, "predict_proba")
+    assert explainer is not None
+
+    people = ds.query('SELECT "PersonUID" FROM "vx_person" LIMIT 20')
+    scores = []
+    for p in people:
+        try:
+            r = score_risk(str(p["PersonUID"]))
+        except KeyError:
+            continue
+        assert 0.0 <= r.score <= 1.0
+        assert r.calibrated == calibrated
+        scores.append(r.score)
+    assert scores, "no person in the sample had current features to score"
+    if calibrated:
+        # Not every score should be indistinguishable from the boundary — a
+        # calibrated model on a real feature spread produces a real spread of
+        # scores, not everyone saturated at the same value.
+        assert len(set(round(s, 2) for s in scores)) > 1, (
+            "every calibrated score rounded to the same value — suspicious saturation")
+
+
 # ------------------------------------------------------------------------------- causal
 def test_the_causal_layer_reports_its_unmeasured_confounder(dataset):
     """The intellectually honest part, and the one a panel will look for. Police strength is

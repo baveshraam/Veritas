@@ -171,6 +171,18 @@ export function confidenceBand(confidence: number): "strong" | "fair" | "weak" {
   return "weak";
 }
 
+/** What the chip should say, and whether the number even belongs on it.
+ *  "support": a real evidential-strength band ("87% strong"). "similarity": labeled
+ *  as text similarity, never as trust in the claim (BUG-011). "model_estimate": the
+ *  model's own reported number already appears in the evidence body — showing a
+ *  second, different-meaning percentage here would just be a second unlabeled
+ *  number, so this kind gets a plain tag instead of a percentage. */
+export function confidenceLabel(kind: EvidenceItem["confidence_kind"]): string {
+  if (kind === "similarity") return "text similarity";
+  if (kind === "model_estimate") return "model output";
+  return "evidence strength";
+}
+
 export function evidenceFor(e: EvidenceItem): string {
   return e.source_type.replace(/_/g, " ").toLowerCase();
 }
