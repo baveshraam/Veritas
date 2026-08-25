@@ -390,3 +390,60 @@ def test_regenerate_narratives_still_requires_the_job_token(client, officers, mo
     assert client.post("/jobs/regenerate_narratives").status_code == 401
     assert client.post("/jobs/regenerate_narratives",
                        headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401
+
+
+# --- North Star Phase 6: PDF export must say WHY it degraded, not just that it did -
+#
+# BUG-018. The previous bare `except Exception: return None` on both the SmartBrowz
+# and local-Chrome paths made every failure indistinguishable from every other one —
+# exactly the diagnostic gap BUG-012 named for QuickML. The console was never lying
+# (an HTML fallback with an honest header is a real, printable document, not a fake
+# PDF), but nobody could tell WHY a PDF didn't render without re-reading the code.
+
+def test_export_reports_why_no_pdf_rendered(client, officers, dataset, monkeypatch):
+    from data import write_conversation_turn
+
+    h = _auth(client, officers["IG"]["badge_no"])
+    write_conversation_turn("export-test-1", 0, "test query", "en", "test answer",
+                            [], [], {}, [])
+
+    from api.routers import export as export_router
+    monkeypatch.setattr(export_router, "_smartbrowz_pdf",
+                        lambda page: (None, "SomeError: smartbrowz unreachable"))
+    monkeypatch.setattr(export_router, "_local_pdf",
+                        lambda page: (None, "FileNotFoundError: no browser"))
+
+    r = client.post("/export/pdf", json={"session_id": "export-test-1"}, headers=h)
+    assert r.status_code == 200
+    assert r.headers["x-veritas-pdf"] == "unavailable"
+    assert "smartbrowz unreachable" in r.headers["x-veritas-pdf-smartbrowz-reason"]
+    assert "no browser" in r.headers["x-veritas-pdf-local-reason"]
+    assert r.headers["content-type"].startswith("text/html")
+
+
+def test_export_returns_a_real_pdf_when_a_renderer_is_available(client, officers, dataset,
+                                                                 monkeypatch):
+    from data import write_conversation_turn
+
+    h = _auth(client, officers["IG"]["badge_no"])
+    write_conversation_turn("export-test-2", 0, "test query", "en", "test answer",
+                            [], [], {}, [])
+
+    from api.routers import export as export_router
+    monkeypatch.setattr(export_router, "_smartbrowz_pdf",
+                        lambda page: (b"%PDF-1.4 fake but real bytes", "ok"))
+    called_local = []
+    monkeypatch.setattr(export_router, "_local_pdf",
+                        lambda page: (called_local.append(1), (None, "should not run"))[1])
+
+    r = client.post("/export/pdf", json={"session_id": "export-test-2"}, headers=h)
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "application/pdf"
+    assert r.content == b"%PDF-1.4 fake but real bytes"
+    assert called_local == [], "local renderer ran even though SmartBrowz already succeeded"
+
+
+def test_export_requires_a_real_conversation(client, officers, dataset):
+    h = _auth(client, officers["IG"]["badge_no"])
+    r = client.post("/export/pdf", json={"session_id": "no-such-session-at-all"}, headers=h)
+    assert r.status_code == 404

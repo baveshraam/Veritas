@@ -11,6 +11,7 @@ print-ready HTML with a header saying so, rather than failing the export or ship
 a fake PDF — an officer can still print it from the browser.
 """
 import html
+import logging
 import os
 import shutil
 import subprocess
@@ -24,6 +25,7 @@ from ..audit import record
 from ..auth.jwt_auth import Officer, current_officer
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
 
 class ExportRequest(BaseModel):
@@ -101,32 +103,43 @@ def _find_browser() -> str | None:
     return None
 
 
-def _smartbrowz_pdf(page: str) -> bytes | None:
-    """Catalyst SmartBrowz render. Returns None when Catalyst isn't configured here."""
+def _smartbrowz_pdf(page: str) -> tuple[bytes | None, str]:
+    """Catalyst SmartBrowz render. Returns (pdf_bytes_or_None, reason).
+
+    `reason` exists because the previous bare `except Exception: return None` made
+    this indistinguishable from "not configured", "network error", or "the SDK call
+    itself rejected the request" — exactly the diagnostic gap BUG-012 named for
+    QuickML, here for SmartBrowz. Logged, not just swallowed, so a live failure is
+    something a later session can actually diagnose instead of re-discovering that
+    it degrades silently.
+    """
     from ..auth.catalyst_auth import enabled
     if not enabled():
-        return None
+        return None, "catalyst not configured on this host"
     try:
         import zcatalyst_sdk
         app = zcatalyst_sdk.initialize()
         # A4, KSP letterhead margins. The HTML is the same string the local renderer
         # gets, so the two paths cannot drift into producing different documents.
-        return app.smartbrowz().convert_to_pdf(page, pdf_options={
+        pdf = app.smartbrowz().convert_to_pdf(page, pdf_options={
             "format": "A4",
             "margin": {"top": "15mm", "bottom": "15mm", "left": "12mm", "right": "12mm"},
             "print_background": True,
         })
-    except Exception:
+        return pdf, "ok"
+    except Exception as e:
         # A PDF export is not worth 500-ing a session over — fall through to the
-        # local renderer, and to HTML below that.
-        return None
+        # local renderer, and to HTML below that. But the reason is worth keeping.
+        reason = f"{type(e).__name__}: {e}"
+        log.warning("SmartBrowz PDF render failed: %s", reason)
+        return None, reason
 
 
-def _local_pdf(page: str) -> bytes | None:
-    """Headless Chrome render. Returns None when no browser is installed."""
+def _local_pdf(page: str) -> tuple[bytes | None, str]:
+    """Headless Chrome render. Returns (pdf_bytes_or_None, reason)."""
     chrome = _find_browser()
     if not chrome:
-        return None
+        return None, "no Chromium-family browser found on this host"
     with tempfile.TemporaryDirectory() as tmp:
         src = os.path.join(tmp, "doc.html")
         out = os.path.join(tmp, "doc.pdf")
@@ -138,9 +151,9 @@ def _local_pdf(page: str) -> bytes | None:
                  f"--print-to-pdf={out}", "--no-pdf-header-footer", f"file://{src}"],
                 check=True, timeout=60, capture_output=True)
             with open(out, "rb") as f:
-                return f.read()
-        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-            return None
+                return f.read(), "ok"
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            return None, f"{type(e).__name__}: {e}"
 
 
 @router.post("/export/pdf")
@@ -150,11 +163,22 @@ async def export_pdf(req: ExportRequest, officer: Officer = Depends(current_offi
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No conversation for this session")
 
     page = _render_html(req.session_id, officer, turns)
-    pdf = _smartbrowz_pdf(page) or _local_pdf(page)
+    pdf, sb_reason = _smartbrowz_pdf(page)
+    local_reason = "not attempted (SmartBrowz succeeded)"
+    if not pdf:
+        pdf, local_reason = _local_pdf(page)
     record(officer.officer_id, req.session_id, "/export/pdf",
-           req.model_dump(), {"turns": len(turns), "pdf": bool(pdf)})
+           req.model_dump(), {"turns": len(turns), "pdf": bool(pdf),
+                              "smartbrowz": sb_reason, "local": local_reason})
 
     if pdf:
         return Response(pdf, media_type="application/pdf", headers={
             "Content-Disposition": f'attachment; filename="veritas-{req.session_id[:8]}.pdf"'})
-    return Response(page, media_type="text/html", headers={"X-Veritas-Pdf": "unavailable"})
+    # Every failure reason is real, not a guess — an officer still gets a printable
+    # document, and the reason is visible to whoever investigates why a PDF didn't
+    # render, instead of an unlabeled downgrade.
+    return Response(page, media_type="text/html", headers={
+        "X-Veritas-Pdf": "unavailable",
+        "X-Veritas-Pdf-Smartbrowz-Reason": sb_reason[:200],
+        "X-Veritas-Pdf-Local-Reason": local_reason[:200],
+    })
