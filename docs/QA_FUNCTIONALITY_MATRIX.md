@@ -32,7 +32,7 @@ that stated, not `VERIFIED`.
 | UI-05 | Login gate — unverified/demo entry clears token | `LoginGate.tsx:enterUnverified` | `setToken(null)` before entering | VERIFIED | CDP: localStorage before/after |
 | UI-06 | Command bar — EN/KN toggle | `CommandBar.tsx` | Sets `language` state | PARTIAL | Toggle click not driven this pass; API-level Kannada is VERIFIED |
 | UI-07 | Command bar — voice on/off toggle | `CommandBar.tsx` | Sets `voiceOut` | UNKNOWN | Not exercised |
-| UI-08 | Command bar — Export PDF button | `CommandBar.tsx` → `exportPdf()` | Downloads session as file | PARTIAL | API confirmed returns `text/html` fallback (BUG-018); button click not driven |
+| UI-08 | Command bar — Export PDF button | `CommandBar.tsx` → `exportPdf()` | Downloads session as file | PARTIAL | Gating confirmed live: correctly `disabled` with 0 chat turns (`canExport={turns.length > 0}`). API confirms `text/html` fallback (BUG-018); the actual download click with turns present not driven |
 | UI-09 | Command bar — Switch (sign out) | `CommandBar.tsx` | `setToken(null)`, returns to LoginGate | VERIFIED | Live via a real manual sign-in (no `?as=` shortcut): click Switch -> token cleared, back at login gate. **Note**: testing this through the `?as=ROLE` URL shortcut instead looks like a failure (token restored, still signed in) -- that is the shortcut correctly re-authenticating on every LoginGate mount, by design, not a bug. Caught and ruled out before being misreported |
 | UI-10 | Command bar — health readout | `CommandBar.tsx` | Shows FIR/node/index counts, live-status dot | VERIFIED | Screenshot matches `/health` exactly |
 | UI-11 | Chat pane — send text query | `ChatPane.tsx:send` | Types, submits, streams SSE | VERIFIED | CDP: real query, real streamed answer, real citation |
@@ -42,8 +42,8 @@ that stated, not `VERIFIED`.
 | UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | PARTIAL | Not clicked directly; UI-22 confirms the Copilot overlay itself opens and renders correctly via the case-card route |
 | UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | UNKNOWN | Not verified visually |
 | UI-17 | Reasoning trace panel (expand/collapse) | `ReasoningTrace.tsx` | Plain-language agent trace, off by default | PARTIAL | Present in screenshot ("reasoning trace · 5 steps"), not expanded/inspected |
-| UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | UNKNOWN | Not driven |
-| UI-19 | Case explorer — crime-type filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven |
+| UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | PARTIAL | Typed into live; result not screenshotted before session ended |
+| UI-19 | Case explorer — crime-type filter chips | `CaseExplorer.tsx` | Toggles facet filter | VERIFIED | Live: clicked "Theft", chip highlighted, district count correctly narrowed 24->19, every visible card is Theft |
 | UI-20 | Case explorer — case-status filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven |
 | UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | UNKNOWN | Not driven |
 | UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it |
