@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
-import { listOfficers, login } from "@/lib/api";
+import { listOfficers, login, setToken } from "@/lib/api";
 import type { Officer } from "@/lib/types";
 
 /** Role selection is the point of this screen, not a formality: the whole console
@@ -8,14 +8,23 @@ import type { Officer } from "@/lib/types";
  *  identity is masked below DSP), so being able to sign in as each role is how that
  *  is demonstrated rather than asserted.
  *
- *  This screen must never be able to hang. Its previous version awaited the roster
- *  with no timeout and no failure path, so any unreachable API left "Loading officers…"
- *  on screen forever — the console looked dead when it was merely waiting. Now the
- *  request is bounded, every outcome renders something actionable, and sign-in can be
- *  skipped entirely: this is a demonstration console, so being unable to authenticate
- *  should cost the reviewer the RBAC demo, not the whole platform. */
+ *  This screen must never be able to hang, and it must never lie about why it is
+ *  waiting. Those are two different requirements and the first version of this fix
+ *  met one by breaking the other — see SLOW_AFTER_MS. Every state renders something
+ *  actionable, and sign-in can be skipped entirely: this is a demonstration console,
+ *  so being unable to authenticate should cost the reviewer the RBAC demo, not the
+ *  whole platform. */
 
-const ROSTER_TIMEOUT_MS = 8000;
+/** The console used to convert *slow* into *failed*: an 8s timer flipped the gate to
+ *  demonstration mode while the roster request was still in flight. On a cold container
+ *  the first request hydrates the whole read mirror from the Data Store before anything
+ *  can answer, so a pending roster is the normal cold-start state, not a failure — and
+ *  labelling it "the request timed out" is a false statement about the system.
+ *
+ *  So the request is left to run. After SLOW_AFTER_MS the screen SAYS it is slow and
+ *  offers the fallback as a choice; it no longer takes that choice on the officer's
+ *  behalf. Only an actual rejection is reported as a failure. */
+const SLOW_AFTER_MS = 8000;
 
 /** Shown only when the roster cannot be reached, so the console is still explorable.
  *  These carry no badge number: they are labels, not credentials, and the API will
@@ -24,6 +33,7 @@ const FALLBACK_ROLES = ["IO", "SHO", "DSP", "SP", "IG", "SCRB_Analyst"];
 
 type State =
   | { s: "loading" }
+  | { s: "slow" }
   | { s: "ready"; officers: Officer[] }
   | { s: "failed"; why: string };
 
@@ -37,11 +47,8 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
     setErr(null);
     let settled = false;
     const timer = setTimeout(() => {
-      if (!settled) {
-        settled = true;
-        setState({ s: "failed", why: "the request timed out" });
-      }
-    }, ROSTER_TIMEOUT_MS);
+      if (!settled) setState({ s: "slow" });     // still waiting — not yet a failure
+    }, SLOW_AFTER_MS);
 
     listOfficers()
       .then((officers) => {
@@ -71,6 +78,18 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
   }, []);
 
   useEffect(loadRoster, [loadRoster]);
+
+  /** Entering demonstration mode must DROP any stored bearer token.
+   *
+   *  It did not, and `loadToken()` reads localStorage — so a token left by an earlier
+   *  sign-in kept authorising every request while the screen showed a different,
+   *  "unverified" rank. The console then displayed one rank and the API answered at
+   *  another, and the note below ("record-scoped answers will be refused") was simply
+   *  untrue. Unverified has to mean unauthenticated. */
+  const enterUnverified = (role: string) => {
+    setToken(null);
+    onIn({ badge_no: "", name: "Demonstration", role, ps_code: "—" } as Officer);
+  };
 
   /** `?as=DSP` signs straight in at that rank once the roster arrives.
    *  The console's most reviewable property is that the same question answers
@@ -113,12 +132,15 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
         </p>
 
         <div className="pane-title" style={{ marginBottom: 10 }}>
-          {state.s === "failed" ? "Continue as" : "Sign in as"}
+          {state.s === "failed" || state.s === "slow" ? "Continue as" : "Sign in as"}
         </div>
 
-        {state.s === "loading" && (
+        {(state.s === "loading" || state.s === "slow") && (
           <div className="meta" style={{ display: "flex", alignItems: "center", gap: 9, color: "var(--text-faint)" }}>
-            <span className="spinner" /> Loading the duty roster…
+            <span className="spinner" />
+            {state.s === "slow"
+              ? "Still loading the duty roster — the service is warming up."
+              : "Loading the duty roster…"}
           </div>
         )}
 
@@ -143,12 +165,12 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
         {/* Roster unreachable. Rank still selects, so the console opens and the case
             index, visualizations and reasoning trace remain reviewable; only the
             record-scoped calls will refuse. */}
-        {state.s === "failed" &&
+        {(state.s === "failed" || state.s === "slow") &&
           FALLBACK_ROLES.map((role) => (
             <button
               key={role}
               className="officer-row"
-              onClick={() => onIn({ badge_no: "", name: "Demonstration", role, ps_code: "—" } as Officer)}
+              onClick={() => enterUnverified(role)}
             >
               <span>
                 <span className="role">{role}</span>
@@ -164,16 +186,19 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
           </div>
         )}
 
-        {state.s === "failed" && (
+        {(state.s === "failed" || state.s === "slow") && (
           <div className="gate-note">
-            The duty roster could not be loaded — {state.why}. The ranks above are
-            unverified, so record-scoped answers will be refused.
+            {state.s === "slow"
+              ? "The duty roster is taking longer than usual. You can keep waiting, or continue on an unverified rank."
+              : `The duty roster could not be loaded — ${state.why}.`}{" "}
+            The ranks above are unverified: continuing on one signs you out, so every
+            record-scoped answer will be refused until the roster loads.
             <button
               className="btn btn-sm"
               style={{ marginTop: 10, display: "block" }}
               onClick={loadRoster}
             >
-              Retry sign-in
+              {state.s === "slow" ? "Start over" : "Retry sign-in"}
             </button>
           </div>
         )}

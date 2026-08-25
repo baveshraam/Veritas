@@ -28,7 +28,7 @@ app = FastAPI(
 )
 
 
-_model_fetch_kicked = False
+_warm_kicked = False
 
 
 @app.middleware("http")
@@ -45,22 +45,28 @@ async def _catalyst_context(request: Request, call_next):
 
     ds.bind_catalyst_request(request)
 
-    global _model_fetch_kicked
-    if not _model_fetch_kicked and os.getenv("VERITAS_MODELS_FOLDER_ID"):
-        _model_fetch_kicked = True
+    global _warm_kicked
+    if not _warm_kicked:
+        _warm_kicked = True
         import threading
-
-        from data.nlp.model_fetch import ensure_models
 
         def _warm() -> None:
             # Mirror first (the Data Store reads every endpoint needs), models second.
             # Both are idempotent and both block their lazy loaders while running, so
             # a query that beats the warm-up waits instead of failing.
+            #
+            # This whole block used to be gated on VERITAS_MODELS_FOLDER_ID, which is
+            # NOT set on the deployed app — so the mirror warm-up never ran in
+            # production. The two have nothing to do with each other: the mirror is
+            # the Data Store read path every endpoint needs, the model fetch is
+            # optional weights. Only the second belongs behind that variable.
             try:
                 ds._ensure_mirror()
             except Exception:
                 pass                      # next query retries; failure detail is logged
-            ensure_models()
+            if os.getenv("VERITAS_MODELS_FOLDER_ID"):
+                from data.nlp.model_fetch import ensure_models
+                ensure_models()
 
         threading.Thread(target=_warm, name="warm", daemon=True).start()
 
