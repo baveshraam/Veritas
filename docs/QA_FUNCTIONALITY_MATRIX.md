@@ -181,7 +181,7 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DATA-03 | District/station identifier consistency | VERIFIED |
 | DATA-04 | Generator determinism | VERIFIED |
 | DATA-05 | Live `/cases` payload duplication | VERIFIED clean, this session (0 dup `fir_id`) |
-| DATA-06 | BriefFacts narrative repetitiveness → false similarity risk | **CONFIRMED, quantified, root-caused** | 60/60 sampled cases per crime type (Theft, Hurt, Cyber Crime, Robbery) collapse to exactly 1 narrative template once date/district are normalized. Root cause: `_MO` dict in `data/generator/build.py` has exactly 8 fixed MO sentences, one per crime type, no per-case variation. Confirmed live consequence: generic queries return near-duplicate "corroborating" citations. Not a duplicate-record bug — every FIR is real and distinct; only the narrative text lacks diversity. Recorded as **BUG-023 (P1)** in the failure log |
+| DATA-06 | BriefFacts narrative repetitiveness → false similarity risk | **FIXED, live-verified** | `_MO_VARIANTS` now covers all 20 crime types (3 variants each) plus per-case time-of-day and offender-count slot-filling; live backfill via `/jobs/regenerate_narratives` recomputed `BriefFacts` for the deployed dataset without touching case/accused/identity/financial/graph rows. Cross-case similarity (`_similar_cases`) now returns a structured `explanation` (crime type, shared IPC sections, district, matching MO) instead of a bare embedding score. **BUG-023 (P1) fixed** |
 
 ---
 

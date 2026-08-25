@@ -1144,8 +1144,63 @@ Nothing about this gap makes any live answer less true — only less fluent.
 ## BUG-023 — Every FIR narrative for a given crime type is the same template
 
 Severity: P1
-Component: data/data/generator/build.py (`_MO`, `_narrative`)
-Status: **OPEN — data-generation limitation, quantified live, not a code defect**
+Component: data/data/generator/build.py (`_MO`→`_MO_VARIANTS`, `_narrative`), data/data/generator/narrative_backfill.py (new), packages/rag_agent/rag_agent/copilot/brief.py
+Status: **FIXED, verified live (North Star Phase 2)**
+
+### Fix
+`_MO_VARIANTS` widens crime-type coverage from 8 to all 20, with 3 method variants
+each. `_narrative()` also derives a time-of-day phrase from `IncidentFromDate` and an
+offender-count phrase from the case's own `Accused` rows — both real, already-
+generated per-case facts, nothing invented. `generate()` reorders `_pick_accused`
+before the `CaseMaster` row so the offender count is known when the narrative is
+built.
+
+Because case ids, accused rows, identities, the financial layer, and the graph were
+all already correct (per `docs/DATA_GENERATION_AUDIT.md`), a full dataset
+regeneration was unnecessary and was deliberately not done — `data/data/generator/narrative_backfill.py`
+recomputes ONLY `CaseMaster.BriefFacts` in place, deterministically (seeded per
+`CaseMasterID`), for the existing live dataset. No case was added, removed, or
+renumbered; no accused/identity/financial/graph row was touched.
+
+Cross-case discovery (`packages/rag_agent/rag_agent/copilot/brief.py`) no longer
+exposes a bare embedding score: `_explain_similarity` compares crime type, shared IPC
+sections, district, and the case-specific MO clause, and results are ranked by
+structured match strength first, narrative score as tiebreak.
+
+### Deployment path
+The Data Store SDK only authenticates from real per-request Catalyst headers, so the
+backfill cannot run from a developer machine (confirmed empirically:
+`ModuleNotFoundError: zcatalyst_sdk` locally, and the SDK's bare `initialize()` would
+fail outside an AppSail request even if installed, per the v8 changelog's own
+finding). `POST /jobs/regenerate_narratives` runs it inside AppSail's request
+context, same background-thread/job-token pattern as the existing `/jobs/refresh`.
+
+### Regression test
+`data/tests/test_dataset.py::test_narratives_do_not_collapse_to_one_shape_per_crime_type`
+(scaled to sample size — only crime types with ≥5 occurrences are checked, so a rare
+type drawing exactly 1 case in a small fixture is not misread as collapsed).
+`packages/rag_agent/tests/test_copilot.py` — 3 tests against the real dataset
+fixture, including one that asserts a genuine multi-feature match exists (not merely
+that the code runs without error). `apps/api/tests/test_api.py` — 3 tests for the new
+job endpoint (returns immediately, refuses to overlap, requires the token).
+
+### Verification
+`python -m pytest` green, `npx tsc --noEmit` clean. **Live-verified end to end**:
+- FIR `100222201202600022` — previously *"Hurt — routine method"* (BUG-023's original
+  live evidence) — now reads *"Physical assault following a heated verbal argument,
+  late at night, by two persons acting together."*
+- A live sample of 5 Theft/Motor-Vehicle-Theft cases in Mandya (`GET`/`POST /chat`
+  `"How many theft cases are there in Mandya district?"`) returned 5 genuinely
+  distinct narratives — previously all five read identically
+  (*"Pickpocketing in a crowded market"*).
+- `GET /copilot/9992` returned 5 similar cases, each with a real, honest
+  `explanation` (*"same crime type (Hurt); shares IPC section(s) 323, 324, 326; same
+  district (Mandya); matching modus operandi (\"Physical assault following a heated
+  verbal argument\")"*, `match_strength: 4`), not a bare `similarity` float — the
+  field is still present but relabeled `similarity_kind: "narrative_text"` and shown
+  in the console as a secondary, explicitly-labeled tiebreaker.
+- Console rebuilt and deployed; served bundle grepped for the new explanation UI
+  string ("text similarity") — present.
 
 ### Symptoms
 A generic query ("Show me crime hotspots", "Forecast crime") returns 5 semantic
@@ -1406,7 +1461,7 @@ matrix as DEP-12).
 | BUG-020 evaluator floor deleted authoritative refusals | P1 | **FIXED, verified live** (regression found and fixed within this same phase) |
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
 | BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
-| BUG-023 every narrative for a crime type is one template | **P1** | OPEN — data-generation limitation, quantified live (60/60 cases per type collapse to 1 shape); not a code defect, not a duplicate-record bug |
+| BUG-023 every narrative for a crime type is one template | **P1** | **FIXED, verified live** (North Star Phase 2) — 20/20 crime types covered, per-case slot-filling, live backfill via `/jobs/regenerate_narratives`; cross-case similarity now explains itself instead of a bare score |
 | BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | **FIXED, deployed, live-verified** — moved to a background thread; watched the real job run to genuine completion (5-6 min) and confirmed no corruption |
 
 **3 P0, 15 P1, 6 P2, 1 P3 across 24 tracked defects. 16 fixed and live-verified, 1 fixed
