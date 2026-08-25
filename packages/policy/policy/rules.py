@@ -48,6 +48,24 @@ def mask_person_fields(officer_role: str, person: dict) -> dict:
     return masked
 
 
+# The redaction shown in place of a masked name. A blank would read as "no name
+# recorded", which is a different and false statement about the record.
+MASKED_NAME = "[name withheld — rank]"
+
+
+def mask_person_name(officer_role: str, name: str | None) -> str | None:
+    """The same rank rule as mask_person_fields, for a name that is not in a dict.
+
+    /fir returns `AccusedName`, and the Copilot builds prose around `CanonicalName`;
+    both are the same person-identifying field mask_person_fields() nulls on /person.
+    Without this, the identity an officer cannot see on one endpoint is printed in full
+    on the next one.
+    """
+    if name is None or _rank(officer_role) >= _DSP_RANK:
+        return name
+    return MASKED_NAME
+
+
 def max_traversal_depth(officer_role: str) -> int:
     """IO/SHO capped at 2 hops; DSP and above get 4 (matches TRANSFERRED_TO*1..4)."""
     return 4 if _rank(officer_role) >= _DSP_RANK else 2

@@ -189,3 +189,51 @@ def test_every_request_appends_to_the_audit_chain(client, officers, dataset):
 
     assert ds.scalar('SELECT COUNT("AuditID") AS c FROM "vx_audit_log"') > 0
     assert verify_chain() == (True, None)
+
+
+# --- Phase 1 regressions: one rule, every endpoint ---------------------------------
+def test_the_copilot_obeys_the_same_station_rule_as_the_fir_endpoint(client, officers, indexed):
+    """BUG-003. /copilot took its fir_id from the URL but read the case with a hardcoded
+    ("SHO", "") scope, so an IO refused a case by /fir could read its whole brief —
+    narrative, accused, associates, leads — one path over. A rule enforced by one endpoint
+    and not its neighbour is not a rule."""
+    from data import ds
+
+    io = officers["IO"]
+    other = ds.scalar('SELECT "CaseMasterID" AS c FROM "CaseMaster" '
+                      'WHERE "PoliceStationID" != :p', {"p": int(io["ps_code"])})
+    assert other
+
+    h = _auth(client, io["badge_no"])
+    assert client.get(f"/fir/{other}", headers=h).status_code == 403
+    assert client.get(f"/copilot/{other}", headers=h).status_code == 403
+
+
+def test_an_accused_name_is_masked_on_every_endpoint_that_carries_it(client, officers, indexed):
+    """BUG-004. /person nulled name_en below DSP while /fir printed the same person's
+    AccusedName in full, and the Copilot built prose around it. Masking that one endpoint
+    can be walked around is decoration."""
+    from data import ds
+    from policy import MASKED_NAME
+
+    case_id = ds.scalar('SELECT "CaseMasterID" AS c FROM "Accused"')
+
+    dsp = client.get(f"/fir/{case_id}", headers=_auth(client, officers["DSP"]["badge_no"]))
+    assert dsp.status_code == 200
+    dsp_names = [a["AccusedName"] for a in dsp.json()["accused"]]
+    assert dsp_names and all(n and n != MASKED_NAME for n in dsp_names)
+
+    # SHO is cross-station by policy but ranks below DSP, so it sees the case and not
+    # the identity.
+    sho = client.get(f"/fir/{case_id}", headers=_auth(client, officers["SHO"]["badge_no"]))
+    assert sho.status_code == 200
+    assert all(a["AccusedName"] == MASKED_NAME for a in sho.json()["accused"])
+
+    # And the Copilot's prose must not put back what the record endpoint took out.
+    brief = client.get(f"/copilot/{case_id}",
+                       headers=_auth(client, officers["SHO"]["badge_no"]))
+    if brief.status_code == 200:                      # SHO is in scope for every station
+        blob = " ".join(brief.json()["leads"]) + " " + \
+               " ".join(e["event"] for e in brief.json()["timeline"])
+        for n in dsp_names:
+            assert n not in blob, f"copilot leaked {n!r} to an SHO"

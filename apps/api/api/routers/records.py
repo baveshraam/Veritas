@@ -12,7 +12,7 @@ time. The identity layer is what makes this endpoint answerable at all.
 """
 from data import ds, queries
 from fastapi import APIRouter, Depends, HTTPException, status
-from policy import can_view_fir, mask_person_fields
+from policy import can_view_fir, mask_person_fields, mask_person_name
 from rag_agent.agents.sql_agent import fir_by_id
 
 from ..audit import record
@@ -110,15 +110,21 @@ async def get_fir(fir_id: str, officer: Officer = Depends(current_officer)):
         raise HTTPException(status.HTTP_403_FORBIDDEN,
                             "This FIR was filed at another police station")
 
-    fir["accused"] = ds.query(
-        'SELECT "Accused"."AccusedName", "Accused"."AgeYear", '
-        '       "vx_accused_identity"."PersonUID" '
-        'FROM "Accused" LEFT JOIN "vx_accused_identity" '
-        '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
-        'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})
-    fir["victims"] = ds.query(
-        'SELECT "VictimName", "AgeYear" FROM "Victim" WHERE "CaseMasterID" = :cid',
-        {"cid": int(fir_id)})
+    # Same rank rule as /person. Without it the identity /person nulls for an SHO was
+    # printed in full one endpoint over, which makes the masking decorative.
+    fir["accused"] = [
+        {**a, "AccusedName": mask_person_name(officer.role, a["AccusedName"])}
+        for a in ds.query(
+            'SELECT "Accused"."AccusedName", "Accused"."AgeYear", '
+            '       "vx_accused_identity"."PersonUID" '
+            'FROM "Accused" LEFT JOIN "vx_accused_identity" '
+            '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
+            'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})]
+    fir["victims"] = [
+        {**v, "VictimName": mask_person_name(officer.role, v["VictimName"])}
+        for v in ds.query(
+            'SELECT "VictimName", "AgeYear" FROM "Victim" WHERE "CaseMasterID" = :cid',
+            {"cid": int(fir_id)})]
     fir["sections"] = ds.query(
         'SELECT "ActID", "SectionID" FROM "ActSectionAssociation" '
         'WHERE "CaseMasterID" = :cid ORDER BY "SectionOrderID"', {"cid": int(fir_id)})

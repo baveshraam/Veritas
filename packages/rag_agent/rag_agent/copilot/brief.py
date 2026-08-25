@@ -14,16 +14,21 @@ separate MO index would have been two names for one thing.
 """
 from data import ds, queries
 from data.vectors import hybrid_search
-from policy import mask_person_fields, max_traversal_depth
+from policy import can_view_fir, mask_person_fields, mask_person_name, max_traversal_depth
 
 from ..agents.sql_agent import fir_by_id
 from ..llm import available, generate
 from ..state import CopilotBrief
 
 
+class NotPermitted(PermissionError):
+    """The case exists, but not within this officer's station scope."""
+
+
 def _case(fir_id: str) -> dict | None:
-    # SHO scope: the copilot is opened from a case the officer already has in hand, so the
-    # station filter is not re-applied here — fir_by_id with an unrestricted role.
+    """Unscoped read. The policy check is applied by generate_copilot_brief, immediately
+    below, so that a case outside the officer's scope is refused as 403 rather than
+    reported as nonexistent — exactly what GET /fir/{id} does."""
     rows = fir_by_id(fir_id, "SHO", "")
     return rows[0] if rows else None
 
@@ -42,7 +47,7 @@ def _accused_on_case(fir_id: str) -> list[dict]:
         'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})
 
 
-def _timeline(fir_id: str, case: dict) -> list[dict]:
+def _timeline(fir_id: str, case: dict, officer_role: str) -> list[dict]:
     filed = ds.to_dt(case["date_filed"])
     events: list[dict] = []
     if filed:
@@ -62,7 +67,8 @@ def _timeline(fir_id: str, case: dict) -> list[dict]:
         if not d:
             continue
         kind = "surrendered" if a["ArrestSurrenderTypeID"] == 2 else "arrested"
-        events.append({"date": str(d.date()), "event": f"{a['AccusedName']} {kind}"})
+        who = mask_person_name(officer_role, a["AccusedName"])
+        events.append({"date": str(d.date()), "event": f"{who} {kind}"})
 
     for cs in ds.query('SELECT "csdate", "cstype" FROM "ChargesheetDetails" '
                        'WHERE "CaseMasterID" = :cid', {"cid": int(fir_id)}):
@@ -118,12 +124,13 @@ def _leads(fir_id: str, officer_role: str) -> list[str]:
         node = f"person:{a['PersonUID']}"
         associates = ([dst for _, dst, d in g.out_edges(node, data=True)
                        if d["rel"] == "CO_ACCUSED_WITH"] if node in g else [])
-        name = a["CanonicalName"] or a["AccusedName"]
+        name = mask_person_name(officer_role, a["CanonicalName"] or a["AccusedName"])
         pagerank = float(a["PageRank"] or 0.0)
 
         if associates:
             names = _names_of([n.split(":", 1)[1] for n in associates[:3]])
-            named = ", ".join(n for n in names if n)
+            named = ", ".join(x for x in (mask_person_name(officer_role, n)
+                                          for n in names if n) if x)
             leads.append(f"{name} has {len(set(associates))} direct co-accused "
                          f"associate(s) — start with {named}.")
         if a["CommunityID"] is not None:
@@ -182,12 +189,22 @@ def _draft_summary(case: dict, timeline: list[dict], similar: list[dict],
     return facts
 
 
-def generate_copilot_brief(fir_id: str, officer_role: str) -> CopilotBrief:
+def generate_copilot_brief(fir_id: str, officer_role: str,
+                           officer_ps_code: str = "") -> CopilotBrief:
     case = _case(fir_id)
     if not case:
         raise KeyError(f"Case {fir_id} not found")
 
-    timeline = _timeline(fir_id, case)
+    # The station rule is enforced HERE, not only at the router, because this function is
+    # the thing that reads the case. It previously read with a hardcoded ("SHO", "") scope
+    # on the argument that "the copilot is opened from a case the officer already has in
+    # hand" — but fir_id arrives from the URL, so an IO could read any station's brief
+    # (names, associates, leads) through /copilot after being refused the same case by
+    # /fir. One endpoint enforcing a rule its neighbour does not is not a rule.
+    if not can_view_fir(officer_role, officer_ps_code, case["ps_code"]):
+        raise NotPermitted(f"Case {fir_id} was filed at another police station")
+
+    timeline = _timeline(fir_id, case, officer_role)
     similar = _similar_cases(case)
     leads = _leads(fir_id, officer_role)
     return CopilotBrief(
