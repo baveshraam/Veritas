@@ -52,26 +52,8 @@ def test_audit_hashes_content_rather_than_storing_it():
 
 
 # --- endpoints ---------------------------------------------------------------------
-@pytest.fixture(scope="module")
-def client():
-    from fastapi.testclient import TestClient
-    from api.main import app
-    return TestClient(app)
-
-
-@pytest.fixture
-def officers(dataset):
-    """One badge number per role, straight out of the Employee table."""
-    from data import ds
-    from data.generator.refdata import DESIGNATION_TO_ROLE
-
-    out: dict[str, dict] = {}
-    for r in ds.query('SELECT "EmployeeID", "DesignationID", "KGID", "UnitID" '
-                      'FROM "Employee" ORDER BY "EmployeeID"'):
-        role = DESIGNATION_TO_ROLE.get(r["DesignationID"])
-        if role and role not in out:
-            out[role] = {"badge_no": r["KGID"], "ps_code": str(r["UnitID"])}
-    return out
+# `client` and `officers` are in tests/conftest.py — the acceptance suite drives the
+# same app through the same tokens, and two copies is two things to keep in step.
 
 
 def _auth(client, badge_no: str) -> dict:

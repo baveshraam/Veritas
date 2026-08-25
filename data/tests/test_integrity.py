@@ -274,12 +274,25 @@ def test_repeating_a_query_returns_the_same_rows_in_the_same_order(dataset):
 
 # --- counts -----------------------------------------------------------------------
 
-def test_the_dataset_holds_what_the_fixture_asked_for(dataset):
+def test_every_generated_row_survived_the_load(dataset):
     """A loader that silently drops rows is the failure mode this catches: every other
-    test would still pass on a smaller dataset."""
-    from conftest import TEST_CASES
+    test in the repo would still pass on a smaller dataset.
 
-    assert ds.scalar('SELECT COUNT("CaseMasterID") AS c FROM "CaseMaster"') == TEST_CASES
+    Compared against what the generator actually produced rather than against a
+    constant — the constant only ever restates the fixture's input, while this compares
+    the two ends of the load and so can see a drop.
+    """
+    for table, rows in dataset.tables.items():
+        if not rows:
+            continue
+        key = TABLES[table][0].name
+        loaded = ds.scalar(f'SELECT COUNT("{key}") AS c FROM "{table}"')
+        assert loaded == len(rows), (
+            f"{table}: generated {len(rows)} rows, loaded {loaded}")
+
+
+def test_the_dataset_holds_the_records_everything_else_depends_on(dataset):
+    assert ds.scalar('SELECT COUNT("CaseMasterID") AS c FROM "CaseMaster"') > 0
     assert ds.scalar('SELECT COUNT("AccusedMasterID") AS c FROM "Accused"') > 0
     assert ds.scalar('SELECT COUNT("PersonUID") AS c FROM "vx_person"') > 0
     # More Accused rows than people is the whole premise of the identity layer: if they
