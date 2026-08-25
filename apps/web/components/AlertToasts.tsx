@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { WS_BASE } from "@/lib/api";
+import { loadToken, WS_BASE } from "@/lib/api";
 import type { AnomalyAlert } from "@/lib/types";
 
 const TTL_MS = 12_000;
@@ -17,11 +17,16 @@ export default function AlertToasts() {
     let stopped = false;
 
     const connect = () => {
+      const token = loadToken();
+      if (!token) return;           // unverified session — the feed is record-derived
       try {
         ws = new WebSocket(`${WS_BASE}/alerts`);
       } catch {
         return;                     // no WS support in this browser — alerts are an enhancement
       }
+      // The token goes in the first frame, not the URL: a bearer token in a WebSocket
+      // URL is written into every access log the connection passes through.
+      ws.onopen = () => ws?.send(token);
       ws.onmessage = (e) => {
         try {
           const a = JSON.parse(e.data) as AnomalyAlert;

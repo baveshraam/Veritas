@@ -41,9 +41,31 @@ def _recent(alert) -> bool:
     return at >= cutoff
 
 
+# A browser WebSocket cannot set an Authorization header, and putting a bearer token in
+# the URL writes officer identity into every access log and proxy trace — which the rest
+# of this API deliberately avoids. So the token is the first frame the client sends, and
+# nothing is streamed until it verifies. Previously this route called ws.accept() and
+# began pushing district anomaly data to anyone who connected.
+AUTH_TIMEOUT_SECONDS = 10
+
+
 @router.websocket("/alerts")
 async def alerts(ws: WebSocket):
+    from fastapi import HTTPException
+
+    from ..auth.jwt_auth import officer_from_token
+
     await ws.accept()
+    try:
+        token = await asyncio.wait_for(ws.receive_text(), AUTH_TIMEOUT_SECONDS)
+        officer_from_token(token.strip())
+    except (asyncio.TimeoutError, WebSocketDisconnect):
+        await ws.close(code=1008, reason="No credential presented")
+        return
+    except HTTPException as exc:
+        await ws.close(code=1008, reason=str(exc.detail))
+        return
+
     seen: set[str] = set()
     loop = asyncio.get_running_loop()
     try:

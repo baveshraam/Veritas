@@ -237,3 +237,15 @@ def test_an_accused_name_is_masked_on_every_endpoint_that_carries_it(client, off
                " ".join(e["event"] for e in brief.json()["timeline"])
         for n in dsp_names:
             assert n not in blob, f"copilot leaked {n!r} to an SHO"
+
+
+def test_the_alerts_websocket_refuses_an_unauthenticated_client(client, dataset):
+    """BUG-005. The route called ws.accept() and began streaming district anomaly data
+    to anyone who connected. A transport that cannot carry an Authorization header does
+    not get to skip authentication — the token is the first frame instead."""
+    from starlette.websockets import WebSocketDisconnect
+
+    with pytest.raises(WebSocketDisconnect):
+        with client.websocket_connect("/alerts") as ws:
+            ws.send_text("not-a-real-token")
+            ws.receive_json()

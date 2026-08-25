@@ -95,8 +95,18 @@ async def current_officer(
 
     if creds is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing bearer token")
+    return officer_from_token(creds.credentials)
+
+
+def officer_from_token(token: str) -> Officer:
+    """Verify a signed bearer token and resolve it to an Officer.
+
+    Split out of current_officer so the WebSocket route can run the *same* check.
+    A transport that cannot carry an Authorization header is not a transport that
+    gets to skip authentication.
+    """
     try:
-        claims = jwt.decode(creds.credentials, _secret(), algorithms=[ALGORITHM])
+        claims = jwt.decode(token, _secret(), algorithms=[ALGORITHM])
     except jwt.ExpiredSignatureError:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token expired")
     except jwt.InvalidTokenError:
