@@ -1036,6 +1036,112 @@ Nothing about this gap makes any live answer less true — only less fluent.
 
 ---
 
+## BUG-023 — Every FIR narrative for a given crime type is the same template
+
+Severity: P1
+Component: data/data/generator/build.py (`_MO`, `_narrative`)
+Status: **OPEN — data-generation limitation, quantified live, not a code defect**
+
+### Symptoms
+A generic query ("Show me crime hotspots", "Forecast crime") returns 5 semantic
+"corroborating" narrative citations that read as near-duplicates of each other,
+differing only by date and district — e.g. five separate FIR records all reading
+*"…a case of cyber crime was registered in `<district>` district. OTP-phishing call
+impersonating a bank official. Investigation is being carried out as per procedure."*
+
+Separately, `Copilot.similar_cases` reported 0.941 similarity between two different
+Hurt cases in Mandya (observed in the first audit pass) — a number that looks like
+strong modus-operandi corroboration but is not.
+
+### Reproduction
+```
+GET /cases?crime_type=Theft&limit=60   (any role's token)
+```
+Normalize each returned `narrative` by replacing the date and district with
+placeholders, then compare.
+
+### Measured
+```
+Theft        : 60 cases -> 1 distinct narrative shape
+Hurt         : 60 cases -> 1 distinct narrative shape
+Cyber Crime  : 60 cases -> 1 distinct narrative shape
+Robbery      : 60 cases -> 1 distinct narrative shape
+```
+Every sampled case of a given crime type reduces to the exact same sentence once date
+and district are normalized out.
+
+### Root cause
+`data/data/generator/build.py`:
+```python
+_MO = {
+    "Theft": "Pickpocketing in a crowded market",
+    "House Burglary": "Entry via rear window after dark while occupants away",
+    ...  # exactly 8 crime types, each with exactly ONE modus-operandi sentence
+}
+
+def _narrative(crime_type, district, filed, mo):
+    return (f"On {filed:%d %b %Y}, a case of {crime_type.lower()} was registered in "
+            f"{district} district. {mo}. Investigation is being carried out as per procedure.")
+```
+Every FIR's `BriefFacts` narrative has exactly three variable slots — date, district,
+and a crime-type-determined MO string chosen from a **fixed dictionary of eight**.
+There is no per-case narrative variation at all. An embedding model correctly learns
+that all cases of the same crime type are near-identical text, because they are.
+
+### Consequences, checked against the user's own four questions
+
+1. **False similarity — confirmed.** `SIMILAR_CASES` and the Copilot's `similar_cases`
+   are measuring "same crime type, same-ish district," not genuine narrative or
+   modus-operandi similarity. Two Theft cases with nothing in common beyond the crime
+   type will score as highly "similar" as two Theft cases that are actually alike,
+   because there is no narrative signal to tell them apart.
+2. **False retrieval — confirmed, and this is what surfaced it.** A generic HOTSPOT or
+   FORECAST query, which names no specific narrative content, still pulls 5 "semantic
+   matches" from vector search — and because so many records share one template, those
+   5 hits are frequently near-duplicates of each other rather than 5 independently
+   relevant records. They are real, distinct FIRs (no data corruption — see the
+   distinction below), but they do not corroborate each other the way 5 *different*
+   matching narratives would.
+3. **Misleading embeddings — confirmed as a description of the mechanism**, not a bug
+   in the embedding code. The embeddings are accurately representing text that itself
+   carries almost no case-specific information.
+4. **Misleading analytics — not found.** KDE/DBSCAN hotspots, Prophet/MinT forecasts,
+   risk/recidivism scoring, and the graph/financial layers do not depend on narrative
+   text at all — they run on coordinates, dates, and structured relationships, which
+   are genuinely diverse per case (confirmed throughout `data/tests/test_integrity.py`
+   and this audit's live testing). This gap is scoped to the narrative/vector axis
+   specifically.
+
+### This is NOT a duplicate-record bug
+Every affected row is a real, distinct FIR — different `CaseMasterID`, different date,
+different accused, different victims, different coordinates. `data/tests/test_integrity.py`
+already confirms no duplicate FIR numbers or rows exist. The problem is that the one
+free-text field meant to carry case-specific detail does not, for any of the eight
+crime types the generator's `_MO` dictionary covers. Nothing here should be "fixed" by
+touching the record layer — this is a synthetic-data authoring gap, not a data
+integrity defect.
+
+### Why this is left open
+Widening `_MO` from one sentence per crime type to several, or generating narrative
+detail proportional to the case (weapon, relationship to victim, specific location
+type), is a change to the *generator*, and regenerating the dataset is a decision with
+consequences beyond this audit's fix-the-defects-found scope — every measurement in
+this repo that references specific FIR numbers, specific people, or specific citation
+counts would need re-verification against a new dataset. Recorded here as a scoped,
+well-evidenced finding for that decision to be made deliberately, not fixed in passing.
+
+### Regression test
+None added — this is a data-authoring finding, not a code defect with a wrong output
+to pin down. If the generator's narrative diversity is later widened, the check to add
+is exactly the one used to find this: sample N cases per crime type, normalize date and
+district, assert more than one distinct shape survives.
+
+### Verification
+Live, `python` one-liner against `GET /cases`, four crime types, 60 cases each,
+reproduced consistently.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1062,10 +1168,11 @@ Nothing about this gap makes any live answer less true — only less fluent.
 | BUG-020 evaluator floor deleted authoritative refusals | P1 | **FIXED, verified live** (regression found and fixed within this same phase) |
 | BUG-021 QuickML credential call never worked | P1 | **FIXED, verified live** (failure mode changed from internal `AttributeError` to a real service response) |
 | BUG-022 QuickML gateway rejects the request shape | P2 | OPEN — root cause narrowed (not a credential/body/header issue this session could resolve); needs vendor docs or console access |
+| BUG-023 every narrative for a crime type is one template | **P1** | OPEN — data-generation limitation, quantified live (60/60 cases per type collapse to 1 shape); not a code defect, not a duplicate-record bug |
 
-**3 P0, 13 P1, 6 P2, 1 P3 across 22 tracked defects. 15 fixed and live-verified, 1 fixed
+**3 P0, 14 P1, 6 P2, 1 P3 across 23 tracked defects. 15 fixed and live-verified, 1 fixed
 in code with live verification blocked by an apparent platform limit, 1 fixed at the
-reporting level with the underlying cause now understood, 8 open.**
+reporting level with the underlying cause now understood, 9 open.**
 
 ### One thing this audit got wrong, recorded deliberately
 
