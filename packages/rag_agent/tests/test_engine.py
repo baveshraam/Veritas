@@ -976,6 +976,14 @@ def test_vector_search_is_skipped_once_a_relational_specialist_settles_the_quest
 # retrieval (in node_orchestrate) was saved. "Open FIR X" then "What happened?" forgot
 # X the moment the second turn asked for the session's saved focus.
 
+def test_previous_cases_plural_is_recognised_as_person_history():
+    """Found live: 'What previous cases involve her?' matched no PERSON_HISTORY
+    keyword ('previous case' is singular-only) and fell to CRIME_SEARCH's bare
+    'cases' instead — a follow-up asking about ONE person's prior record got a
+    global case count with no connection to who was asked about."""
+    assert classify("What previous cases involve her?") == "PERSON_HISTORY"
+
+
 def test_transactions_plural_is_recognised_as_financial():
     """FINANCIAL had 'transaction' but not 'transactions' — the word-boundary regex
     does not treat a plural as a substring match, so 'what transactions look unusual'

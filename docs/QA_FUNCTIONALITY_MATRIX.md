@@ -100,6 +100,29 @@ that stated, not `VERIFIED`.
 | RAG-21 | LLM-fluent synthesis | `llm.py`/`synthesis_agent.py` | Yes — confirmed NOT firing (extractive fallback used throughout) | BROKEN — see BUG-021/022 |
 | RAG-22 | Extractive (deterministic) synthesis | `synthesis_agent._extractive` | Yes, every live answer this session | VERIFIED |
 | RAG-23 | Citation numbering/grounding | `synthesis_agent.build_citations` | Yes, extensively | VERIFIED |
+| RAG-24 | `CASE_CONTEXT` ("what happened?") | `orchestrator.py` (new, this pass) | Yes, live console + curl | VERIFIED — reads `SessionFocus.active_fir`, re-validated against station scope on every use (`fir_by_id`), not trusted from when the FIR was first opened |
+| RAG-25 | `CASE_PEOPLE` ("who's involved?") | same | Yes, live console + curl | VERIFIED — lists the case's accused (network viz, real PageRank-sized nodes); auto-resolves `active_person` when exactly one, leaves it unset and names candidates when several rather than guessing |
+| RAG-26 | `SIMILAR_CASES`, case-scoped (open case, no name needed) | same, reuses `copilot.brief.similar_cases_for` | Yes, live console + curl | VERIFIED — same structurally-explained similarity Copilot already used (crime type/IPC section/district/MO), now reachable from chat directly; confidence rendered as "text similarity", not evidential confidence |
+| RAG-27 | `CASE_LOCATIONS` ("where are those cases concentrated?") | same | Yes, live console + curl | VERIFIED — tallies districts over the PREVIOUS turn's cited FIRs (not a fresh unscoped hotspot query), re-checked against policy scope before being shown; renders the map pane with those specific case points |
+| RAG-28 | `NEXT_STEPS` ("what should I investigate next?") | same, reuses `copilot.brief.leads_for_case` | Yes, live console + curl | VERIFIED — identical lead-generation logic the `/copilot` endpoint already uses (direct co-accused only, PageRank/community-cited), now reachable from chat |
+| RAG-29 | `BRIEFING` ("prepare the briefing") | same, reuses `copilot.brief.generate_copilot_brief` | Yes, live curl (case with one accused) | VERIFIED — draft case-diary paragraph + leads, station-scope-checked by the same function `/copilot` calls; `NotPermitted`/`KeyError` degrade to an empty, honest result rather than a leak or a crash (unit-tested; live-tested only the success path this pass) |
+| RAG-30 | `EXPLAIN_REASONING` ("why are you showing me these?") | same | Yes, live console + curl | VERIFIED — re-describes the PREVIOUS turn's own agent trace and citations from `vx_conversation_turn`, not a fresh retrieval; refuses honestly (`nothing_prior`) on a session's first turn |
+| RAG-31 | `EVIDENCE_FOR` ("what evidence supports that?") | same | Yes, live curl | VERIFIED — re-shows the previous turn's citations/evidence; same `nothing_prior` refusal on a first turn |
+| RAG-32 | Ambiguous person names ask instead of guess | `node_orchestrate` (new, this pass) | Yes, unit-tested; live-tested only the "clear leader" path (no tie found in the live dataset for the names tried) | PARTIAL — the tie-break logic itself has direct unit coverage (`test_an_ambiguous_name_asks_instead_of_guessing`); a live query that actually produces a tied `record_count` was not found this pass |
+| RAG-33 | Session-focus persistence across the FULL turn (not just pre-retrieval) | `node_retrieve` (bug fix, this pass) | Yes, live: "Open FIR X" then, one turn later, "What happened?" answered about X | VERIFIED — this was a real, previously-unnoticed gap: `node_orchestrate` persisted focus BEFORE retrieval ran, but `FIR_LOOKUP` resolves `active_fir` DURING retrieval, so it was never saved; the next turn found no case ever opened. Fixed by persisting again after retrieval resolves |
+
+**A note on how RAG-24–33 were found**: the mega-prompt this pass ran against asked whether the
+conversational layer was "genuinely conversational" or "intent classification + isolated
+deterministic tools + response formatting". Reading the orchestrator answered part of that
+question directly — the Investigation Copilot's leads/similar-cases/briefing logic already
+existed and was already correct, but was reachable only through `/copilot`, never through
+`/chat`. The bigger finding was RAG-33: the session-focus mechanism that was supposed to make
+follow-ups work had a real persistence bug undercutting it for the single most obvious
+follow-up in the whole system ("Open FIR X" → "What happened?"). Also found and fixed live
+during this verification pass, not part of the plan going in: `data/data/nlp/entities.py`'s
+PERSON-span extraction clipped a surname that wasn't in the 271-name gazetteer sample off an
+adjacent known first name ("Usha Naika" → "Usha"), which silently resolved to a DIFFERENT
+person and answered about them at full confidence — see `PHASE1_FAILURE_LOG.md` for the write-up.
 
 ## 4. Analytics / ML — each traced INPUT → DATA → ALGORITHM → OUTPUT → EVIDENCE
 
@@ -252,8 +275,17 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
   endpoint shape tried — not chased further, matching this project's own rule against
   guessing repeatedly at a live API). Still UNKNOWN for the positive-detection path;
   the reachability/negative-case path remains VERIFIED per the prior pass.
-- Multi-turn conversational context (RAG-17/18) — every live test used an isolated
-  session; pronoun resolution across turns is unit-tested only.
+- ~~Multi-turn conversational context (RAG-17/18) — every live test used an isolated
+  session~~ — **closed this pass**: a single live session was driven through a 14-turn
+  investigation (open FIR → case context → accused → priors → associates → why-these →
+  similar cases → their geography → financial trail → what-supports-that → next steps →
+  briefing), both via curl and via the real console through CDP. See RAG-24–33.
+- Ambiguous-name clarification (RAG-32) against a REAL tied name in the live dataset — the
+  logic is unit-tested, but no live query this pass happened to hit a genuine
+  `record_count` tie; worth trying a few more common first names next pass.
+- A populated `BRIEFING` path (RAG-29) against a multi-accused case — this pass verified it
+  live only against a single-accused case; the multi-accused draft-summary/leads
+  combination is unit-tested but not independently live-driven.
 - Whether Aequitas fairness auditing (ML-12) is reachable from the live product at all,
   or exists purely as an offline analysis script — unchanged this pass, still by-design
   out-of-band per `serving.py`'s own docstring.

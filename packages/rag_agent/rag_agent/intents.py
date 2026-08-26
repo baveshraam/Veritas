@@ -14,7 +14,8 @@ from data.nlp import Entity, ner_extract
 # Intent -> (keyword patterns, visualization kind)
 INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "PERSON_HISTORY":    (("prior", "priors", "history", "record", "previous case",
-                           "convicted", "arrested before", "rap sheet"), "none"),
+                           "previous cases", "convicted", "arrested before", "rap sheet"),
+                          "none"),
     "ALIAS_CHECK":       (("another name", "different name", "different spelling",
                            "alias", "same person", "duplicate"), "network"),
     "PERSON_NETWORK":    (("associate", "associates", "network", "gang", "accomplice",
