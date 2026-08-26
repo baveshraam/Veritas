@@ -8,7 +8,28 @@ an officer sees in the Copilot brief.
 """
 from data import ds
 
-from rag_agent.copilot.brief import generate_copilot_brief
+from rag_agent.copilot.brief import _lead_name, generate_copilot_brief
+
+
+def test_lead_name_shows_the_as_filed_variant_when_it_differs_from_canonical():
+    """BUG-026, found live: a case's own accused list names someone 'Suma Nadkarni'
+    (Accused.AccusedName, as filed), while the identical PersonUID's Copilot lead
+    named them 'Soom Nadkarni' (vx_person.CanonicalName) — both correct for what they
+    are (a genuine romanisation-variant match, entity resolution working as designed),
+    but nothing on screen told an officer reading both they were the same defendant."""
+    assert _lead_name("IG", "Soom Nadkarni", "Suma Nadkarni") == (
+        'Soom Nadkarni (filed as "Suma Nadkarni" on this FIR)')
+
+
+def test_lead_name_is_unchanged_when_canonical_matches_as_filed():
+    assert _lead_name("IG", "Usha Naika", "Usha Naika") == "Usha Naika"
+
+
+def test_lead_name_masks_instead_of_revealing_either_variant():
+    """A masked role (IO/SHO) must never see the reconciliation — showing both names
+    when only a placeholder should be visible would be a masking bypass, not a fix."""
+    from policy import MASKED_NAME
+    assert _lead_name("IO", "Soom Nadkarni", "Suma Nadkarni") == MASKED_NAME
 
 
 def test_similar_cases_carry_an_explanation_not_a_bare_score(indexed):

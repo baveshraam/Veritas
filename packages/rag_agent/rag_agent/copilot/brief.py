@@ -14,7 +14,8 @@ separate MO index would have been two names for one thing.
 """
 from data import ds, queries
 from data.vectors import hybrid_search
-from policy import can_view_fir, mask_person_fields, mask_person_name, max_traversal_depth
+from policy import (MASKED_NAME, can_view_fir, mask_person_fields, mask_person_name,
+                     max_traversal_depth)
 
 from ..agents.sql_agent import accused_on_case as _accused_on_case
 from ..agents.sql_agent import fir_by_id
@@ -171,6 +172,21 @@ def similar_cases_for(case: dict, limit: int = 5) -> list[dict]:
     return candidates[:limit]
 
 
+def _lead_name(officer_role: str, canonical: str | None, as_filed: str | None) -> str | None:
+    """BUG-026: entity resolution correctly reconciles a romanisation variant
+    (§3's 35%-drift feature) into one CanonicalName, but a lead built purely from
+    the canonical name gave no hint that the case's own accused list — filed under
+    AccusedName — names what looks like a different person for the same PersonUID.
+    Shown only when unmasked: a masked role never sees either raw name, so there is
+    nothing to reconcile for it."""
+    masked = mask_person_name(officer_role, canonical or as_filed)
+    if masked == MASKED_NAME:
+        return masked
+    if canonical and as_filed and canonical != as_filed:
+        return f'{canonical} (filed as "{as_filed}" on this FIR)'
+    return canonical or as_filed
+
+
 def leads_for_case(fir_id: str, officer_role: str) -> list[str]:
     """Investigative leads for the accused on this case.
 
@@ -193,7 +209,7 @@ def leads_for_case(fir_id: str, officer_role: str) -> list[str]:
         node = f"person:{a['PersonUID']}"
         associates = ([dst for _, dst, d in g.out_edges(node, data=True)
                        if d["rel"] == "CO_ACCUSED_WITH"] if node in g else [])
-        name = mask_person_name(officer_role, a["CanonicalName"] or a["AccusedName"])
+        name = _lead_name(officer_role, a["CanonicalName"], a["AccusedName"])
         pagerank = float(a["PageRank"] or 0.0)
 
         if associates:

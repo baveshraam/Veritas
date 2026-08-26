@@ -47,8 +47,9 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "CASE_PEOPLE":        (("key people", "who is involved", "who's involved",
                            "people involved", "who are the accused",
                            "who are the people"), "network"),
-    "NEXT_STEPS":        (("investigate next", "next steps", "what should i do",
-                           "what should i focus", "what should i pursue"), "none"),
+    "NEXT_STEPS":        (("investigate next", "investigated next", "next steps",
+                           "what should i do", "what should i focus", "what should i pursue",
+                           "should be investigated"), "none"),
     "BRIEFING":          (("prepare the briefing", "prepare a briefing", "case diary",
                            "draft summary", "draft the summary", "prepare the report",
                            "prepare a report"), "none"),
@@ -104,8 +105,14 @@ _CAPABILITY = re.compile(
 #   - "where are those cases concentrated" contains "where", which would otherwise
 #     score HOTSPOT (a fresh cluster-detection query, not "explain the last answer").
 _EXPLAIN_REASONING = re.compile(
-    r"\bwhy (are|were|did) you (show|showing|shown|tell|telling|told|say|said|include)"
-    r"|\bwhy (is|are|was|were) (this|these|that|those) (relevant|shown|here|important)\b",
+    r"\bwhy (are|were|did) you (show|showing|shown|tell|telling|told|say|said|include|"
+    r"select|selecting|selected|choose|choosing|chose|pick|picking|picked|"
+    r"surface|surfacing|surfaced)"
+    # Passive voice, no "you": "why were those associates surfaced" — a noun (the
+    # thing being explained: "associates", "cases") sits between "those" and the
+    # participle, unlike the "you"-branch above which has the verb right after "you".
+    r"|\bwhy (is|are|was|were) (this|these|that|those)(?: \w+)? "
+    r"(relevant|shown|here|important|selected|surfaced|chosen|picked|included|returned|listed)\b",
     re.I)
 _EVIDENCE_FOR = re.compile(
     r"\bwhat evidence\b|\bhow do you know\b|\bwhat supports (this|that)\b"

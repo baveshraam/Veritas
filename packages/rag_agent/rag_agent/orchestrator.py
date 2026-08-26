@@ -507,11 +507,16 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 confidence=0.95) for a in accused]
             # Exactly one accused: name the follow-up subject the way a named PERSON
             # entity would, so "tell me about this person" resolves without asking.
-            # More than one: leave active_person unset — naming one of several would
-            # be the same unlicensed guess the ambiguous-name check above refuses to
-            # make, and the answer already lists names the officer can say back.
-            if len(accused) == 1:
-                state.active_entities.active_person = str(accused[0]["PersonUID"])
+            # More than one: CLEAR active_person — naming one of several would be the
+            # same unlicensed guess the ambiguous-name check above refuses to make,
+            # and the answer already lists names the officer can say back. This must
+            # be an explicit clear, not a no-op: a person named several turns and
+            # cases ago (still sitting in active_person from a stale turn) would
+            # otherwise survive re-opening a DIFFERENT multi-accused case, so a later
+            # pronoun ("does he have priors?") would silently resolve to that stale
+            # person instead of asking which of THIS case's several accused is meant.
+            state.active_entities.active_person = (
+                str(accused[0]["PersonUID"]) if len(accused) == 1 else None)
             _trace(state, "SQL Agent (accused on case)",
                    f"{len(accused)} accused person(s) on the open case", t0)
         else:

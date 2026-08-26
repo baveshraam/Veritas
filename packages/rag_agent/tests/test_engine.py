@@ -1005,6 +1005,17 @@ def test_transactions_plural_is_recognised_as_financial():
     ("Why are you showing me these people?", "EXPLAIN_REASONING"),
     ("What evidence supports that?", "EVIDENCE_FOR"),
     ("Where are those cases concentrated?", "CASE_LOCATIONS"),
+    # Found live (2026-08-26 golden-conversation pass): the "you <verb>" and
+    # "those <adjective>" shapes above didn't cover an investigator naming a
+    # DIFFERENT verb ("select" instead of "show") or the passive voice with a noun
+    # in between ("those associates surfaced" instead of "those [X] shown") — both
+    # fell through to CAUSAL ("why") or a bare repeat of the prior topic intent.
+    ("Why did you select those cases?", "EXPLAIN_REASONING"),
+    ("Why were those associates surfaced?", "EXPLAIN_REASONING"),
+    # Passive phrasing of the same question the NEXT_STEPS keyword list already had
+    # active-voice ("investigate next"): "investigated next" is a different word,
+    # not a substring, and the word-boundary matcher does not stem it.
+    ("What should be investigated next?", "NEXT_STEPS"),
     # Ordinary questions using the same words must still route where they always did.
     ("Why does crime correlate with literacy?", "CAUSAL"),
     ("Show me crime hotspots", "HOTSPOT"),
@@ -1093,6 +1104,43 @@ def test_case_people_leaves_active_person_unset_when_several_are_accused():
                                original_query="Who are the key people in this case?")
     state.intent = "CASE_PEOPLE"
     state.active_entities.active_fir = "9"
+
+    accused = [
+        {"PersonUID": 1, "CanonicalName": "A", "AccusedName": "A", "CommunityID": None,
+         "GangAffiliation": None, "PageRank": 0.0},
+        {"PersonUID": 2, "CanonicalName": "B", "AccusedName": "B", "CommunityID": None,
+         "GangAffiliation": None, "PageRank": 0.0},
+    ]
+    saved = (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [_row(fir_id="9")]
+    orch.sql_agent.accused_on_case = lambda fid: accused
+    orch._officer_ps = lambda _oid: ""
+    try:
+        orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case,
+         orch._officer_ps) = saved
+
+    assert state.active_entities.active_person is None
+
+
+def test_case_people_clears_a_stale_active_person_when_several_are_accused():
+    """Found live (2026-08-26 golden-conversation pass): a person named several turns
+    ago (e.g. from PERSON_HISTORY) stayed in active_person forever, because the
+    previous fix only checked 'if len(accused) == 1: set it' and did nothing
+    otherwise — leaving whatever was already there untouched. Re-opening a DIFFERENT
+    multi-accused case therefore kept answering a pronoun follow-up ('does he have
+    priors?') about the stale person instead of asking which of THIS case's several
+    accused was meant, silently guessing instead of using the ambiguous_person
+    clarification path this exact scenario exists to trigger."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Who is involved?")
+    state.intent = "CASE_PEOPLE"
+    state.active_entities.active_fir = "9"
+    state.active_entities.active_person = "999"   # stale, from an earlier turn/case
 
     accused = [
         {"PersonUID": 1, "CanonicalName": "A", "AccusedName": "A", "CommunityID": None,
