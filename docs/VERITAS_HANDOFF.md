@@ -5,10 +5,10 @@ and `docs/PHASE1_FAILURE_LOG.md`. This file answers "where do things stand right
 what's next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-This pass's commit is not yet made — see the session's own final message for the exact
-hash once created. Prior HEAD this pass started from: `9da83f8` — "docs: handoff/work-log/
-QA-matrix/changelog record the map + conversational pass" (main,
-`github.com/baveshraam/Veritas`).
+`942e323` — "feat(map): replace self-drawn canvas with a real OpenFreeMap/MapLibre
+basemap" (main, `github.com/baveshraam/Veritas`). Prior HEAD this pass started from:
+`9da83f8` — "docs: handoff/work-log/QA-matrix/changelog record the map + conversational
+pass".
 
 ## Current live deployment
 - API: **unchanged this pass** — `apps/api` and every package were untouched. Still
