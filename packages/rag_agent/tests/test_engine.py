@@ -597,6 +597,40 @@ def test_a_suspect_question_refuses_for_the_right_reason():
     assert state.final_answer != NOT_FOUND_MESSAGE
 
 
+def test_a_refusal_already_decided_by_orchestrate_does_not_still_run_a_generic_search():
+    """Found live (2026-08-26 golden-conversation pass): node_orchestrate had already
+    set refusal_reason='ambiguous_person' (a tied name, or a pronoun with several
+    named-last-turn candidates) and cleared active_person -- but node_retrieve had no
+    guard for a refusal decided BEFORE it runs, only for the ones it decides itself
+    (CAPABILITY/NOT_INFERABLE) or re-derives from NEEDS_CASE/NEEDS_SUBJECT (guarded
+    with 'and not state.refusal_reason', which skips SETTING a duplicate reason but
+    does not return early when one is already set). Every specialist branch requires
+    a pid, so all of them were skipped -- except the generic vector-search fallback
+    at the bottom of _run_specialists, which has no such guard and searched anyway,
+    handing the officer 5 unrelated criminal-profile citations in the Evidence rail
+    right next to a chat message saying 'I will not guess which one you mean.'"""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does he have priors?")
+    state.intent = "PERSON_HISTORY"
+    state.refusal_reason = "ambiguous_person"
+    state.ambiguous_candidates = ["Usha Naika", "Prashanth Krishnamurthy"]
+    # active_person is deliberately left None, as node_orchestrate would have left it.
+
+    called = []
+    saved = orch.vector_agent.search
+    orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+    try:
+        orch.node_retrieve(state)
+    finally:
+        orch.vector_agent.search = saved
+
+    assert called == [], "a decided refusal must not still search for something to cite"
+    assert state.evidence_items == []
+
+
 # --- BUG-012: /health reported a model it had never reached ------------------
 #
 # Live, every answer was extractive and the Copilot diary was the deterministic

@@ -195,6 +195,22 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     pid = state.active_entities.active_person
     evidence: list[EvidenceItem] = []
 
+    # node_orchestrate already refused (ambiguous_person, person_not_on_file, or a
+    # pronoun with no candidate to offer) — retrieval has nothing left to look up.
+    # Found live: without this, an ambiguous-name refusal still ran the generic
+    # vector-search fallback at the bottom of _run_specialists (pid is None, so every
+    # specialist branch is skipped, but that fallback has no such guard) and handed
+    # the officer 5 unrelated criminal profiles in the Evidence rail — a citation
+    # count and a set of "cited" records sitting right next to a message that says
+    # "I will not guess which one you mean," which is exactly the citation-shaped
+    # padding this project's own CRAG discipline exists to prevent (BUG-006's
+    # failure mode, recurring through a different door: a refusal that already knows
+    # it has nothing to cite must not keep searching for something to cite anyway).
+    if state.refusal_reason:
+        _trace(state, "Orchestrator",
+               f"Refusing before retrieval: {state.refusal_reason}", t0)
+        return state
+
     # Three questions that retrieval cannot answer, and must not be asked to try.
     #
     # Running them anyway is what produced the observed behaviour: "who could be the
