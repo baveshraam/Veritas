@@ -13,7 +13,7 @@ import type { Officer } from "@/lib/types";
  *  platform whose claim is "every answer traces to a record", the size of the record
  *  set is not decoration — it is the scope of what any answer can be drawn from. */
 export default function CommandBar({
-  officer, language, onLanguage, voiceOut, onVoiceOut, onExport, canExport, onSignOut,
+  officer, language, onLanguage, voiceOut, onVoiceOut, onExport, canExport, exportNote, onSignOut,
 }: {
   officer: Officer;
   language: "en" | "kn";
@@ -22,6 +22,7 @@ export default function CommandBar({
   onVoiceOut: (v: boolean) => void;
   onExport: () => void;
   canExport: boolean;
+  exportNote?: string | null;
   onSignOut: () => void;
 }) {
   const [health, setHealth] = useState<Health | null>(null);
@@ -75,6 +76,7 @@ export default function CommandBar({
         <button className="tab" onClick={onExport} disabled={!canExport} title="Export this session as PDF">
           Export PDF
         </button>
+        {exportNote && <span className="export-note" role="status">{exportNote}</span>}
       </div>
 
       <div className="officer-chip">

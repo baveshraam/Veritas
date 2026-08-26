@@ -191,7 +191,10 @@ export async function getCopilotBrief(firId: string): Promise<CopilotBrief> {
   return r.json();
 }
 
-export async function exportPdf(sessionId: string): Promise<void> {
+/** Returns whether a real PDF was produced — a 200 with an HTML body (the
+ *  SmartBrowz/local-renderer fallback, see BUG-018) is not a failure the caller
+ *  should swallow silently, since "Export PDF" said PDF. */
+export async function exportPdf(sessionId: string): Promise<boolean> {
   const r = await fetch(`${BASE}/export/pdf`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...authHeaders() },
@@ -199,12 +202,14 @@ export async function exportPdf(sessionId: string): Promise<void> {
   });
   if (!r.ok) throw new Error("Export failed");
   const blob = await r.blob();
+  const isPdf = blob.type.includes("pdf");
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url;
-  a.download = `veritas-${sessionId.slice(0, 8)}.${blob.type.includes("pdf") ? "pdf" : "html"}`;
+  a.download = `veritas-${sessionId.slice(0, 8)}.${isPdf ? "pdf" : "html"}`;
   a.click();
   URL.revokeObjectURL(url);
+  return isPdf;
 }
 
 /** How well corroborated a piece of evidence is.

@@ -19,6 +19,7 @@ export default function Console() {
   const [voiceOut, setVoiceOut] = useState(false);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [copilotFir, setCopilotFir] = useState<string | null>(null);
+  const [exportNote, setExportNote] = useState<string | null>(null);
 
   // One session for the whole conversation — this is what makes "does HE have
   // priors" resolve against the previous turn on the server.
@@ -89,8 +90,21 @@ export default function Console() {
         onLanguage={setLanguage}
         voiceOut={voiceOut}
         onVoiceOut={setVoiceOut}
-        onExport={() => exportPdf(sessionId).catch(() => undefined)}
+        onExport={() => {
+          exportPdf(sessionId)
+            .then((isPdf) => {
+              if (!isPdf) {
+                setExportNote("PDF renderer unavailable on this deployment — downloaded a printable HTML copy instead.");
+                setTimeout(() => setExportNote(null), 7000);
+              }
+            })
+            .catch(() => {
+              setExportNote("Export failed.");
+              setTimeout(() => setExportNote(null), 7000);
+            });
+        }}
         canExport={turns.length > 0}
+        exportNote={exportNote}
         onSignOut={() => { setToken(null); setOfficer(null); setTurns([]); }}
       />
 
