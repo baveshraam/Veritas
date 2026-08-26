@@ -1,5 +1,11 @@
 # Phase 1 — Truth Table
 
+> **Not updated in the 2026-08-26 North Star hardening pass.** That pass's findings
+> (BUG-026, BUG-027) and current test count (315, via `pytest --collect-only -q`) live in
+> `docs/PHASE1_FAILURE_LOG.md` and `docs/QA_FUNCTIONALITY_MATRIX.md`, which are the
+> current source of truth for defect/verification status — this file is a point-in-time
+> record of the 2026-08-25 pass and should be read as history, not current state.
+
 **Audit date**: 2026-08-25
 **Method**: every row was established by running the thing, not by reading about it.
 Live rows were driven against the deployed API

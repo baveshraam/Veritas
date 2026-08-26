@@ -654,6 +654,17 @@ actually live on Catalyst, not only against a fresh local `generate()` call. Thi
 nice-to-have for auditability, not a correctness bug — nothing downstream currently depends on
 having it post-generation.
 
+**Fixed (2026-08-26 North Star hardening pass).** `run.py` now writes `IDENTITY_ANSWER_KEY` to
+`.veritas/identity_answer_key.json` immediately after `load_dataset()`, mirroring
+`AML_LABELS` exactly, env-var overridable (`VERITAS_IDENTITY_ANSWER_KEY`) the same way
+`gnn.py` overrides `VERITAS_AML_LABELS`. `data/generator/score_identity.py` recomputes
+precision/recall/F1 from it against whatever `vx_accused_identity` is currently bound, using
+cluster-size combinatorics rather than `fellegi_sunter.py`'s own O(n²) self-check loop, so it
+stays fast at full dataset scale. 3 new tests (`data/tests/test_score_identity.py`). Not yet
+exercised against the live 10k-case Catalyst dataset — that dataset was seeded before this
+fix existed, and regenerating it solely to backfill this file would be exactly the casual
+regeneration §20 of `CLAUDE.md` prohibits for a gap this minor.
+
 ---
 
 ## BUG-023 root cause analysis
@@ -766,9 +777,9 @@ them.
 2. **No narrative-diversity test exists** — this is why BUG-023 survived to be found by manual
    sampling rather than CI. Any fix to (1) needs a companion test, or it will regress silently
    again.
-3. **The identity answer key isn't persisted post-generation (§19)** — the claimed F1 can only
-   be recomputed in-process, not against a live Catalyst dataset, unlike the AML labels which
-   already follow the right pattern.
+3. ~~**The identity answer key isn't persisted post-generation (§19)**~~ **Fixed 2026-08-26**
+   — `run.py` now persists it the same way the AML labels already are; see §19 for detail. Not
+   yet exercised against the live 10k-case Catalyst dataset, which predates the fix.
 
 **What's cosmetically imperfect but fine as-is:**
 - Priors CSVs are self-described as "approximate pending ETL," not fully sourced NCRB figures
