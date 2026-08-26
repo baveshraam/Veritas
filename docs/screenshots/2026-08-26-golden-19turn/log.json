@@ -1,0 +1,295 @@
+[
+  {
+    "name": "t01-open-fir",
+    "query": "What is the status of FIR 100050504202300018?",
+    "result": {
+      "query": "What is the status of FIR 100050504202300018?",
+      "answer": "Based on 1 record(s) in the system:\n  1 FIR 100050504202300018 (Bengaluru Urban, PS 504) — Kidnapping, filed 06 Nov 2023, status Convicted. On 06 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a group of 4 persons. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t02-what-happened",
+    "query": "What happened?",
+    "result": {
+      "query": "What happened?",
+      "answer": "Based on 1 record(s) in the system:\n  1 FIR 100050504202300018 (Bengaluru Urban, PS 504) — Kidnapping, filed 06 Nov 2023, status Convicted. On 06 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a group of 4 persons. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t03-who-involved",
+    "query": "Who is involved?",
+    "result": {
+      "query": "Who is involved?",
+      "answer": "Based on 4 record(s) in the system:\n  1 Usha Naika is accused on this case (network community 6).\n  2 Prashanth Krishnamurthy is accused on this case (network community 6).\n  3 Nithin Madar is accused on this case (network community 6).\n  4 Naveen Nayak is accused on this case (network community 6).\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 4
+    },
+    "pane": {
+      "activeTabText": "Criminal network",
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t04-named-person",
+    "query": "Does Usha Naika have priors?",
+    "result": {
+      "query": "Does Usha Naika have priors?",
+      "answer": "Based on 12 record(s) in the system:\n  1 FIR 100050504202300018 (Bengaluru Urban, PS 504) — Kidnapping, filed 06 Nov 2023, status Convicted. On 06 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a group of 4 persons. Investigation is being carried out as per procedure.\n  2 FIR 100050508202400014 (Bengaluru Urban, PS 508) — Theft, filed 15 Mar 2024, status Chargesheeted. On 15 Mar 2024, a case of theft was registered in Bengaluru Urban district. Handbag snatched from a parked two-wheeler, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  3 FIR 100050501202400012 (Bengaluru Urban, PS 501) — Rape, filed 21 Mar 2024, status Convicted. On 21 Mar 2024, a case of rape was registered in Bengaluru Urban district. Sexual assault reported by the complainant against a known person, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  4 FIR 100171702202400012 (Hassan, PS 1702) — Extortion, filed 21 Jun 2024, status Under Investigation. On 21 Jun 2024, a case of extortion was registered in Hassan district. Demand for money under threat of harm to business premises, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n  5 FIR 100121202202400045 (Dakshina Kannada, PS 1202) — House Burglary, filed 29 Jun 2024, status Chargesheeted. On 29 Jun 2024, a case of house burglary was registered in Dakshina Kannada district. Compound wall scaled to reach an unlocked rear entrance, during the morning, by a group of 4 persons. Investigation is being carried out as per procedure.\n  6 FIR 100303002202400003 (Yadgir, PS 3002) — Theft, filed 13 Jul 2024, status Acquitted. On 13 Jul 2024, a case of theft was registered in Yadgir district. Pickpocketing in a crowded market, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n  7 FIR 100050503202400047 (Bengaluru Urban, PS 503) — House Burglary, filed 01 Sep 2024, status Convicted. On 01 Sep 2024, a case of house burglary was registered in Bengaluru Urban district. Lock broken on the main door during a daytime absence, during the morning, by a group of 3 persons. Investigation is being carried out as per procedure.\n  8 FIR 100313102202400012 (Vijayanagara, PS 3102) — Theft, filed 16 Oct 2024, status Under Investigation. On 16 Oct 2024, a case of theft was registered in Vijayanagara district. Cash box lifted from an unattended shop counter, late at night, by two persons acting together. Investigation is being carried out as per procedure.\n  9 FIR 100242402202400033 (Raichur, PS 2402) — Narcotics, filed 28 Oct 2024, status Convicted. On 28 Oct 2024, a case of narcotics was registered in Raichur district. Ganja transported concealed in a goods vehicle, in the evening, by a group of 3 persons. Investigation is being carried out as per procedure.\n  10 FIR 100050507202400060 (Bengaluru Urban, PS 507) — Theft, filed 19 Dec 2024, status Under Investigation. On 19 Dec 2024, a case of theft was registered in Bengaluru Urban district. Handbag snatched from a parked two-wheeler, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  11 FIR 100030303202500014 (Belagavi, PS 303) — Rash Driving, filed 19 Feb 2025, status Convicted. On 19 Feb 2025, a case of rash driving was registered in Belagavi district. Overspeeding vehicle losing control on a residential road, during the morning, by a lone individual. Investigation is being carried out as per procedure.\n  12 FIR 100090901202500012 (Chikkaballapura, PS 901) — Extortion, filed 15 May 2025, status Acquitted. On 15 May 2025, a case of extortion was registered in Chikkaballapura district. Protection money demanded from a roadside vendor, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 12
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t05-previous-cases",
+    "query": "What about her previous cases?",
+    "result": {
+      "query": "What about her previous cases?",
+      "answer": "Based on 12 record(s) in the system:\n  1 FIR 100050504202300018 (Bengaluru Urban, PS 504) — Kidnapping, filed 06 Nov 2023, status Convicted. On 06 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a group of 4 persons. Investigation is being carried out as per procedure.\n  2 FIR 100050508202400014 (Bengaluru Urban, PS 508) — Theft, filed 15 Mar 2024, status Chargesheeted. On 15 Mar 2024, a case of theft was registered in Bengaluru Urban district. Handbag snatched from a parked two-wheeler, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  3 FIR 100050501202400012 (Bengaluru Urban, PS 501) — Rape, filed 21 Mar 2024, status Convicted. On 21 Mar 2024, a case of rape was registered in Bengaluru Urban district. Sexual assault reported by the complainant against a known person, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  4 FIR 100171702202400012 (Hassan, PS 1702) — Extortion, filed 21 Jun 2024, status Under Investigation. On 21 Jun 2024, a case of extortion was registered in Hassan district. Demand for money under threat of harm to business premises, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n  5 FIR 100121202202400045 (Dakshina Kannada, PS 1202) — House Burglary, filed 29 Jun 2024, status Chargesheeted. On 29 Jun 2024, a case of house burglary was registered in Dakshina Kannada district. Compound wall scaled to reach an unlocked rear entrance, during the morning, by a group of 4 persons. Investigation is being carried out as per procedure.\n  6 FIR 100303002202400003 (Yadgir, PS 3002) — Theft, filed 13 Jul 2024, status Acquitted. On 13 Jul 2024, a case of theft was registered in Yadgir district. Pickpocketing in a crowded market, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n  7 FIR 100050503202400047 (Bengaluru Urban, PS 503) — House Burglary, filed 01 Sep 2024, status Convicted. On 01 Sep 2024, a case of house burglary was registered in Bengaluru Urban district. Lock broken on the main door during a daytime absence, during the morning, by a group of 3 persons. Investigation is being carried out as per procedure.\n  8 FIR 100313102202400012 (Vijayanagara, PS 3102) — Theft, filed 16 Oct 2024, status Under Investigation. On 16 Oct 2024, a case of theft was registered in Vijayanagara district. Cash box lifted from an unattended shop counter, late at night, by two persons acting together. Investigation is being carried out as per procedure.\n  9 FIR 100242402202400033 (Raichur, PS 2402) — Narcotics, filed 28 Oct 2024, status Convicted. On 28 Oct 2024, a case of narcotics was registered in Raichur district. Ganja transported concealed in a goods vehicle, in the evening, by a group of 3 persons. Investigation is being carried out as per procedure.\n  10 FIR 100050507202400060 (Bengaluru Urban, PS 507) — Theft, filed 19 Dec 2024, status Under Investigation. On 19 Dec 2024, a case of theft was registered in Bengaluru Urban district. Handbag snatched from a parked two-wheeler, in the evening, by two persons acting together. Investigation is being carried out as per procedure.\n  11 FIR 100030303202500014 (Belagavi, PS 303) — Rash Driving, filed 19 Feb 2025, status Convicted. On 19 Feb 2025, a case of rash driving was registered in Belagavi district. Overspeeding vehicle losing control on a residential road, during the morning, by a lone individual. Investigation is being carried out as per procedure.\n  12 FIR 100090901202500012 (Chikkaballapura, PS 901) — Extortion, filed 15 May 2025, status Acquitted. On 15 May 2025, a case of extortion was registered in Chikkaballapura district. Protection money demanded from a roadside vendor, in the evening, by a group of 4 persons. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 12
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t06-why-selected",
+    "query": "Why did you select those cases?",
+    "result": {
+      "query": "Why did you select those cases?",
+      "answer": "The previous answer to \"What about her previous cases?\" was built from 12 cited record(s). How it got there: Intent: PERSON_HISTORY; resolved pronoun against the session's active person; Personalized PageRank from 0 seeded nodes; 18 criminal-record row(s); 5 semantic match(es) (hybrid dense+BM25); 23 corroborating records (confidence 0.95); Answer grounded in 12 citation(s); visualization: none.",
+      "isRefusal": false,
+      "citeCount": 0
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t07-associates",
+    "query": "Who are her associates?",
+    "result": {
+      "query": "Who are her associates?",
+      "answer": "Based on 12 record(s) in the system:\n  1 Nithin Madar is a known associate (1 hop(s) away, gang: Community 6).\n  2 Karthik Joshe is a known associate (1 hop(s) away, gang: Community 20).\n  3 Suma Nadkarni is a known associate (1 hop(s) away, gang: Community 6).\n  4 Suma Nadkarni is a known associate (1 hop(s) away, gang: Community 6).\n  5 Ajay Kattee is a known associate (1 hop(s) away, gang: Community 9).\n  6 Roopa Kamath is a known associate (1 hop(s) away, gang: Community 18).\n  7 Jagadish Katti is a known associate (1 hop(s) away, gang: Community 37).\n  8 Rawindra is a known associate (1 hop(s) away, gang: Community 37).\n  9 Chandrakala Iyer is a known associate (1 hop(s) away, gang: Community 6).\n  10 Ananda is a known associate (1 hop(s) away, gang: Community 36).\n  11 Sowmya Iyer is a known associate (1 hop(s) away, gang: Community 19).\n  12 Naveen Angadi is a known associate (1 hop(s) away, gang: Community 5).\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 12
+    },
+    "pane": {
+      "activeTabText": "Criminal network",
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t08-why-associates",
+    "query": "Why were those associates surfaced?",
+    "result": {
+      "query": "Why were those associates surfaced?",
+      "answer": "The previous answer to \"Who are her associates?\" was built from 12 cited record(s). How it got there: Intent: PERSON_NETWORK; resolved pronoun against the session's active person; Personalized PageRank from 0 seeded nodes; 40 associate(s) within policy depth; Skipped — PERSON_NETWORK was answered directly from the record layer; Beam-searched 1 reasoning path(s); 40 corroborating records (confidence 1.00); Answer grounded in 12 citation(s); visualization: network.",
+      "isRefusal": false,
+      "citeCount": 0
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t09-similar-cases",
+    "query": "Show me similar cases to this one",
+    "result": {
+      "query": "Show me similar cases to this one",
+      "answer": "Based on 5 record(s) in the system:\n  1 FIR 100050512202300027 (Bengaluru Urban, PS 512) — Kidnapping, filed 24 Nov 2023, status Chargesheeted. On 24 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, late at night, by two persons acting together. Investigation is being carried out as per procedure. Similar because: same crime type (Kidnapping); shares IPC section(s) 363, 365; same district (Bengaluru Urban); matching modus operandi (\"Abduction reported following a failed ransom demand\").\n  2 FIR 100050513202300025 (Bengaluru Urban, PS 513) — Kidnapping, filed 02 Nov 2023, status Chargesheeted. On 02 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Person taken away by force during a personal dispute, in the early morning hours, by a lone individual. Investigation is being carried out as per procedure. Similar because: same crime type (Kidnapping); shares IPC section(s) 363, 365; same district (Bengaluru Urban).\n  3 FIR 100050509202400060 (Bengaluru Urban, PS 509) — Kidnapping, filed 23 Nov 2024, status Chargesheeted. On 23 Nov 2024, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a lone individual. Investigation is being carried out as per procedure. Similar because: same crime type (Kidnapping); shares IPC section(s) 363, 365; same district (Bengaluru Urban); matching modus operandi (\"Abduction reported following a failed ransom demand\").\n  4 FIR 100050504202400052 (Bengaluru Urban, PS 504) — Kidnapping, filed 07 Nov 2024, status Under Investigation. On 07 Nov 2024, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, late at night, by a lone individual. Investigation is being carried out as per procedure. Similar because: same crime type (Kidnapping); shares IPC section(s) 363, 365; same district (Bengaluru Urban); matching modus operandi (\"Abduction reported following a failed ransom demand\").\n  5 FIR 100050514202500042 (Bengaluru Urban, PS 514) — Kidnapping, filed 17 Nov 2025, status Chargesheeted. On 17 Nov 2025, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a lone individual. Investigation is being carried out as per procedure. Similar because: same crime type (Kidnapping); shares IPC section(s) 363, 365; same district (Bengaluru Urban); matching modus operandi (\"Abduction reported following a failed ransom demand\").\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 5
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t10-where-concentrated",
+    "query": "Where are those cases concentrated?",
+    "result": {
+      "query": "Where are those cases concentrated?",
+      "answer": "Based on 1 record(s) in the system:\n  1 The 5 case(s) from the previous answer are concentrated in: Bengaluru Urban (5).\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": "Geospatial — hotspot density",
+      "guess": "map"
+    }
+  },
+  {
+    "name": "t11-financial-trail",
+    "query": "What is her financial trail?",
+    "result": {
+      "query": "What is her financial trail?",
+      "answer": "Based on 1 record(s) in the system:\n  1 No bank account is linked to this person in the records, and no transfers are traceable to them. This is an absence in the financial layer, not a finding that no money moved.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t12-unusual",
+    "query": "What looks unusual in her transactions?",
+    "result": {
+      "query": "What looks unusual in her transactions?",
+      "answer": "Based on 1 record(s) in the system:\n  1 No bank account is linked to this person in the records, and no transfers are traceable to them. This is an absence in the financial layer, not a finding that no money moved.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t13-evidence-supports",
+    "query": "What evidence supports that?",
+    "result": {
+      "query": "What evidence supports that?",
+      "answer": "The previous answer to \"What looks unusual in her transactions?\" is supported by:\n  1 No bank account is linked to this person in the records, and no transfers are traceable to them. This is an absence in t…",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t14-next-steps",
+    "query": "What should be investigated next?",
+    "result": {
+      "query": "What should be investigated next?",
+      "answer": "Based on 6 record(s) in the system:\n  1 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) has 24 direct co-accused associate(s) — start with Nirmala Angadi, Channabasappa Reddy, Suma Nadkarni.\n  2 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) belongs to network community 6 — review other members for a linked series.\n  3 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) ranks high for network influence (PageRank 0.0011) — likely an organiser, not a runner.\n  4 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) appears in 18 cases in total — pull the prior files before the next interview.\n  5 Prashanth Krishnamurthy (filed as \"Prashanth Krishnamoorthy S/o Anil\" on this FIR) has 3 direct co-accused associate(s) — start with Nithin Madar, Usha Naika, Naveen Nayak.\n  6 Prashanth Krishnamurthy (filed as \"Prashanth Krishnamoorthy S/o Anil\" on this FIR) belongs to network community 6 — review other members for a linked series.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 6
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t15-briefing",
+    "query": "Prepare the briefing.",
+    "result": {
+      "query": "Prepare the briefing.",
+      "answer": "Based on 7 record(s) in the system:\n  1 FIR 100050504202300018, Kidnapping, registered at Bengaluru Urban PS-04 (Bengaluru Urban) on 06 Nov 2023. Current status: Convicted. 5 recorded events in the case timeline. 5 past cases share this pattern; 0 ended in conviction.\n  2 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) has 24 direct co-accused associate(s) — start with Nirmala Angadi, Channabasappa Reddy, Suma Nadkarni.\n  3 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) belongs to network community 6 — review other members for a linked series.\n  4 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) ranks high for network influence (PageRank 0.0011) — likely an organiser, not a runner.\n  5 Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR) appears in 18 cases in total — pull the prior files before the next interview.\n  6 Prashanth Krishnamurthy (filed as \"Prashanth Krishnamoorthy S/o Anil\" on this FIR) has 3 direct co-accused associate(s) — start with Nithin Madar, Usha Naika, Naveen Nayak.\n  7 Prashanth Krishnamurthy (filed as \"Prashanth Krishnamoorthy S/o Anil\" on this FIR) belongs to network community 6 — review other members for a linked series.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 7
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t16-switch-case",
+    "query": "What is the status of FIR 100222201202600022?",
+    "result": {
+      "query": "What is the status of FIR 100222201202600022?",
+      "answer": "Based on 1 record(s) in the system:\n  1 FIR 100222201202600022 (Mandya, PS 2201) — Hurt, filed 30 Jun 2026, status Under Investigation. On 30 Jun 2026, a case of hurt was registered in Mandya district. Physical assault following a heated verbal argument, late at night, by two persons acting together. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t17-followup-new-case",
+    "query": "What happened in this case?",
+    "result": {
+      "query": "What happened in this case?",
+      "answer": "Based on 1 record(s) in the system:\n  1 FIR 100222201202600022 (Mandya, PS 2201) — Hurt, filed 30 Jun 2026, status Under Investigation. On 30 Jun 2026, a case of hurt was registered in Mandya district. Physical assault following a heated verbal argument, late at night, by two persons acting together. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t18a-return-original",
+    "query": "What is the status of FIR 100050504202300018?",
+    "result": {
+      "query": "What is the status of FIR 100050504202300018?",
+      "answer": "Based on 1 record(s) in the system:\n  1 FIR 100050504202300018 (Bengaluru Urban, PS 504) — Kidnapping, filed 06 Nov 2023, status Convicted. On 06 Nov 2023, a case of kidnapping was registered in Bengaluru Urban district. Abduction reported following a failed ransom demand, in the early morning hours, by a group of 4 persons. Investigation is being carried out as per procedure.\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 1
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t18b-verify-isolation",
+    "query": "Who is involved?",
+    "result": {
+      "query": "Who is involved?",
+      "answer": "Based on 4 record(s) in the system:\n  1 Usha Naika is accused on this case (network community 6).\n  2 Prashanth Krishnamurthy is accused on this case (network community 6).\n  3 Nithin Madar is accused on this case (network community 6).\n  4 Naveen Nayak is accused on this case (network community 6).\n\nEvery statement above is drawn directly from the cited records; no inference has been added.",
+      "isRefusal": false,
+      "citeCount": 4
+    },
+    "pane": {
+      "activeTabText": "Criminal network",
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t19-ambiguous-pronoun",
+    "query": "Does he have priors?",
+    "result": {
+      "query": "Does he have priors?",
+      "answer": "More than one person named in this question matches equally well: Usha Naika, Prashanth Krishnamurthy, Nithin Madar, Naveen Nayak. I will not guess which one you mean — say which one, or add a case number or district to tell them apart.",
+      "isRefusal": true,
+      "citeCount": 0
+    },
+    "pane": {
+      "activeTabText": null,
+      "guess": "index"
+    }
+  },
+  {
+    "name": "t19b-citation-click",
+    "clicked": false
+  },
+  {
+    "name": "t20-kannada",
+    "result": {
+      "query": "ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?",
+      "answer": "ವ್ಯವಸ್ಥೆಯಲ್ಲಿ 6 ದಾಖಲೆಗಳ ಆಧಾರದ ಮೇಲೆಃ 1 73 ಪ್ರಕರಣಗಳು) ಮಂಡಯಾದಲ್ಲಿ ಕಳ್ಳತನವನ್ನು ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ ದಾಖಲಿಸಲಾಗಿದೆ. 2 ಎಫ್ಐಆರ್ 100222202202600019 (ಮಂಡಯಾ, ಪಿಎಸ್ 2202)  ಕಳ್ಳತನ, 08 ಜೂನ್ 2026 ರಂದು ದಾಖಲಿಸಲ್ಪಟ್ಟಿದೆ, ತನಿಖೆಯ ಅಡಿಯಲ್ಲಿ ಸ್ಥಿತಿ. 08 ಜೂನ್ 2026 ರಂದು, ಮಂಡಯಾ ಜಿಲ್ಲೆಯಲ್ಲಿ ಕಳ್ಳತನದ ಪ್ರಕರಣವನ್ನು ದಾಖಲಿಸಲಾಯಿತು. ಹ್ಯಾಂಡ್ಬ್ಯಾಗ್ ಅನ್ನು ನಿಲುಗಡೆಗೊಂಡ ಎರಡು ಚಕ್ರದ ವಾಹನದಿಂದ, ಬೆಳಿಗ್ಗೆ ಆರಂಭಿಕ ಗಂಟೆಗಳಲ್ಲಿ, ಒಬ್ಬ ವ್ಯಕ್ತಿಯಿಂದ ಕಳ್ಳತನ ಮಾಡಲಾಗಿದೆ. ತನಿಖೆ ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ ನಡೆಯುತ್ತಿದೆ. 3 ಎಫ್ಐಆರ್ 100222201202600014 (ಮಂಡಯಾ, ಪಿಎಸ್ 2201)  ಕಳ್ಳತನದ ಸ್ಥಿತಿ, 22 ಮೇ 2026, ಚಾರ್ಜ್ ಶೀಟ್ ದಾಖಲಿಸಲ್ಪಟ್ಟಿದೆ. 2026 ರಂದು, ಮಂಡಯಾ ಜಿಲ್ಲೆಯಲ್ಲಿ ಕಳ್ಳತನದ ಪ್ರಕರಣವನ್ನು ದಾಖಲಿಸಲಾಯಿತು. 09 ಮೇ 2026, ಮಂಡಯಾ ಜಿಲ್ಲೆಯಲ್ಲಿ ಕಳ್ಳತನದ ಪ್ರಕರಣವನ್ನು ದಾಖಲಿಸಲಾಗಿದೆ. ನಾಣ್ಯ ಪೆಟ್ಟಿಯನ್ನು ಎತ್ತುವ, ಬೆಳಿಗ್ಗೆ",
+      "isRefusal": false,
+      "citeCount": 3
+    }
+  }
+]

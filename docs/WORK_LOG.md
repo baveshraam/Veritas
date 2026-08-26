@@ -382,3 +382,98 @@ behavior) — unchanged from v14's own note on this. The broader "19-turn golden
 conversation through the console" and North Star P0/P1 gap-closing items named as
 outstanding in the prior two entries remain outstanding — this pass was scoped to the
 map, as its own mega-prompt asked.
+
+---
+
+## 2026-08-26 (later still) — Finishing pass: the 19-turn golden conversation, four
+real bugs it found, and closing the last North Star MUST-HAVE
+
+The item four consecutive prior handoffs had named as the top outstanding action. Built a
+small CDP driver (Chrome `--headless=new --remote-debugging-port`, talked over Node 22's
+global WebSocket) and drove one continuous 19-turn investigation through the actual
+deployed console — signed in as DSP, subject FIR 100050504202300018 (Kidnapping,
+Bengaluru Urban, 4 accused), with a case switch to an unrelated FIR and back (context
+isolation) and a deliberately ambiguous pronoun at the end.
+
+**First run (not committed) found four real, live bugs**, all in
+`packages/rag_agent/rag_agent/`:
+
+1. `orchestrator.py`'s `CASE_PEOPLE` branch only *set* `active_person` when exactly one
+   accused existed; with several, it did nothing, leaving a stale person from an earlier
+   turn/case silently "active" — so re-opening a different multi-accused case and asking
+   a pronoun follow-up answered about the wrong (old) person instead of asking, exactly
+   the case RAG-34's ambiguous-person clarification exists for. Fixed with an explicit
+   clear.
+2. `intents.py`'s `EXPLAIN_REASONING` regex required "why (are/were/did) you <verb>" or
+   "why ... those <adjective>" with nothing in between — natural phrasing straight out of
+   this session's own mega-prompt ("why did you *select* those cases," "why were those
+   associates *surfaced*," passive, no "you") fell through to `CAUSAL` or a repeat of the
+   prior topic intent. Widened the verb list and let one noun sit between "those" and the
+   participle.
+3. `intents.py`'s `NEXT_STEPS` keywords had "investigate next" (active) but not
+   "investigated next" (passive) — "what should be investigated next," again straight
+   from the mega-prompt, matched nothing and refused. Added the passive form.
+4. `orchestrator.py`'s `node_retrieve` only skipped retrieval for refusals it decides
+   itself (CAPABILITY, NOT_INFERABLE) or re-derives (guarded with `and not
+   state.refusal_reason`, which stops it setting a DUPLICATE reason but does not return
+   early when node_orchestrate already set one) — an ambiguous-person refusal clears
+   `active_person`, so every specialist branch was correctly skipped, but the untargeted
+   vector-search fallback at the bottom of `_run_specialists` has no such guard and
+   searched anyway, handing the officer 5 unrelated criminal-profile citations in the
+   Evidence rail right next to "I will not guess which one you mean." Fixed with an
+   early return in `node_retrieve` whenever a refusal is already decided on entry.
+
+Also fixed **BUG-026** (open since the prior North-Star hardening pass): Copilot leads
+and the new `NEXT_STEPS` answer now show `"Canonical (filed as \"AsFiled\" on this FIR)"`
+when entity resolution reconciled a romanisation variant, via a new `_lead_name()`
+helper in `copilot/brief.py` — masked identically to every other name on that surface.
+
+6 new regression tests (3 intent/state, 1 refusal-short-circuit, 2 BUG-026), each
+confirmed to fail against pre-fix code first. **354 → 361 tests, all green.**
+
+**Deployed twice** via the relay pipeline (one deploy for the intent/BUG-026 fixes, a
+second for the refusal-short-circuit fix found by re-running the golden script after the
+first redeploy) — plus one self-inflicted broken deploy commit (a `node -e ... >
+sig.json` redirect that wrote an empty file because the async `fetch` hadn't resolved
+before the shell redirect opened the file — caught immediately when the workflow failed
+on an empty upload URL, fixed with a corrected commit within minutes). Both real deploys
+polled to `deployment_status: success` and confirmed via `/health`.
+
+**Second run (committed) verified all fixes live**: all 19 turns correct, including the
+context-isolation check (turns 16-18 switch to an unrelated Mandya case and back; the
+"who is involved" re-ask correctly names the original case's 4 accused, not the Mandya
+case's people) and the ambiguous-pronoun clarification (turn 19 now asks which of the 4
+accused is meant, and the Evidence rail is correctly empty rather than padded). Also
+verified in the same live session: a Kannada round-trip follow-up, and — signed in
+separately as IO — a cross-station authorization refusal for the same FIR ("No record
+with that number exists within your access scope").
+
+**One false alarm, caught and ruled out rather than reported**: the first run's
+screenshot of "where are those cases concentrated?" looked like an untargeted, zoomed-out
+statewide map. Traced to the CDP driver's own timing — MapLibre's `fitBounds` animation
+is 900ms and the driver only waited 400ms after a turn finished streaming before
+screenshotting. Raised to 1500ms; the second run's screenshot shows the map correctly
+tight on the real Bengaluru-area FIR points. Not a product bug — recorded as a trap for
+any future CDP harness against this console.
+
+**QuickML and PDF export both re-confirmed BLOCKED by a direct live check** this pass
+(the AppSail app's live config for QuickML's key; a real `/export/pdf` call against a
+session with a turn for PDF) rather than re-asserted from a prior pass's note, per this
+session's own instruction against repeatedly guessing at platform APIs already
+root-caused. No code change for either; both fallbacks remain honest and correct.
+
+**Test suite**: 354 → 361, all green.
+
+**Docs updated**: `docs/VERITAS_HANDOFF.md` (rewritten for this pass), this file,
+`docs/screenshots/2026-08-26-golden-19turn/` (new — 25 screenshots + `log.json` +
+README), `docs/QA_FUNCTIONALITY_MATRIX.md`, `docs/VERITAS_STATUS.html`.
+
+**Not done this pass**: independently observing `veritas_audit_verify`'s Cron job's next
+*unattended* fire (the fix is deployed and unit-tested; its own "does this actually
+succeed with nobody watching" claim needs the schedule itself, or a deliberate wait, not
+more code — out of this pass's chosen scope). The tied-name-search variant of RAG-32
+(as opposed to the pronoun variant this pass's turn 19 exercised) still hasn't hit a live
+`record_count` tie by chance. A from-scratch full UI click-through beyond what the golden
+conversation itself exercised was not repeated — the prior passes' CDP verification of
+most of the QA matrix's UI rows stands, unrepeated where this pass's fixes didn't touch
+them.

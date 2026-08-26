@@ -105,13 +105,14 @@ that stated, not `VERIFIED`.
 | RAG-26 | `SIMILAR_CASES`, case-scoped (open case, no name needed) | same, reuses `copilot.brief.similar_cases_for` | Yes, live console + curl | VERIFIED — same structurally-explained similarity Copilot already used (crime type/IPC section/district/MO), now reachable from chat directly; confidence rendered as "text similarity", not evidential confidence |
 | RAG-27 | `CASE_LOCATIONS` ("where are those cases concentrated?") | same | Yes, live console + curl | VERIFIED — tallies districts over the PREVIOUS turn's cited FIRs (not a fresh unscoped hotspot query), re-checked against policy scope before being shown; renders the map pane with those specific case points |
 | RAG-28 | `NEXT_STEPS` ("what should I investigate next?") | same, reuses `copilot.brief.leads_for_case` | Yes, live console + curl | VERIFIED — identical lead-generation logic the `/copilot` endpoint already uses (direct co-accused only, PageRank/community-cited), now reachable from chat |
-| RAG-29 | `BRIEFING` ("prepare the briefing") | same, reuses `copilot.brief.generate_copilot_brief` | Yes, live curl (case with one accused) | VERIFIED — draft case-diary paragraph + leads, station-scope-checked by the same function `/copilot` calls; `NotPermitted`/`KeyError` degrade to an empty, honest result rather than a leak or a crash (unit-tested; live-tested only the success path this pass) |
+| RAG-29 | `BRIEFING` ("prepare the briefing") | same, reuses `copilot.brief.generate_copilot_brief` | Yes, live console via CDP, MULTI-accused case (2026-08-26 golden-conversation pass; FIR 100050504202300018, 4 accused) | VERIFIED — closes the "only verified against a single-accused case" gap: draft case-diary paragraph + leads over all 4 accused, station-scope-checked by the same function `/copilot` calls; `NotPermitted`/`KeyError` degrade to an empty, honest result rather than a leak or a crash |
 | RAG-30 | `EXPLAIN_REASONING` ("why are you showing me these?") | same | Yes, live console + curl | VERIFIED — re-describes the PREVIOUS turn's own agent trace and citations from `vx_conversation_turn`, not a fresh retrieval; refuses honestly (`nothing_prior`) on a session's first turn |
 | RAG-31 | `EVIDENCE_FOR` ("what evidence supports that?") | same | Yes, live curl | VERIFIED — re-shows the previous turn's citations/evidence; same `nothing_prior` refusal on a first turn |
 | RAG-32 | Ambiguous person names ask instead of guess | `node_orchestrate` (new, this pass) | Yes, unit-tested; live-tested only the "clear leader" path (no tie found in the live dataset for the names tried) | PARTIAL — the tie-break logic itself has direct unit coverage (`test_an_ambiguous_name_asks_instead_of_guessing`); a live query that actually produces a tied `record_count` was not found this pass |
 | RAG-33 | Session-focus persistence across the FULL turn (not just pre-retrieval) | `node_retrieve` (bug fix, this pass) | Yes, live: "Open FIR X" then, one turn later, "What happened?" answered about X | VERIFIED — this was a real, previously-unnoticed gap: `node_orchestrate` persisted focus BEFORE retrieval ran, but `FIR_LOOKUP` resolves `active_fir` DURING retrieval, so it was never saved; the next turn found no case ever opened. Fixed by persisting again after retrieval resolves |
 
-| RAG-34 | Pronoun after a multi-person `CASE_PEOPLE` turn asks instead of refusing blindly | `orchestrator.py` (`_recent_person_candidates`, new 2026-08-26) | Yes, live console + curl, reproduced pre-fix first | VERIFIED — found live in this pass's own conversational sanity check: "Who is involved?" (2 accused, correctly leaves `active_person` unset) → "Does he have priors?" used to fall to a bare `no_subject` refusal, discarding the two names the previous turn had just shown. Now checks the previous turn's own `accused:` citations and, with 2+ candidates, asks which one by name — reusing the existing `ambiguous_person` clarification path (RAG-32's mechanism), sourced from `vx_conversation_turn` instead of a fresh name search. Regression test confirmed to fail against pre-fix code. Also fixed in the same pass: `CASE_LOCATIONS`'s "nothing to map" refusal was reusing `EXPLAIN_REASONING`'s "this is the first answer" message verbatim, which is false on any turn but the actual first one (caught live on turn 7 of the same session) — now has its own accurate message |
+| RAG-34 | Pronoun after a multi-person `CASE_PEOPLE` turn asks instead of refusing blindly | `orchestrator.py` (`_recent_person_candidates`, new 2026-08-26) | Yes, live console + curl, reproduced pre-fix first; re-verified live through the console (2026-08-26 golden-conversation pass, turn 19) against a REAL 4-way tie (Usha Naika, Prashanth Krishnamurthy, Nithin Madar, Naveen Nayak) | VERIFIED — found live in an earlier pass's conversational sanity check: "Who is involved?" (2 accused, correctly leaves `active_person` unset) → "Does he have priors?" used to fall to a bare `no_subject` refusal, discarding the two names the previous turn had just shown. Now checks the previous turn's own `accused:` citations and, with 2+ candidates, asks which one by name — reusing the existing `ambiguous_person` clarification path (RAG-32's mechanism), sourced from `vx_conversation_turn` instead of a fresh name search. **A deeper bug in the same mechanism was found and fixed in the 2026-08-26 golden-conversation pass**: `CASE_PEOPLE` with several accused only *set* `active_person` when there was exactly one — with several, it did nothing, so a person named several turns (and cases) earlier stayed silently "active" and a pronoun follow-up answered about THAT stale person instead of ever reaching this clarification path. Fixed by explicitly clearing `active_person` to `None` when several are accused. Also fixed in an earlier pass: `CASE_LOCATIONS`'s "nothing to map" refusal was reusing `EXPLAIN_REASONING`'s "this is the first answer" message verbatim, which is false on any turn but the actual first one — now has its own accurate message |
+| RAG-35 | A decided refusal (`ambiguous_person`, `person_not_on_file`) does not still run a generic search | `orchestrator.py` (`node_retrieve`, new 2026-08-26) | Yes, live console via CDP + unit test, reproduced pre-fix first | VERIFIED — found live in the 2026-08-26 golden-conversation pass: `node_retrieve` only skipped retrieval for refusals it decides itself (CAPABILITY, NOT_INFERABLE) or re-derives (NEEDS_CASE/NEEDS_SUBJECT, guarded so as not to set a DUPLICATE reason but not returning early when one is already set) — so an ambiguous-person refusal (active_person cleared) skipped every specialist branch for lack of a subject, but the untargeted vector-search fallback at the bottom of `_run_specialists` had no such guard and searched anyway, populating the Evidence rail with 5 unrelated criminal-profile citations next to a chat message saying "I will not guess which one you mean." `node_retrieve` now returns immediately whenever `state.refusal_reason` is already set on entry |
 
 **A note on how RAG-24–33 were found**: the mega-prompt this pass ran against asked whether the
 conversational layer was "genuinely conversational" or "intent classification + isolated
@@ -214,7 +215,14 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 
 Severity: P2 (UX/trust, not a correctness or masking defect)
 Component: `packages/rag_agent/copilot/brief.py:_leads`
-Status: **OPEN — found live this pass, documented, not fixed**
+Status: **FIXED and live-verified (2026-08-26, finishing pass)** — `_leads()` now calls a
+new `_lead_name(officer_role, canonical, as_filed)` helper, which renders `"Canonical
+(filed as \"AsFiled\" on this FIR)"` whenever the two differ, and the masked placeholder
+(never either raw name) for a masked role. Live-verified against Usha Naika's own FIR
+100050504202300018 in the golden-conversation pass's `NEXT_STEPS`/`BRIEFING` turns —
+`"Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR)"` renders correctly
+throughout (`docs/screenshots/2026-08-26-golden-19turn/t14-next-steps.png`,
+`t15-briefing.png`). 2 new unit tests (the reconciliation, and the masking guard).
 
 ### Symptoms
 Found live via CDP while verifying UI-28 (Copilot overlay): FIR 9992's own accused list
@@ -256,18 +264,19 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
 
 ## What this matrix does NOT yet cover (honest, not silent)
 
-- **Added 2026-08-26 (map-investigator-grade pass)**: the full 19-turn golden
-  conversation a "VERITAS FINAL PRODUCT PASS" mega-prompt specified (open case → ...
-  → briefing → switch case → switch back → ambiguous reference → unauthorized case)
-  was NOT driven end to end through the live console this pass — a shorter 9-turn
-  live curl/SSE sanity check was, covering FIR_LOOKUP/CASE_CONTEXT/CASE_PEOPLE/
-  pronoun-disambiguation(RAG-34)/EXPLAIN_REASONING/EVIDENCE_FOR/CASE_LOCATIONS/a
-  guilt-probability refusal/a Kannada round-trip, plus a 2-turn cross-station
-  authorization check, all against the live production API post-deploy. It found
-  and fixed RAG-34 live. A full CDP-driven run of the entire specified script,
-  including explicit case-switch-and-back and a genuine ambiguous-name tie, remains
-  for a future pass. QuickML was re-checked directly against the live AppSail
-  configuration (not re-guessed) — `QUICKML_ENDPOINT_KEY` is still absent, unchanged.
+- **CLOSED 2026-08-26 (finishing pass)**: the full 19-turn golden conversation specified
+  by four consecutive prior mega-prompts (open case → ... → briefing → switch case →
+  switch back → ambiguous reference → unauthorized case) was finally driven end to end
+  through the live CONSOLE via CDP — not curl. Found and fixed 4 real bugs (a stale
+  `active_person` surviving a case switch and blocking RAG-34's own clarification path
+  from ever firing; `EXPLAIN_REASONING`'s regex missing natural verb phrasing; `NEXT_STEPS`
+  missing a passive-voice keyword; a decided refusal still running generic search and
+  padding the Evidence rail — see RAG-35, `docs/VERITAS_HANDOFF.md`, and
+  `docs/screenshots/2026-08-26-golden-19turn/`). All 19 turns plus a Kannada follow-up
+  and an IO cross-station authorization check are now confirmed correct in a second,
+  post-fix live run. QuickML and PDF export were both re-checked directly against the
+  live AppSail configuration and a real `/export/pdf` call (not re-guessed) — both still
+  correctly BLOCKED, unchanged.
 
 - Full click-through of every UI control listed UNKNOWN in §1 — narrowed significantly
   this pass (UI-06/13/15/16/17/18/21/22/23/28/29 moved PARTIAL/UNKNOWN → VERIFIED via a
@@ -295,12 +304,13 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
   investigation (open FIR → case context → accused → priors → associates → why-these →
   similar cases → their geography → financial trail → what-supports-that → next steps →
   briefing), both via curl and via the real console through CDP. See RAG-24–33.
-- Ambiguous-name clarification (RAG-32) against a REAL tied name in the live dataset — the
-  logic is unit-tested, but no live query this pass happened to hit a genuine
-  `record_count` tie; worth trying a few more common first names next pass.
-- A populated `BRIEFING` path (RAG-29) against a multi-accused case — this pass verified it
-  live only against a single-accused case; the multi-accused draft-summary/leads
-  combination is unit-tested but not independently live-driven.
+- Ambiguous-name clarification (RAG-32) against a REAL tied NAME SEARCH in the live
+  dataset — the pronoun-side variant of this same mechanism now has a live 4-way-tie
+  proof (RAG-34, 2026-08-26 golden-conversation pass, turn 19); the original scope (a
+  plain name search hitting a tied `record_count`) still hasn't happened by chance.
+- ~~A populated `BRIEFING` path (RAG-29) against a multi-accused case~~ — **closed
+  2026-08-26 (finishing pass)**: the golden conversation's turn 15 exercised `BRIEFING`
+  against FIR 100050504202300018 (4 accused) live through the console.
 - Whether Aequitas fairness auditing (ML-12) is reachable from the live product at all,
   or exists purely as an offline analysis script — unchanged this pass, still by-design
   out-of-band per `serving.py`'s own docstring.
@@ -309,7 +319,9 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
   Copilot verification (UI-28) directly observed 5 distinct, non-templated MO-similarity
   explanations for the same crime type, which is positive evidence BUG-023's fix holds,
   though not a full re-audit of DATA-06 itself.
-- **BUG-026** (above) — a new finding this pass, not yet fixed.
+- `veritas_audit_verify`'s Cron job's own NEXT unattended fire, post-BUG-027 — the fix is
+  deployed and unit-tested; independently observing it succeed on its own 12h schedule
+  (rather than via a manual `sync=true` call) was not done this pass.
 
 These are named here so the next pass has a concrete, prioritized list rather than a
 vague "test everything" — continuing this audit means working down this list, not
