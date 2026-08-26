@@ -119,6 +119,29 @@ def test_pronoun_without_a_named_person_needs_the_focus_stack():
     assert has_unresolved_reference("does Ramesh have priors", named) is False
 
 
+def test_this_that_as_a_determiner_is_not_an_unresolved_person_pronoun():
+    """Found live 2026-08-26: 'How many gangs operate in THIS district?' contains no
+    PERSON entity and 'this' matched the pronoun regex unconditionally, so it was
+    treated as an unresolved person reference — with two people named in a recent
+    turn's citations, the district question was hijacked into 'which person do you
+    mean?'. 'this'/'that' immediately followed by an ordinary noun is a determiner
+    ('this district', 'that case'), not a stand-in for a person; only a bare
+    pronoun use ('tell me about this person', 'why is that') should still count."""
+    assert has_unresolved_reference("How many gangs operate in this district?", []) is False
+    assert has_unresolved_reference("Tell me about that case", []) is False
+    assert has_unresolved_reference("Tell me more about this person", []) is True
+    assert has_unresolved_reference("why is that", []) is True
+
+
+def test_go_back_to_an_earlier_case_refuses_instead_of_guessing():
+    """No case-history stack exists — SessionFocus keeps only the case currently in
+    view — so 'go back to the first case' used to score a bare CRIME_SEARCH on the
+    word 'case' and run a real semantic search over the literal phrase, returning
+    confidently-cited but unrelated records. Found live 2026-08-26."""
+    assert classify("Go back to the first case") == "CASE_REFERENCE_UNSUPPORTED"
+    assert classify("Can we return to the previous case?") == "CASE_REFERENCE_UNSUPPORTED"
+
+
 # --- citations ---------------------------------------------------------------
 
 def test_citations_are_1_based_and_aligned_to_evidence():
@@ -1577,6 +1600,53 @@ def test_a_bare_pronoun_with_no_recent_case_people_still_refuses_plainly():
     assert state.active_entities.active_person is None
     assert state.refusal_reason == ""
     assert state.ambiguous_candidates == []
+
+
+def test_a_district_question_with_recent_person_candidates_is_not_hijacked():
+    """Found live 2026-08-26: with two people named in the previous turn's citations
+    (exactly the state test_a_bare_pronoun_after_case_people_asks... sets up), a
+    question that merely happens to contain the word 'this' but names no person at
+    all — 'How many gangs operate in this district?' — was answered as an ambiguous
+    PERSON clarification instead of being classified and routed on its own terms."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="How many gangs operate in this district?")
+
+    prior = _prior_turn(citations=[
+        {"index": 1, "evidence_id": "accused:41", "label": "Usha Naika is accused..."},
+        {"index": 2, "evidence_id": "accused:877", "label": "Soom Nadkarni is accused..."},
+    ])
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: prior
+    try:
+        orch.node_orchestrate(state)
+    finally:
+        orch._last_turn = saved
+
+    assert state.refusal_reason == ""
+    assert state.ambiguous_candidates == []
+    assert state.intent != "PERSON_HISTORY"
+
+
+def test_case_reference_by_position_refuses_without_touching_the_active_case():
+    """'Go back to the first case' must refuse honestly rather than silently running
+    a generic search — and must leave whatever case was already open untouched, since
+    this turn named no new one."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Go back to the first case")
+    state.intent = "CASE_REFERENCE_UNSUPPORTED"
+    state.active_entities.active_fir = "9"          # a case is already open
+
+    orch.node_retrieve(state)
+
+    assert state.refusal_reason == "case_reference_unsupported"
+    assert state.active_entities.active_fir == "9"  # untouched
+    assert state.evidence_items == []
 
 
 # --- Focus persists what retrieval resolves, not only what orchestrate resolved ----

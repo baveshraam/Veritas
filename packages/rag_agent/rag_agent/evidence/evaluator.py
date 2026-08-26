@@ -190,6 +190,11 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "This question is about an open case, and none is open in this session: give "
         "me an FIR number, or open one first — then I can answer about it."
     ),
+    "case_reference_unsupported": (
+        "I do not keep an ordered history of every case opened this session — only "
+        "the one currently in view. Name the FIR number of the case you mean to "
+        "reopen it; the case you had open before this question is still open."
+    ),
     "nothing_prior": (
         "There is nothing earlier in this session to explain — this is the first "
         "answer, so there is no prior evidence or reasoning to point to yet."

@@ -231,6 +231,12 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _trace(state, "Orchestrator",
                "Question asks for an inference the records do not license", t0)
         return state
+    if state.intent == "CASE_REFERENCE_UNSUPPORTED":
+        state.refusal_reason = "case_reference_unsupported"
+        _trace(state, "Orchestrator",
+               "Question names a case by its position in this session, not by FIR "
+               "number — no case history is kept", t0)
+        return state
 
     # Meta-questions ABOUT the conversation itself ("why are you showing me this",
     # "what evidence supports that") read the PREVIOUS turn, not the record layer —

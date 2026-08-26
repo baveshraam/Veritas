@@ -121,8 +121,40 @@ _CASE_LOCATIONS = re.compile(
     r"\bwhere (are|were) (those|these|they)\b|\bwhich districts?\b.*\b(those|these|they)\b"
     r"|\bgeographically concentrated\b", re.I)
 
-# Third-person pronouns that must resolve against the session focus stack.
-_PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b", re.I)
+# "Go back to the first case" / "return to the previous case" names a case by its
+# position in this session's own history, not by FIR number or a fresh search term.
+# No case-history stack exists — SessionFocus keeps only the single case currently in
+# view — so this used to fall to a bare CRIME_SEARCH-shaped keyword score ("case"),
+# which ran a real semantic search over the literal words and confidently returned
+# citations for whatever the vector index happened to think "first case" resembled —
+# unrelated cases, cited and answered as if the request had been understood. Refusing
+# honestly (you cannot un-search a case you never named) is the correct answer; the
+# active case is left untouched, exactly as if this turn had not been asked.
+_CASE_REFERENCE_UNSUPPORTED = re.compile(
+    r"\b(go|switch|return|come|head)\s+back\s+to\s+(the\s+)?(first|previous|prior|"
+    r"earlier|last|original|other)\s+case\b"
+    r"|\b(return|switch)\s+to\s+(the\s+)?(first|previous|prior|earlier|last|original|"
+    r"other)\s+case\b"
+    r"|\bthe\s+(first|previous|prior|earlier|original)\s+case\s+(again|once more)\b",
+    re.I)
+
+# Third-person pronouns that must resolve against the session focus stack. Bare
+# "this"/"that" are ambiguous between a personal pronoun ("does *this* have priors" —
+# rare, but "tell me about this person" is common) and a determiner in front of an
+# ordinary noun ("this district", "that case"). Found live: "how many gangs operate in
+# THIS district" matched the pronoun and, with no active person but recent person
+# candidates in session, was answered as if it were an ambiguous PERSON question — a
+# district-scoped question hijacked into "which person do you mean". The determiner use
+# is what has a noun sitting immediately after it, so only exclude those.
+_DETERMINER_NOUN = (
+    r"district|case|fir|firs|record|records|question|evidence|report|reports|area|"
+    r"region|station|city|taluk|crime|hotspot|community|network|trail|gang|gangs|"
+    r"pattern|dataset|table|list|data|information|thing|answer"
+)
+_PRONOUNS = re.compile(
+    r"\b(he|him|his|she|her|hers|they|them|their|it|its)\b"
+    r"|\b(?:this|that)\b(?!\s+(?:" + _DETERMINER_NOUN + r")s?\b)",
+    re.I)
 
 
 def classify(query: str) -> str:
@@ -148,6 +180,8 @@ def classify(query: str) -> str:
         return "EVIDENCE_FOR"
     if _CASE_LOCATIONS.search(query or ""):
         return "CASE_LOCATIONS"
+    if _CASE_REFERENCE_UNSUPPORTED.search(query or ""):
+        return "CASE_REFERENCE_UNSUPPORTED"
     scores: dict[str, int] = {}
     for intent, (keywords, _) in INTENTS.items():
         hits = sum(1 for k in keywords if _KEYWORD_RE[k].search(q))

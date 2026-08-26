@@ -20,7 +20,18 @@ def detect_language(text: str) -> str:
 
 
 def to_english(text: str) -> tuple[str, str | None]:
-    """Kannada query -> English. Returns (text, note); text is unchanged on failure."""
+    """Kannada query -> English. Returns (text, note); text is unchanged on failure.
+
+    Catches any backend exception, not just TranslationUnavailable: a translation
+    model is a fluency layer, never the thing an answer's correctness depends on
+    (CLAUDE.md's rule for the LLM applies here too). Found live: a tokenizer-library
+    TypeError from inside the CTranslate2 backend propagated uncaught through this
+    function, past `to_english`'s own try/except (which only caught the one exception
+    type this module raises itself), and crashed the entire investigation turn — an
+    officer's Kannada query got a hard "the investigation engine failed" instead of an
+    English-language degrade. Whatever the backend raises, the query still has to be
+    answered.
+    """
     if not text or _detect(text) == "en":
         return text, None
     try:
@@ -28,6 +39,9 @@ def to_english(text: str) -> tuple[str, str | None]:
     except TranslationUnavailable as e:
         return text, (f"Kannada query could not be translated ({e}); "
                       f"answering from the original text.")
+    except Exception as e:                                    # noqa: BLE001
+        return text, (f"Kannada query could not be translated "
+                      f"({type(e).__name__}: {e}); answering from the original text.")
 
 
 def to_language(text: str, target: str) -> tuple[str, str | None]:
@@ -39,3 +53,6 @@ def to_language(text: str, target: str) -> tuple[str, str | None]:
     except TranslationUnavailable as e:
         return text, (f"[Answer shown in English — Kannada output needs a translation "
                       f"model: {e}]")
+    except Exception as e:                                    # noqa: BLE001
+        return text, (f"[Answer shown in English — Kannada translation failed "
+                      f"({type(e).__name__}): {e}]")
