@@ -102,6 +102,10 @@ class InvestigationState(BaseModel):
     # evidence.evaluator.REFUSAL_MESSAGES — "no evidence retrieved" and "you named no
     # subject to search for" are different facts and must not share a sentence.
     refusal_reason: str = ""
+    # Set only when a named person matches more than one record with no clear leader
+    # (tied record_count) — see node_orchestrate. Carries the candidate names so the
+    # clarification question can name them, without guessing which one was meant.
+    ambiguous_candidates: list[str] = Field(default_factory=list)
     agent_trace: list[AgentTraceEntry] = Field(default_factory=list)
 
     # Internal routing (not part of the API surface).

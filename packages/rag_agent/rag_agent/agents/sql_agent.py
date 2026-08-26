@@ -146,6 +146,25 @@ def cases_by_ids(fir_ids: list[str]) -> list[dict]:
     return [_case(r) for r in rows]
 
 
+def accused_on_case(fir_id: str) -> list[dict]:
+    """The people accused on this case, resolved to their cross-case identity.
+
+    Unscoped by station — the caller must confirm access to `fir_id` itself first
+    (e.g. via a scoped `fir_by_id`/`fir_by_number` call), the same discipline
+    `copilot.brief.generate_copilot_brief` already applies before reading this.
+    """
+    return ds.query(
+        'SELECT "vx_person"."PersonUID", "vx_person"."CanonicalName", '
+        '       "vx_person"."CommunityID", "vx_person"."GangAffiliation", '
+        '       "vx_person"."PageRank", "Accused"."AccusedName" '
+        'FROM "Accused" '
+        'JOIN "vx_accused_identity" '
+        '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
+        'JOIN "vx_person" '
+        '  ON "vx_accused_identity"."PersonUID" = "vx_person"."PersonUID" '
+        'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})
+
+
 def person_record(person_id: str) -> list[dict]:
     """Every case a person is accused in — the question the ER cannot answer by itself.
 

@@ -16,6 +16,7 @@ from data import ds, queries
 from data.vectors import hybrid_search
 from policy import can_view_fir, mask_person_fields, mask_person_name, max_traversal_depth
 
+from ..agents.sql_agent import accused_on_case as _accused_on_case
 from ..agents.sql_agent import fir_by_id
 from ..llm import available, generate
 from ..state import CopilotBrief
@@ -31,20 +32,6 @@ def _case(fir_id: str) -> dict | None:
     reported as nonexistent — exactly what GET /fir/{id} does."""
     rows = fir_by_id(fir_id, "SHO", "")
     return rows[0] if rows else None
-
-
-def _accused_on_case(fir_id: str) -> list[dict]:
-    """The people accused on this case, resolved to their cross-case identity."""
-    return ds.query(
-        'SELECT "vx_person"."PersonUID", "vx_person"."CanonicalName", '
-        '       "vx_person"."CommunityID", "vx_person"."GangAffiliation", '
-        '       "vx_person"."PageRank", "Accused"."AccusedName" '
-        'FROM "Accused" '
-        'JOIN "vx_accused_identity" '
-        '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
-        'JOIN "vx_person" '
-        '  ON "vx_accused_identity"."PersonUID" = "vx_person"."PersonUID" '
-        'WHERE "Accused"."CaseMasterID" = :cid', {"cid": int(fir_id)})
 
 
 def _timeline(fir_id: str, case: dict, officer_role: str) -> list[dict]:
@@ -148,7 +135,7 @@ def _explain_similarity(case: dict, candidate: dict, narrative_score: float) -> 
     return "; ".join(reasons), reasons
 
 
-def _similar_cases(case: dict, limit: int = 5) -> list[dict]:
+def similar_cases_for(case: dict, limit: int = 5) -> list[dict]:
     """Structurally-explained similarity: retrieval casts a wide net over the vector
     index (recall), but what is RETURNED is the structured reason two cases actually
     match, not the raw embedding score on its own (BUG-023/North-Star cross-case
@@ -184,7 +171,7 @@ def _similar_cases(case: dict, limit: int = 5) -> list[dict]:
     return candidates[:limit]
 
 
-def _leads(fir_id: str, officer_role: str) -> list[str]:
+def leads_for_case(fir_id: str, officer_role: str) -> list[str]:
     """Investigative leads for the accused on this case.
 
     DIRECT co-accused only — deliberately. At the 4-hop policy cap this would name most of
@@ -287,8 +274,8 @@ def generate_copilot_brief(fir_id: str, officer_role: str,
         raise NotPermitted(f"Case {fir_id} was filed at another police station")
 
     timeline = _timeline(fir_id, case, officer_role)
-    similar = _similar_cases(case)
-    leads = _leads(fir_id, officer_role)
+    similar = similar_cases_for(case)
+    leads = leads_for_case(fir_id, officer_role)
     return CopilotBrief(
         fir_id=fir_id,
         timeline=timeline,

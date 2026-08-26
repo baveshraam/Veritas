@@ -186,6 +186,19 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "charged; they do not nominate suspects, and I will not infer one. Ask about "
         "a named person, a case, or the people already recorded as accused on a case."
     ),
+    "no_case": (
+        "This question is about an open case, and none is open in this session: give "
+        "me an FIR number, or open one first — then I can answer about it."
+    ),
+    "nothing_prior": (
+        "There is nothing earlier in this session to explain — this is the first "
+        "answer, so there is no prior evidence or reasoning to point to yet."
+    ),
+    "ambiguous_person": (
+        "More than one person in the records matches that name equally well, and I "
+        "will not guess which one you mean — please say more (a case, a district, or "
+        "which one) to tell them apart."
+    ),
 }
 
 

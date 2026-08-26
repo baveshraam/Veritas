@@ -19,9 +19,10 @@ from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
     translation_agent, vector_agent, voice_agent,
 )
+from .copilot import brief as copilot_brief
 from .evidence.evaluator import evaluate, refusal_message, supporting
 from .retrieval import hipporag, tog
-from .state import AgentTraceEntry, EvidenceItem, InvestigationState
+from .state import AgentTraceEntry, Citation, EvidenceItem, InvestigationState
 
 # The two forms a FIR number takes in this system.
 #
@@ -44,7 +45,18 @@ _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
 # CRIME_SEARCH joins this set once it has produced its own exact count (below):
 # unlike PERSON_HISTORY/RISK/HOTSPOT/FORECAST, a counting question has one correct
 # number, and semantic neighbours cannot corroborate a count — they can only pad it.
-_SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {"CAUSAL", "CRIME_SEARCH"}
+_SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
+    "CAUSAL", "CRIME_SEARCH",
+    # The four case-scoped conversational intents (see intents.NEEDS_CASE) each
+    # produce their own complete answer once a case is open, for the same reason
+    # PERSON_NETWORK/FINANCIAL/etc. do: semantic neighbours of the case are not
+    # evidence for "what happened", "who's involved", "what next" or the briefing.
+    "CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
+    # Case-scoped SIMILAR_CASES (structured explanation, via the Copilot's own
+    # retrieval) settles the same way; context-free SIMILAR_CASES (no open case)
+    # produces no specialist output and still falls through to generic search.
+    "SIMILAR_CASES",
+}
 
 
 def _trace(state: InvestigationState, step: str, detail: str,
@@ -105,7 +117,19 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
     resolved_note = ""
     if named:
         hits = sql_agent.person_by_name(named)
-        if hits:
+        if hits and len(hits) > 1 and hits[0].get("record_count", 0) == hits[1].get("record_count", 0):
+            # Genuinely ambiguous: the top two matches are tied on the only signal
+            # used to rank them (record_count), so there is no principled leader to
+            # pick. Guessing would hand the officer someone else's record with
+            # nothing to indicate a substitution happened — the same failure mode
+            # the "no record for this name" branch below already refuses to risk.
+            # Asking is the honest answer; the candidates are named so it costs the
+            # officer one turn, not a search.
+            focus.active_person = None
+            state.refusal_reason = "ambiguous_person"
+            state.ambiguous_candidates = [h["name_en"] for h in hits[:4]]
+            resolved_note = f"'{named}' matches {len(hits)} people with no clear leader"
+        elif hits:
             # hits are ranked by record count; ambiguity is surfaced, not hidden —
             # several people really do share a name in this database.
             focus.active_person = str(hits[0]["person_id"])
@@ -175,6 +199,32 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _trace(state, "Orchestrator",
                "Question asks for an inference the records do not license", t0)
         return state
+
+    # Meta-questions ABOUT the conversation itself ("why are you showing me this",
+    # "what evidence supports that") read the PREVIOUS turn, not the record layer —
+    # running retrieval for them would search the index for the literal words "why"
+    # or "evidence" and answer from whatever it happened to find. node_synthesize
+    # does the actual work; this only routes the turn there untouched, the same way
+    # CAPABILITY routes above.
+    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR"):
+        state.refusal_reason = "meta"
+        _trace(state, "Orchestrator",
+               "Question is about the previous answer, not the records", t0)
+        return state
+
+    # "Where are those cases concentrated" names no subject of its own — "those" refers
+    # to whatever case list the previous turn showed (e.g. SIMILAR_CASES). This tallies
+    # districts over that specific list rather than running a fresh, unscoped HOTSPOT
+    # detection — HOTSPOT already owns "where are the crime hotspots" without a "those".
+    if state.intent == "CASE_LOCATIONS":
+        _handle_case_locations(state, t0)
+        return state
+
+    if state.intent in intents.NEEDS_CASE and not state.active_entities.active_fir and not state.refusal_reason:
+        state.refusal_reason = "no_case"
+        _trace(state, "Orchestrator",
+               f"{state.intent} needs an open case; none given", t0)
+        return state
     if state.intent in intents.NEEDS_SUBJECT and not pid and not state.refusal_reason:
         state.refusal_reason = "no_subject"
         _trace(state, "Orchestrator",
@@ -204,6 +254,17 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
                f"Beam-searched {len(paths)} reasoning path(s)", t1)
 
     state.evidence_items = _dedupe(state.evidence_items + evidence)
+
+    # node_orchestrate already persisted the focus it resolved BEFORE retrieval ran —
+    # but FIR_LOOKUP and CASE_PEOPLE (below) can resolve active_fir/active_person
+    # DURING retrieval, from what this turn's specialists find. Without persisting
+    # again here, that resolution lives only in this turn's response: the next turn
+    # reads session focus from storage and finds neither ever happened. This is what
+    # let "Open FIR X" followed by "What happened?" forget X was ever opened.
+    try:
+        upsert_session_focus(state.session_id, state.officer_id, state.active_entities)
+    except Exception:
+        pass
     return state
 
 
@@ -391,6 +452,116 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         _trace(state, "Prediction Agent (causal)",
                f"DoWhy backdoor adjustment on {factor}", t0)
 
+    # --- case-scoped conversational intents (intents.NEEDS_CASE) -----------------
+    #
+    # Each of these re-fetches the case through the SAME scoped query FIR_LOOKUP
+    # uses (sql_agent.fir_by_id, which applies the IO station filter exactly as
+    # policy.can_view_fir would). This is deliberate, not a redundant lookup: the
+    # NEEDS_CASE gate above already checked that active_fir was SET, but it was set
+    # by a FIR_LOOKUP that may have run under a different officer's scope if this
+    # session_id were ever reused by one — re-checking on every use, not trusting a
+    # scope check performed on some earlier turn, is what keeps conversation state
+    # from becoming an authorization bypass.
+    elif intent == "CASE_CONTEXT" and state.active_entities.active_fir:
+        rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        state.sql_query_results += rows
+        out += [EvidenceItem(
+            evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD", source_id=str(r["fir_id"]),
+            source_query="SELECT ... FROM CaseMaster WHERE CaseMasterID = :cid (the open case)",
+            content=_fir_content(r), confidence=0.97) for r in rows]
+        _trace(state, "SQL Agent (case context)",
+               f"{len(rows)} record(s) for the open case" if rows else
+               "the open case is no longer within policy scope", t0)
+
+    elif intent == "CASE_PEOPLE" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            accused = sql_agent.accused_on_case(state.active_entities.active_fir)
+            state.graph_query_results += [
+                {"person_id": a["PersonUID"], "name_en": a["CanonicalName"] or a["AccusedName"],
+                 "hops": 1, "pagerank": float(a["PageRank"] or 0.0)} for a in accused]
+            out += [EvidenceItem(
+                evidence_id=f"accused:{a['PersonUID']}", source_type="CRIMINAL_RECORD",
+                source_id=str(a["PersonUID"]),
+                source_query='"Accused" JOIN "vx_accused_identity" JOIN "vx_person" '
+                             'WHERE "CaseMasterID" = :cid',
+                content=(f"{a['CanonicalName'] or a['AccusedName']} is accused on this case"
+                         + (f" (network community {a['CommunityID']})"
+                            if a.get("CommunityID") is not None else "") + "."),
+                confidence=0.95) for a in accused]
+            # Exactly one accused: name the follow-up subject the way a named PERSON
+            # entity would, so "tell me about this person" resolves without asking.
+            # More than one: leave active_person unset — naming one of several would
+            # be the same unlicensed guess the ambiguous-name check above refuses to
+            # make, and the answer already lists names the officer can say back.
+            if len(accused) == 1:
+                state.active_entities.active_person = str(accused[0]["PersonUID"])
+            _trace(state, "SQL Agent (accused on case)",
+                   f"{len(accused)} accused person(s) on the open case", t0)
+        else:
+            _trace(state, "SQL Agent (accused on case)",
+                   "the open case is no longer within policy scope", t0)
+
+    elif intent == "SIMILAR_CASES" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            similar = copilot_brief.similar_cases_for(case_rows[0])
+            out += [EvidenceItem(
+                evidence_id=f"fir:{c['fir_id']}", source_type="FIR_RECORD",
+                source_id=str(c["fir_id"]),
+                source_query="hybrid_search over fir_narrative, ranked by structured overlap",
+                content=f"{_fir_content(c)} Similar because: {c['explanation']}.",
+                confidence=float(c["similarity"]), confidence_kind="similarity") for c in similar]
+            _trace(state, "Copilot (similar cases)",
+                   f"{len(similar)} structurally-explained match(es) for the open case", t0)
+
+    elif intent == "NEXT_STEPS" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            leads = copilot_brief.leads_for_case(state.active_entities.active_fir, role)
+            if leads:
+                out += [EvidenceItem(
+                    evidence_id=f"lead:{state.active_entities.active_fir}:{i}",
+                    source_type="COMMUNITY_SUMMARY", source_id=state.active_entities.active_fir,
+                    source_query="graph-derived investigative leads (direct co-accused only)",
+                    content=lead, confidence=0.85, authoritative=True)
+                    for i, lead in enumerate(leads)]
+            else:
+                out.append(EvidenceItem(
+                    evidence_id=f"lead:{state.active_entities.active_fir}:none",
+                    source_type="COMMUNITY_SUMMARY", source_id=state.active_entities.active_fir,
+                    source_query="graph-derived investigative leads (direct co-accused only)",
+                    content="No direct co-accused associates are recorded for anyone on this "
+                            "case, so there is no graph-derived lead to suggest beyond the "
+                            "case record itself — this is an absence in the network, not a "
+                            "failure to look.",
+                    confidence=0.9, authoritative=True))
+            _trace(state, "Copilot (leads)", f"{len(leads)} investigative lead(s)", t0)
+
+    elif intent == "BRIEFING" and state.active_entities.active_fir:
+        try:
+            b = copilot_brief.generate_copilot_brief(state.active_entities.active_fir, role, ps)
+            out.append(EvidenceItem(
+                evidence_id=f"briefing:{state.active_entities.active_fir}",
+                source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                source_query="Investigation Copilot brief (timeline + similar cases + leads)",
+                content=b.draft_summary, confidence=0.95, authoritative=True))
+            out += [EvidenceItem(
+                evidence_id=f"briefing_lead:{state.active_entities.active_fir}:{i}",
+                source_type="COMMUNITY_SUMMARY", source_id=state.active_entities.active_fir,
+                source_query="Investigation Copilot brief — investigative leads",
+                content=lead, confidence=0.85, authoritative=True)
+                for i, lead in enumerate(b.leads)]
+            _trace(state, "Copilot (briefing)",
+                   f"draft summary + {len(b.leads)} lead(s) + {len(b.timeline)} "
+                   f"timeline event(s)", t0)
+        except KeyError:
+            _trace(state, "Copilot (briefing)",
+                   "the open case is no longer found within policy scope", t0)
+        except copilot_brief.NotPermitted:
+            _trace(state, "Copilot (briefing)",
+                   "the open case is outside this officer's station scope", t0)
+
     # Vector search complements the graph on narrative/MO semantics — but not when a
     # specialist has already produced the whole answer. Two shapes of that:
     #
@@ -445,6 +616,98 @@ def _officer_ps(officer_id: str) -> str:
         return str(r["UnitID"]) if r else ""
     except Exception:
         return ""
+
+
+def _last_turn(session_id: str):
+    """The most recent stored turn for this session, or None for a first turn.
+
+    Backs the three meta-questions (EXPLAIN_REASONING, EVIDENCE_FOR, CASE_LOCATIONS)
+    that answer from what the PREVIOUS answer showed rather than from fresh
+    retrieval. A store hiccup degrades to "no prior turn" — the same "answer what
+    you can, refuse rather than guess" posture the rest of this module uses.
+    """
+    from data import get_conversation_history
+    try:
+        history = get_conversation_history(session_id)
+    except Exception:
+        return None
+    return history[-1] if history else None
+
+
+def _fir_ids_from_turn(prior) -> list[str]:
+    """The CaseMasterIDs cited by a stored turn — every citation whose evidence_id
+    follows the `fir:{id}` convention every FIR-producing branch in this module
+    already uses (FIR_LOOKUP, CRIME_SEARCH, CASE_CONTEXT, SIMILAR_CASES)."""
+    out = []
+    for c in prior.citations:
+        eid = c.get("evidence_id") or ""
+        if eid.startswith("fir:"):
+            out.append(eid.split(":", 1)[1])
+    return out
+
+
+def _handle_case_locations(state: InvestigationState, t0: float) -> None:
+    """'Where are those cases concentrated?' — a district tally over the FIRs the
+    PREVIOUS turn cited, re-checked against this officer's own policy scope before
+    being shown (a citation from an earlier turn is not itself a permission)."""
+    prior = _last_turn(state.session_id)
+    fir_ids = _fir_ids_from_turn(prior) if prior else []
+    if not fir_ids:
+        state.refusal_reason = "nothing_prior"
+        _trace(state, "Orchestrator", "No previous case list to locate geographically", t0)
+        return
+
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    rows = sql_agent.filter_viewable(sql_agent.cases_by_ids(fir_ids), role, ps)
+    if not rows:
+        state.refusal_reason = "nothing_prior"
+        _trace(state, "Orchestrator",
+               "The previously cited cases are no longer within policy scope", t0)
+        return
+
+    tally: dict[str, int] = {}
+    for r in rows:
+        d = r.get("district") or "district not recorded"
+        tally[d] = tally.get(d, 0) + 1
+    breakdown = "; ".join(f"{d} ({n})" for d, n in sorted(tally.items(), key=lambda kv: -kv[1]))
+
+    state.sql_query_results += rows
+    state.evidence_items = [EvidenceItem(
+        evidence_id="case_locations:summary", source_type="GEOSPATIAL_ANALYSIS",
+        source_id="none", source_query="district tally over the previously cited case list",
+        content=f"The {len(rows)} case(s) from the previous answer are concentrated in: "
+                f"{breakdown}.",
+        confidence=0.9, authoritative=True)]
+    _trace(state, "SQL Agent (case locations)",
+           f"{len(rows)} case(s) tallied across {len(tally)} district(s)", t0)
+
+
+def _reasoning_explanation(prior) -> str:
+    """'Why are you showing me these people?' — re-describe the previous turn's own
+    agent trace, which is already the plain-language explainability surface the
+    console's Reasoning Trace panel renders. Nothing new is inferred; this restates
+    what that turn already recorded about itself."""
+    steps = [t.get("detail") for t in prior.agent_trace if t.get("detail")]
+    n = len(prior.citations)
+    if steps:
+        return (f'The previous answer to "{prior.query}" was built from {n} cited '
+                f"record(s). How it got there: " + "; ".join(steps) + ".")
+    return (f'The previous answer to "{prior.query}" cited {n} record(s) directly '
+            f"relevant to that question.")
+
+
+def _evidence_explanation(prior) -> str:
+    """'What evidence supports that?' — the previous turn's own citation list, restated
+    plainly rather than re-run through retrieval (which would search the index for the
+    literal words 'what evidence supports that' and answer from whatever it found)."""
+    if not prior.citations:
+        return (f'The previous answer to "{prior.query}" carried no citations — it was '
+                f"either a refusal or a description of this tool's own capabilities, not "
+                f"a claim drawn from the records.")
+    lines = [f'The previous answer to "{prior.query}" is supported by:']
+    for c in prior.citations:
+        lines.append(f"  [{c.get('index')}] {c.get('label')}")
+    return "\n".join(lines)
 
 
 def _crime_type_from_query(query: str) -> str | None:
@@ -557,9 +820,51 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
                "Described this system's scope — no records were consulted", t0)
         return state
 
+    # Meta-questions about the PREVIOUS turn — see node_retrieve's "meta" short
+    # circuit. Answered here rather than there because the answer is built from
+    # storage, not from anything node_retrieve/node_evaluate compute.
+    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR"):
+        prior = _last_turn(state.session_id)
+        if not prior:
+            answer = refusal_message("nothing_prior")
+            note = None
+            if state.language != "en":
+                answer, note = translation_agent.to_language(answer, state.language)
+            if note:
+                answer = f"{answer}\n\n{note}"
+            state.final_answer = answer
+            state.citations = []
+            state.evidence_items = []
+            _trace(state, "Synthesis", "Refused to answer — nothing_prior", t0)
+            return state
+
+        answer = (_reasoning_explanation(prior) if state.intent == "EXPLAIN_REASONING"
+                 else _evidence_explanation(prior))
+        note = None
+        if state.language != "en":
+            answer, note = translation_agent.to_language(answer, state.language)
+        if note:
+            answer = f"{answer}\n\n{note}"
+        state.final_answer = answer
+        # Re-show the same citations the previous turn had — the officer asked what
+        # backs THAT answer, not for a new one. evidence_items round-trips only when
+        # the stored turn wasn't truncated (sessions._pack sheds it first under the
+        # Data Store text-column cap); citations always survive, so they always show.
+        state.citations = [Citation(**c) for c in prior.citations]
+        state.evidence_items = [EvidenceItem(**e) for e in prior.evidence_items]
+        _trace(state, "Synthesis",
+               f"Explained the previous turn ({len(prior.citations)} citation(s))", t0)
+        return state
+
     if state.requires_escalation:
         reason = state.refusal_reason or "no_evidence"
-        answer = refusal_message(reason)
+        if reason == "ambiguous_person" and state.ambiguous_candidates:
+            names = ", ".join(state.ambiguous_candidates)
+            answer = (f"More than one person named in this question matches equally well: "
+                      f"{names}. I will not guess which one you mean — say which one, or add "
+                      f"a case number or district to tell them apart.")
+        else:
+            answer = refusal_message(reason)
         note = None
         if state.language != "en":
             answer, note = translation_agent.to_language(answer, state.language)

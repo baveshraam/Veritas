@@ -10,6 +10,7 @@ from rag_agent.agents.synthesis_agent import build_citations
 from rag_agent.evidence.evaluator import (
     ACCEPT_THRESHOLD, NOT_FOUND_MESSAGE, evaluate, score_batch,
 )
+import rag_agent.intents as intents_mod
 from rag_agent.intents import classify, has_unresolved_reference, visualization_for
 from rag_agent.state import EvidenceItem
 
@@ -960,6 +961,512 @@ def test_vector_search_is_skipped_once_a_relational_specialist_settles_the_quest
 
         assert called == [], f"{intent}: vector search ran despite a settled specialist answer"
         assert out, f"{intent}: specialist produced no evidence at all"
+
+
+# --- Conversational architecture pass: case-scoped follow-ups, meta-questions,
+# ambiguous names, and the focus-persistence gap that made them all forgettable ----
+#
+# The engine already carried a session focus (active_person/active_fir/active_location,
+# see data.models.SessionFocus) across turns, but two things undercut it: (1) nothing
+# ever answered a follow-up ABOUT the open case itself ("what happened", "who's
+# involved", "what next", "prepare the briefing") or ABOUT the previous answer ("why
+# these", "what evidence"), so those turns fell through to a literal-text vector search
+# that could not possibly be about either; and (2) whatever FIR_LOOKUP resolved into
+# active_fir during node_retrieve was never persisted — only the focus resolved BEFORE
+# retrieval (in node_orchestrate) was saved. "Open FIR X" then "What happened?" forgot
+# X the moment the second turn asked for the session's saved focus.
+
+def test_transactions_plural_is_recognised_as_financial():
+    """FINANCIAL had 'transaction' but not 'transactions' — the word-boundary regex
+    does not treat a plural as a substring match, so 'what transactions look unusual'
+    matched no FINANCIAL keyword at all."""
+    assert classify("What transactions look unusual?") == "FINANCIAL"
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("What happened here?", "CASE_CONTEXT"),
+    ("Tell me about this case", "CASE_CONTEXT"),
+    ("Who are the key people in this case?", "CASE_PEOPLE"),
+    ("Who is involved?", "CASE_PEOPLE"),
+    ("What should I investigate next?", "NEXT_STEPS"),
+    ("Prepare the briefing", "BRIEFING"),
+    ("Draft the case diary", "BRIEFING"),
+    # These three each contain a word ("why"/"where") that an unrelated topic intent
+    # already keys on (CAUSAL, HOTSPOT) — the regressions this session most wanted to
+    # avoid re-introducing while adding meta-questions.
+    ("Why are you showing me these people?", "EXPLAIN_REASONING"),
+    ("What evidence supports that?", "EVIDENCE_FOR"),
+    ("Where are those cases concentrated?", "CASE_LOCATIONS"),
+    # Ordinary questions using the same words must still route where they always did.
+    ("Why does crime correlate with literacy?", "CAUSAL"),
+    ("Show me crime hotspots", "HOTSPOT"),
+    ("theft hotspots in Bengaluru Urban", "HOTSPOT"),
+])
+def test_conversational_followup_intents_do_not_collide_with_existing_ones(query, expected):
+    assert classify(query) == expected
+
+
+def test_needs_case_intents_refuse_without_an_open_case():
+    """Symmetric to NEEDS_SUBJECT: asked cold, these four have nothing to read."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    for intent in sorted(intents_mod.NEEDS_CASE):
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="irrelevant text")
+        state.intent = intent
+        called = []
+        saved = orch.vector_agent.search
+        orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+        try:
+            orch.node_retrieve(state)
+        finally:
+            orch.vector_agent.search = saved
+
+        assert state.refusal_reason == "no_case", intent
+        assert called == [], f"{intent} searched the index with no case open"
+
+
+def test_case_context_answers_from_the_open_case():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What happened?")
+    state.intent = "CASE_CONTEXT"
+    state.active_entities.active_fir = "9"
+
+    row = _row(fir_id="9")
+    saved = (orch.sql_agent.fir_by_id, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [row]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.sql_agent.fir_by_id, orch._officer_ps = saved
+
+    assert [e.evidence_id for e in out] == ["fir:9"]
+    assert "Hurt" in out[0].content
+
+
+def test_case_people_lists_the_accused_and_resolves_a_single_one_as_active_person():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Who are the key people in this case?")
+    state.intent = "CASE_PEOPLE"
+    state.active_entities.active_fir = "9"
+
+    accused = [{"PersonUID": 803, "CanonicalName": "Usha Naika", "AccusedName": "Usha Naika",
+               "CommunityID": 4, "GangAffiliation": None, "PageRank": 0.01}]
+    saved = (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [_row(fir_id="9")]
+    orch.sql_agent.accused_on_case = lambda fid: accused
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case,
+         orch._officer_ps) = saved
+
+    assert [e.evidence_id for e in out] == ["accused:803"]
+    assert "Usha Naika" in out[0].content
+    assert state.active_entities.active_person == "803"
+
+
+def test_case_people_leaves_active_person_unset_when_several_are_accused():
+    """Naming ONE of several accused as 'the' subject would be the same unlicensed
+    guess the ambiguous-name check refuses to make for a searched name."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Who are the key people in this case?")
+    state.intent = "CASE_PEOPLE"
+    state.active_entities.active_fir = "9"
+
+    accused = [
+        {"PersonUID": 1, "CanonicalName": "A", "AccusedName": "A", "CommunityID": None,
+         "GangAffiliation": None, "PageRank": 0.0},
+        {"PersonUID": 2, "CanonicalName": "B", "AccusedName": "B", "CommunityID": None,
+         "GangAffiliation": None, "PageRank": 0.0},
+    ]
+    saved = (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [_row(fir_id="9")]
+    orch.sql_agent.accused_on_case = lambda fid: accused
+    orch._officer_ps = lambda _oid: ""
+    try:
+        orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case,
+         orch._officer_ps) = saved
+
+    assert state.active_entities.active_person is None
+
+
+def test_case_scoped_intents_refuse_rather_than_leak_a_case_outside_officer_scope():
+    """The authorization requirement: active_fir being SET does not itself grant
+    access — every case-scoped branch re-checks scope through the same station-
+    filtered query FIR_LOOKUP uses, on every turn, not only when the FIR was first
+    opened. Simulated here as the scoped fetch coming back empty (station mismatch),
+    the same signal a real IO-vs-other-station mismatch produces."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    for intent in ("CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS"):
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IO",
+                                   original_query="irrelevant text")
+        state.intent = intent
+        state.active_entities.active_fir = "9"
+
+        called = []
+        saved = (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case,
+                 orch.copilot_brief.leads_for_case, orch.vector_agent.search, orch._officer_ps)
+        orch.sql_agent.fir_by_id = lambda *a, **k: []          # outside this IO's station
+        orch.sql_agent.accused_on_case = lambda fid: (called.append(1), [])[1]
+        orch.copilot_brief.leads_for_case = lambda *a, **k: (called.append(1), [])[1]
+        orch.vector_agent.search = lambda *a, **k: ([], [])
+        orch._officer_ps = lambda _oid: "1201"
+        try:
+            out = orch._run_specialists(state, widen=False)
+        finally:
+            (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case,
+             orch.copilot_brief.leads_for_case, orch.vector_agent.search,
+             orch._officer_ps) = saved
+
+        assert called == [], f"{intent} read case data despite the scoped fetch finding nothing"
+        assert out == [], intent
+
+
+def test_similar_cases_uses_the_open_case_and_settles_without_generic_search():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Are there similar cases?")
+    state.intent = "SIMILAR_CASES"
+    state.active_entities.active_fir = "9"
+
+    candidate = {**_row(fir_id="10"), "similarity": 0.71,
+                "explanation": "same crime type (Hurt); same district (Mandya)"}
+    called = []
+    saved = (orch.sql_agent.fir_by_id, orch.copilot_brief.similar_cases_for,
+            orch.vector_agent.search, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [_row(fir_id="9")]
+    orch.copilot_brief.similar_cases_for = lambda case, limit=5: [candidate]
+    orch.vector_agent.search = lambda *a, **k: (called.append(1), ([], []))[1]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        (orch.sql_agent.fir_by_id, orch.copilot_brief.similar_cases_for,
+         orch.vector_agent.search, orch._officer_ps) = saved
+
+    assert called == [], "generic vector search ran despite a case-scoped similar-cases answer"
+    assert len(out) == 1
+    assert out[0].confidence_kind == "similarity"
+    assert "same crime type" in out[0].content
+
+
+def test_next_steps_states_leads_as_authoritative():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What should I investigate next?")
+    state.intent = "NEXT_STEPS"
+    state.active_entities.active_fir = "9"
+
+    saved = (orch.sql_agent.fir_by_id, orch.copilot_brief.leads_for_case, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [_row(fir_id="9")]
+    orch.copilot_brief.leads_for_case = lambda *a, **k: ["Pull the prior files on X."]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.sql_agent.fir_by_id, orch.copilot_brief.leads_for_case, orch._officer_ps = saved
+
+    assert len(out) == 1
+    assert out[0].authoritative is True
+    assert "Pull the prior files" in out[0].content
+
+
+def test_briefing_uses_the_copilot_draft_and_leads():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Prepare the briefing")
+    state.intent = "BRIEFING"
+    state.active_entities.active_fir = "9"
+
+    from rag_agent.state import CopilotBrief
+    brief = CopilotBrief(fir_id="9", timeline=[{"date": "2026-01-01", "event": "x"}],
+                         similar_cases=[], leads=["Interview the co-accused."],
+                         draft_summary="FIR 9, Hurt, registered ... Under Investigation.")
+    saved = orch.copilot_brief.generate_copilot_brief
+    orch.copilot_brief.generate_copilot_brief = lambda *a, **k: brief
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.copilot_brief.generate_copilot_brief = saved
+
+    assert any(e.content == brief.draft_summary for e in out)
+    assert any("Interview the co-accused" in e.content for e in out)
+    assert all(e.authoritative for e in out)
+
+
+def test_briefing_refuses_gracefully_when_not_permitted():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IO",
+                               original_query="Prepare the briefing")
+    state.intent = "BRIEFING"
+    state.active_entities.active_fir = "9"
+
+    def deny(*a, **k):
+        raise orch.copilot_brief.NotPermitted("wrong station")
+
+    saved = (orch.copilot_brief.generate_copilot_brief, orch.vector_agent.search)
+    orch.copilot_brief.generate_copilot_brief = deny
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        orch.copilot_brief.generate_copilot_brief, orch.vector_agent.search = saved
+
+    assert out == []      # no leak, no crash — the trace records why, the answer stays empty
+
+
+# --- Meta-questions about the previous turn -----------------------------------
+
+def _prior_turn(**over):
+    from data import ConversationTurn
+    from datetime import datetime, timezone
+    base = dict(
+        turn_index=0, query="Does Usha Naika have priors?", language="en",
+        final_answer="...", citations=[{"index": 1, "evidence_id": "fir:9", "label": "FIR 9 ..."}],
+        evidence_items=[{"evidence_id": "fir:9", "source_type": "FIR_RECORD", "source_id": "9",
+                         "source_query": "q", "content": "FIR 9, Hurt.", "confidence": 0.95,
+                         "authoritative": False, "confidence_kind": "support",
+                         "timestamp": datetime.now(timezone.utc).isoformat()}],
+        visualization={"kind": "none", "data": {}},
+        agent_trace=[{"step": "SQL Agent", "detail": "1 criminal-record row(s)",
+                     "duration_ms": 5, "confidence": None}],
+        created_at=datetime.now(timezone.utc))
+    base.update(over)
+    return ConversationTurn(**base)
+
+
+def test_explain_reasoning_restates_the_previous_trace():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Why are you showing me these people?")
+    state.intent = "EXPLAIN_REASONING"
+
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: _prior_turn()
+    try:
+        orch.node_retrieve(state)
+        orch.node_evaluate(state)
+        orch.node_synthesize(state)
+    finally:
+        orch._last_turn = saved
+
+    assert "criminal-record row" in state.final_answer
+    assert len(state.citations) == 1
+
+
+def test_evidence_for_restates_the_previous_citations():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What evidence supports that?")
+    state.intent = "EVIDENCE_FOR"
+
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: _prior_turn()
+    try:
+        orch.node_retrieve(state)
+        orch.node_evaluate(state)
+        orch.node_synthesize(state)
+    finally:
+        orch._last_turn = saved
+
+    assert "[1]" in state.final_answer
+    assert state.citations[0].evidence_id == "fir:9"
+    assert state.evidence_items[0].evidence_id == "fir:9"
+
+
+@pytest.mark.parametrize("intent", ["EXPLAIN_REASONING", "EVIDENCE_FOR"])
+def test_meta_questions_refuse_honestly_on_a_first_turn(intent):
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="why is that")
+    state.intent = intent
+
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: None
+    try:
+        orch.node_retrieve(state)
+        orch.node_evaluate(state)
+        orch.node_synthesize(state)
+    finally:
+        orch._last_turn = saved
+
+    assert state.citations == []
+    assert "nothing" in state.final_answer.lower() or "first" in state.final_answer.lower()
+
+
+def test_case_locations_tallies_districts_from_the_previous_turns_fir_citations():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Where are those cases concentrated?")
+    state.intent = "CASE_LOCATIONS"
+
+    prior = _prior_turn(citations=[{"index": 1, "evidence_id": "fir:9", "label": "x"},
+                                   {"index": 2, "evidence_id": "fir:10", "label": "y"}])
+    rows = [_row(fir_id="9", district="Mandya"), _row(fir_id="10", district="Mandya")]
+    saved = (orch._last_turn, orch.sql_agent.cases_by_ids, orch.sql_agent.filter_viewable)
+    orch._last_turn = lambda sid: prior
+    orch.sql_agent.cases_by_ids = lambda ids: rows
+    orch.sql_agent.filter_viewable = lambda rows, role, ps: rows
+    try:
+        orch.node_retrieve(state)
+    finally:
+        (orch._last_turn, orch.sql_agent.cases_by_ids,
+         orch.sql_agent.filter_viewable) = saved
+
+    assert state.refusal_reason == ""
+    assert len(state.evidence_items) == 1
+    assert "Mandya (2)" in state.evidence_items[0].content
+    assert state.evidence_items[0].authoritative is True
+
+
+def test_case_locations_refuses_when_nothing_prior_named_a_case():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Where are those cases concentrated?")
+    state.intent = "CASE_LOCATIONS"
+
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: None
+    try:
+        orch.node_retrieve(state)
+    finally:
+        orch._last_turn = saved
+
+    assert state.refusal_reason == "nothing_prior"
+
+
+# --- Ambiguous names: ask, don't guess ----------------------------------------
+
+def test_an_ambiguous_name_asks_instead_of_guessing():
+    """Two people share a name with no clear leader by record count — the engine
+    must not silently pick one, the same discipline it already applies to a name
+    matching nobody at all."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does Ramesh have priors?")
+
+    tied = [{"person_id": "1", "name_en": "Ramesh Gowda", "record_count": 2},
+           {"person_id": "2", "name_en": "Ramesh Kumar", "record_count": 2}]
+    saved = orch.sql_agent.person_by_name
+    orch.sql_agent.person_by_name = lambda *a, **k: tied
+    try:
+        orch.node_orchestrate(state)
+    finally:
+        orch.sql_agent.person_by_name = saved
+
+    assert state.active_entities.active_person is None
+    assert state.refusal_reason == "ambiguous_person"
+    assert set(state.ambiguous_candidates) == {"Ramesh Gowda", "Ramesh Kumar"}
+
+
+def test_a_clear_leader_is_still_resolved_automatically():
+    """The fix must not swing the other way: a real, non-tied leader still resolves
+    without asking — this is what makes 'Does Usha Naika have priors' work at all."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does Usha Naika have priors?")
+
+    ranked = [{"person_id": "803", "name_en": "Usha Naika", "record_count": 12},
+             {"person_id": "999", "name_en": "Usha N.", "record_count": 1}]
+    saved = orch.sql_agent.person_by_name
+    orch.sql_agent.person_by_name = lambda *a, **k: ranked
+    try:
+        orch.node_orchestrate(state)
+    finally:
+        orch.sql_agent.person_by_name = saved
+
+    assert state.active_entities.active_person == "803"
+    assert state.refusal_reason == ""
+
+
+def test_the_ambiguous_person_answer_names_the_candidates():
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does Ramesh have priors?")
+    state.refusal_reason = "ambiguous_person"
+    state.requires_escalation = True
+    state.ambiguous_candidates = ["Ramesh Gowda", "Ramesh Kumar"]
+
+    orch.node_synthesize(state)
+
+    assert "Ramesh Gowda" in state.final_answer and "Ramesh Kumar" in state.final_answer
+    assert state.citations == []
+
+
+# --- Focus persists what retrieval resolves, not only what orchestrate resolved ----
+
+def test_fir_lookup_persists_the_case_it_opens_for_the_next_turn():
+    """BUG-level regression: node_orchestrate persists focus BEFORE retrieval runs,
+    but FIR_LOOKUP resolves active_fir DURING retrieval. Without a second write,
+    'Open FIR X' followed one turn later by 'What happened?' would find no case ever
+    opened — the resolution lived only in this turn's in-memory response."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What is the status of FIR 100222201202600022?")
+    state.intent = "FIR_LOOKUP"
+
+    hit = {"fir_id": "9", "fir_number": "100222201202600022", "ps_code": "1",
+           "district": "Mandya", "crime_type": "Hurt", "date_filed": "2026-06-30",
+           "case_status": "Under Investigation", "narrative": "n"}
+    persisted = []
+    saved = (orch.sql_agent.fir_by_number, orch.vector_agent.search, orch._officer_ps,
+             orch.upsert_session_focus)
+    orch.sql_agent.fir_by_number = lambda *a, **k: [hit]
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    orch._officer_ps = lambda _oid: ""
+    orch.upsert_session_focus = lambda sid, oid, focus: persisted.append(focus.model_copy())
+    try:
+        orch.node_retrieve(state)
+    finally:
+        (orch.sql_agent.fir_by_number, orch.vector_agent.search, orch._officer_ps,
+         orch.upsert_session_focus) = saved
+
+    assert persisted, "session focus was never (re-)persisted after retrieval"
+    assert persisted[-1].active_fir == "9", (
+        "the FIR resolved during retrieval must be in the LAST persisted focus")
 
 
 def test_person_history_and_hotspot_still_get_vector_corroboration():

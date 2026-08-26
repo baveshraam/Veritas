@@ -19,8 +19,9 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
                            "alias", "same person", "duplicate"), "network"),
     "PERSON_NETWORK":    (("associate", "associates", "network", "gang", "accomplice",
                            "co-accused", "linked to", "connections", "who does he work"), "network"),
-    "FINANCIAL":         (("money", "transaction", "account", "transfer", "laundering",
-                           "financial", "payment", "funds", "money trail"), "sankey"),
+    "FINANCIAL":         (("money", "transaction", "transactions", "account", "transfer",
+                           "laundering", "financial", "payment", "funds", "money trail"),
+                          "sankey"),
     "HOTSPOT":           (("hotspot", "hotspots", "where", "map", "cluster", "area",
                            "location of crime", "crime map"), "map"),
     "FORECAST":          (("forecast", "predict", "next month", "next week", "expect",
@@ -34,6 +35,22 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "CRIME_SEARCH":      (("show", "list", "find", "cases", "firs", "how many",
                            "count", "theft", "murder", "robbery"), "none"),
     "FIR_LOOKUP":        (("fir", "case number", "case details", "status of"), "none"),
+    # The four conversational-follow-up intents below all read the *open case*
+    # (SessionFocus.active_fir), not a named subject — see NEEDS_CASE. They exist
+    # because a real investigation talks ABOUT a case once it's open ("what
+    # happened", "who's involved", "what should I do next", "draft the briefing"),
+    # not only about a named person or a raw record lookup.
+    "CASE_CONTEXT":      (("what happened", "tell me about this case", "case summary",
+                           "summarize this case", "summarise this case",
+                           "brief facts"), "none"),
+    "CASE_PEOPLE":        (("key people", "who is involved", "who's involved",
+                           "people involved", "who are the accused",
+                           "who are the people"), "network"),
+    "NEXT_STEPS":        (("investigate next", "next steps", "what should i do",
+                           "what should i focus", "what should i pursue"), "none"),
+    "BRIEFING":          (("prepare the briefing", "prepare a briefing", "case diary",
+                           "draft summary", "draft the summary", "prepare the report",
+                           "prepare a report"), "none"),
 }
 
 # Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
@@ -50,6 +67,12 @@ _KEYWORD_RE = {
 # "check whether the record exists in the system" — which is not why it failed. The
 # orchestrator short-circuits these instead, and says which subject is missing.
 NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK"}
+
+# Intents that talk ABOUT the open case rather than a named person — meaningless
+# without one. "What happened", "who's involved", "what should I investigate next"
+# and "prepare the briefing" all assume a case is already in view (SessionFocus.
+# active_fir); asked cold, they'd have nothing to read and nothing to say.
+NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING"}
 
 # Questions asking the system to nominate a suspect. The records hold who was accused,
 # arrested and charged; they do not hold who "could be" guilty, and inferring it is the
@@ -71,6 +94,25 @@ _CAPABILITY = re.compile(
     r"|what (kind|sort|type)s? of (question|quer)"
     r"|what are (you|your capabilit)|how do i use)", re.I)
 
+# Three more "shape, not topic" questions — meta-questions ABOUT the conversation
+# itself, asked about whatever the previous turn showed. All three read the *last
+# turn's own record*, not the retrieval layer, so they must be pulled out before
+# keyword scoring the same way CAPABILITY and NOT_INFERABLE already are:
+#   - "why are you showing me these people" contains "why", which would otherwise
+#     score CAUSAL (a question about crime *causation*, not about the answer itself).
+#   - "where are those cases concentrated" contains "where", which would otherwise
+#     score HOTSPOT (a fresh cluster-detection query, not "explain the last answer").
+_EXPLAIN_REASONING = re.compile(
+    r"\bwhy (are|were|did) you (show|showing|shown|tell|telling|told|say|said|include)"
+    r"|\bwhy (is|are|was|were) (this|these|that|those) (relevant|shown|here|important)\b",
+    re.I)
+_EVIDENCE_FOR = re.compile(
+    r"\bwhat evidence\b|\bhow do you know\b|\bwhat supports (this|that)\b"
+    r"|\bsource for (this|that)\b|\bbasis for (this|that)\b|\bprove (this|that)\b", re.I)
+_CASE_LOCATIONS = re.compile(
+    r"\bwhere (are|were) (those|these|they)\b|\bwhich districts?\b.*\b(those|these|they)\b"
+    r"|\bgeographically concentrated\b", re.I)
+
 # Third-person pronouns that must resolve against the session focus stack.
 _PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|they|them|their|it|its|this|that)\b", re.I)
 
@@ -78,17 +120,26 @@ _PRONOUNS = re.compile(r"\b(he|him|his|she|her|hers|they|them|their|it|its|this|
 def classify(query: str) -> str:
     """Highest-scoring intent by keyword hits; UNKNOWN if nothing matches.
 
-    The two regex branches run first because they are about the *shape* of the question,
+    The regex branches run first because they are about the *shape* of the question,
     not its topic. "who could be the suspect" contains no keyword that routes it
     anywhere useful, and "what all could you answer" scores CRIME_SEARCH on the bare
     word "answer" sitting near "cases" — both then ran the full retrieval pipeline and
-    refused with a message about records that were never the problem.
+    refused with a message about records that were never the problem. The three
+    conversational-meta patterns (why/evidence/where-those) are the same shape of
+    problem one layer up: each contains a common word ("why", "where") that would
+    otherwise be captured by an unrelated topic intent (CAUSAL, HOTSPOT).
     """
     q = (query or "").lower()
     if _CAPABILITY.search(query or ""):
         return "CAPABILITY"
     if _NOT_INFERABLE.search(query or ""):
         return "NOT_INFERABLE"
+    if _EXPLAIN_REASONING.search(query or ""):
+        return "EXPLAIN_REASONING"
+    if _EVIDENCE_FOR.search(query or ""):
+        return "EVIDENCE_FOR"
+    if _CASE_LOCATIONS.search(query or ""):
+        return "CASE_LOCATIONS"
     scores: dict[str, int] = {}
     for intent, (keywords, _) in INTENTS.items():
         hits = sum(1 for k in keywords if _KEYWORD_RE[k].search(q))
@@ -109,7 +160,14 @@ def classify(query: str) -> str:
     return "CRIME_SEARCH"
 
 
+# Not in INTENTS: these three are matched by regex before keyword scoring runs
+# (see classify()), so they carry no keyword tuple to read a visualization kind from.
+_EXTRA_VISUALIZATION = {"CASE_LOCATIONS": "map"}
+
+
 def visualization_for(intent: str) -> str:
+    if intent in _EXTRA_VISUALIZATION:
+        return _EXTRA_VISUALIZATION[intent]
     return INTENTS.get(intent, ((), "none"))[1]
 
 
