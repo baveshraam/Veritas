@@ -128,14 +128,41 @@ def count_firs(officer_role: str, officer_ps_code: str,
     return len(rows)
 
 
+def cases_by_ids(fir_ids: list[str]) -> list[dict]:
+    """Fully-joined case cards (crime type, status, district — the shape `_case()` needs)
+    for a caller that already resolved a list of CaseMasterIDs some other way.
+
+    Exists because ZCQL caps joins at 4, and `_CASE_SELECT` already spends all 4 getting
+    from `CaseMaster` to `District`/`CrimeSubHead`/`CaseStatusMaster`. A caller whose own
+    lookup already used up its join budget getting to a case id (e.g. `person_record`,
+    via `vx_accused_identity` -> `Accused` -> `CaseMaster` -> `Unit`) can't add three more
+    joins to the same query — it fetches ids there, then the descriptive fields here, as
+    two queries each within the cap rather than one query over it.
+    """
+    if not fir_ids:
+        return []
+    rows = ds.query(f'{_CASE_SELECT} WHERE "CaseMaster"."CaseMasterID" IN :ids',
+                    {"ids": [int(i) for i in fir_ids]})
+    return [_case(r) for r in rows]
+
+
 def person_record(person_id: str) -> list[dict]:
     """Every case a person is accused in — the question the ER cannot answer by itself.
 
     `Accused` rows are per-case; nothing in the organizers' schema says two of them are the
     same man. This goes through `vx_accused_identity`, which is what Fellegi-Sunter
     reconstructed, so "does he have priors" has an answer at all.
+
+    BUG-028: this used to run `_case()` straight over `queries.cases_for_person()`'s own
+    rows, which carry only `CrimeMinorHeadID`/`CaseStatusID` (raw foreign keys) — that
+    query's own join budget is already spent reaching `vx_accused_identity` ->
+    `Accused` -> `CaseMaster` -> `Unit`, with no room left for the three more joins
+    `_case()` actually needs. Every "does X have priors" answer rendered "crime type not
+    recorded" / "status not recorded" for every case, live, in production. Fixed by
+    fetching ids first, then the fully-joined cards via `cases_by_ids` above.
     """
-    return [_case(r) for r in queries.cases_for_person(int(person_id))]
+    ids = [str(r["CaseMasterID"]) for r in queries.cases_for_person(int(person_id))]
+    return cases_by_ids(ids)
 
 
 def person_by_name(name: str) -> list[dict]:
