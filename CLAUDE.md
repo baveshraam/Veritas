@@ -9,7 +9,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 317 green (`pytest --collect-only -q` for the current
+- **Tests**: `python -m pytest` — 354 green (`pytest --collect-only -q` for the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -847,3 +847,60 @@ volume justifies the training cost.
   - Created `docs/VERITAS_HANDOFF.md` and `docs/WORK_LOG.md` (neither existed before this
     pass) so a future session has an operational pointer instead of needing to
     reconstruct state from this changelog in full.
+- **v14 (map made investigator-grade + a real conversational gap found and closed) —
+  a "final product pass" prompt named the map a launch-blocking defect; verified that
+  by inspection first, then fixed the actual root cause rather than the symptom.**
+  - **The map's Phase-4 "district labels + scale" fix (v13-era, §QA UI-24) only held
+    for a broad, spread-out query.** `MapView.tsx`'s `fitBounds({maxZoom: 11})` zoomed
+    a TIGHT cluster (a handful of FIRs in one taluk — exactly what a case-scoped
+    `CASE_LOCATIONS` follow-up produces) in so far that every neighbouring district
+    dot/label fell outside the viewport, leaving one label floating in an otherwise
+    blank dark canvas — confirmed against the already-committed
+    `docs/screenshots/2026-08-26-conversational-architecture/06-case-locations-map.png`
+    before touching any code, per this pass's own instruction not to fix what wasn't
+    first inspected. No legend existed anywhere, so an officer had no way to tell an
+    exact FIR point from a modeled hotspot-density region either.
+  - **Fixed**: `maxZoom` capped at 9 (a tight cluster now keeps a ~150-250km window,
+    several neighbouring districts stay in frame regardless of how tight the points
+    are); a legend added (amber dot = individual cited FIR, green→amber→red ramp =
+    hotspot density); hotspot fill/line opacity raised (0.26→0.4) so the aggregate
+    region reads as distinct from the points inside it where large enough to render.
+    No district boundary polygons were added — none exist in this dataset, and
+    fabricating one would violate this pass's own explicit instruction. Live-verified
+    via CDP against the deployed console, both regimes (tight single-district cluster,
+    broad statewide) — screenshots in
+    `docs/screenshots/2026-08-26-map-investigator-grade/`.
+  - **A live conversational sanity pass (9 curl/SSE turns + a 2-turn RBAC check,
+    against production, not a mock) found a real, previously-unnoticed gap the prior
+    pass's own handoff had predicted but left unbuilt**: `CASE_PEOPLE` correctly
+    leaves `active_person` unset when a case has several accused (naming one would be
+    a guess), but a pronoun follow-up ("Does he have priors?") fell straight to a bare
+    `no_subject` refusal, discarding the names the previous turn had just listed on
+    screen. Fixed by checking the previous turn's own stored citations for named
+    `accused:` candidates and, with two or more, asking which one — reusing the exact
+    ambiguous-name clarification path (`ambiguous_person`) a tied name search already
+    uses, sourced from `vx_conversation_turn` rather than a fresh query or any new
+    persisted state. 2 new regression tests, the positive one confirmed to fail
+    against pre-fix code first.
+  - **A second, smaller bug found in the same live session**: `CASE_LOCATIONS`'s
+    "nothing to map" refusal reused `EXPLAIN_REASONING`'s "this is the first answer"
+    message verbatim — false on any turn but the actual first one (caught live on
+    turn 7 of the same session). Given its own accurate message
+    (`nothing_prior_locations`).
+  - **QuickML re-checked directly against the live AppSail `configuration` object**
+    (not re-guessed from a prior pass's note): `QUICKML_ENDPOINT_KEY` remains absent.
+    No code change; still correctly BLOCKED with an honest fallback.
+  - **Deployed and live-verified**: console (`catalyst deploy --only client`) and API
+    (relay-deploy → `appsail/upsert`, deployment `52852000000325027`) both redeployed
+    and independently re-tested post-deploy against the live URLs — the map fix via a
+    fresh CDP screenshot of the exact previously-broken query, the conversational fix
+    via the exact reproduction turn sequence that found it.
+  - **Test suite**: 354 collected, all green (2 new this pass).
+  - **Not done this pass, named rather than silently skipped**: the full 19-turn
+    golden conversation (including an explicit case-switch-and-back and a genuine
+    ambiguous-name tie) a "final product pass" mega-prompt specified was not driven
+    end to end through the live console — a shorter, targeted live check was, and it
+    found and fixed a real bug rather than merely confirming what already worked. A
+    full UI judge-review click-through (login → every panel → export → failure states)
+    was likewise not repeated in full; the prior pass's own CDP verification of most
+    of §1's UI rows stands, re-confirmed only where this pass's own fixes touched them.

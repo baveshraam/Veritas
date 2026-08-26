@@ -205,3 +205,109 @@ updated), `docs/screenshots/2026-08-26-conversational-architecture/` (new).
 **Not done, by the mega-prompt's own stop condition**: no differentiator features, no
 North-Star P0/P1 gap-closing beyond what this pass's own live verification happened to
 surface. `docs/VERITAS_NORTH_STAR.md`'s prioritized gap list is untouched.
+
+---
+
+## 2026-08-26 (later still) — "Final product pass": map made investigator-grade + a real conversational gap closed
+
+A "VERITAS FINAL PRODUCT PASS" mega-prompt named the map a launch-blocking defect
+("current screenshot shows a very dark canvas with scattered points and insufficient
+geographic orientation") and asked for the conversational architecture to be verified,
+not just described, against a live multi-turn session.
+
+**Inspected before touching anything**, per the prompt's own instruction: compared the
+already-committed `docs/screenshots/2026-08-26-conversational-architecture/
+06-case-locations-map.png` (a real CASE_LOCATIONS answer, 5 cases, all in Mandya)
+against `apps/web/components/viz/MapView.tsx`. Confirmed the complaint was real and
+found the exact cause: `fitBounds({maxZoom: 11})` zoomed a tight cluster in so far that
+every neighbouring district dot/label fell outside the viewport — the prior pass's own
+"Phase 4" fix (real district labels + scale control) only ever held for a broad,
+spread-out query; it was never tested against a tight one, which is exactly what a
+case-scoped follow-up produces.
+
+**Fixed (`apps/web/components/viz/MapView.tsx`, `apps/web/app/globals.css`,
+commit `2a903ba`):**
+- `maxZoom` capped at 9 (was 11) — a tight cluster now keeps 2-3 neighbouring district
+  labels in frame instead of zooming past all of them.
+- A legend added: amber dot = individual cited FIR location, green→amber→red ramp =
+  hotspot density. Neither existed before — there was no way to tell an exact record
+  from a modeled estimate on the map itself.
+- Hotspot polygon fill/line opacity raised (0.26→0.4, 1.6→2px) so the aggregate region
+  is visible against the dark basemap where large enough to render, distinct from the
+  individual points inside it.
+- No district boundary polygons added — none exist in this dataset, and the prompt
+  explicitly forbade fabricating geographic precision.
+
+**Verified before AND after deploying**, both locally and live: ran the API locally
+against the existing sqlite mirror (`data/.veritas/ds.sqlite3`, same 10,000-case
+dataset) with the web dev server pointed at it — sidesteps a real platform fact worth
+recording: AppSail's CORS preflight (`OPTIONS`) is answered at the platform edge for
+exactly one allow-listed origin (the deployed console's own), not via the app's
+`VERITAS_CORS_ORIGINS` env var, so a POST from `localhost:3000` straight to the live
+API fails preflight with no CORS headers at all — a genuine, previously-undocumented
+constraint on testing against the live API from local dev, not a bug in the app.
+Screenshotted both the previously-broken tight-cluster query and a broad statewide one
+via headless Chrome over CDP, then again against the live console after
+`scripts/deploy-console.sh`. Screenshots committed to
+`docs/screenshots/2026-08-26-map-investigator-grade/`.
+
+**Live conversational sanity check** (not the full 19-turn golden script the prompt
+specified — a shorter, targeted 9-turn session over curl/SSE against the live
+production API, plus a 2-turn RBAC check under a different officer): FIR_LOOKUP →
+CASE_CONTEXT → CASE_PEOPLE → a pronoun follow-up → EXPLAIN_REASONING → EVIDENCE_FOR →
+CASE_LOCATIONS → a guilt-probability question → a Kannada round-trip; then a
+station-scoped IO probing a FIR outside their station, twice.
+
+**Found and fixed live (this is where the check earned its keep):**
+- **RAG-34**: "Who is involved?" (CASE_PEOPLE, 2 accused, correctly leaves
+  `active_person` unset since naming one of several would be a guess) followed by
+  "Does he have priors?" fell to a bare `no_subject` refusal — the two names the
+  previous turn had just shown were discarded entirely. This is exactly the gap the
+  prior conversational-architecture pass's own handoff had predicted and deliberately
+  left unbuilt ("consider whether CASE_PEOPLE's several-accused behaviour should also
+  let a bare pronoun disambiguate against the specific candidates the previous turn
+  named"). Fixed (`packages/rag_agent/rag_agent/orchestrator.py`,
+  `_recent_person_candidates`, commit `2d382d4`): a pronoun with no active person now
+  checks the previous turn's own stored `accused:` citations, and with 2+ named
+  candidates, asks which one — reusing the EXACT `ambiguous_person` clarification path
+  a tied name search already uses (RAG-32), sourced from `vx_conversation_turn`
+  instead of a fresh search or any new persisted session-focus field. 2 new regression
+  tests; the positive one confirmed to fail against the pre-fix code first (a bare git
+  stash of the one changed file, per this project's own test discipline).
+- A second bug in the same session: `CASE_LOCATIONS`'s "nothing to map" refusal reused
+  `EXPLAIN_REASONING`'s "this is the first answer" message verbatim — false on turn 7,
+  which is when it was actually observed. Given its own message
+  (`nothing_prior_locations`); one existing test's assertion updated to match.
+
+**QuickML**: re-checked directly against the live AppSail `configuration.environment.
+variables` object (fetched over the Admin API, not trusted from a prior pass's note).
+`QUICKML_ENDPOINT_KEY` remains absent. No code change — still correctly BLOCKED.
+
+**Deploys**: console via `scripts/deploy-console.sh` (map fix); API via the relay
+pipeline (`GET .../appsail/get-signature` → push `.github/relay-upload.url` →
+`relay-deploy.yml` builds `Dockerfile.overlay` + smoke-tests the import → local
+`PUT .../appsail/upsert`), deployment `52852000000325027`. Both independently
+live-verified post-deploy against the real URLs, not assumed from a green CI run.
+
+**Test suite**: 354 collected (352 → 354), all green throughout.
+
+**Docs updated**: `CLAUDE.md` (v14 changelog + test count), this file,
+`docs/QA_FUNCTIONALITY_MATRIX.md` (UI-24 rewritten, RAG-34 added, "does NOT yet cover"
+section updated), `docs/VERITAS_STATUS.html` (extended its own existing "stale as of"
+banner rather than rewritten in full — matches the pattern the prior pass already
+established there), `docs/VERITAS_HANDOFF.md` (rewritten for this pass),
+`docs/screenshots/2026-08-26-map-investigator-grade/` (new, 2 live screenshots + a
+README explaining the defect and the fix).
+
+**Not done, named rather than silently skipped**: the full 19-turn golden conversation
+specified by the mega-prompt (including an explicit case-switch-and-back and a genuine
+ambiguous-name tie) was not driven end to end through the live CONSOLE — the 9-turn
+check above ran over curl/SSE against the live API, which exercises the identical
+orchestrator/retrieval/synthesis code path the console calls but does not exercise
+console rendering itself beyond the two map screenshots. A full UI judge-review
+click-through (every panel, every failure state, every export path) was not repeated
+in full this pass — the prior North Star hardening pass's own CDP verification of most
+UI rows stands, re-confirmed only where this pass's fixes actually touched them (the
+map). `docs/VERITAS_NORTH_STAR.md`'s Part 3 P0/P1 list remains untouched — narrative
+diversity and the LLM-fluency gap (still QuickML-blocked) are still the largest named
+items there.

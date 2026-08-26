@@ -48,7 +48,7 @@ that stated, not `VERIFIED`.
 | UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | **VERIFIED** (North Star hardening pass) | CDP: clicked on a real case card — sent "What is the status of FIR 100222201202600022?" and received the correct grounded, cited answer |
 | UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it; re-confirmed this pass |
 | UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | **VERIFIED** (North Star hardening pass) | CDP: a hotspot query auto-switched the pane to "Geospatial — hotspot density"; clicked "Case index" and it switched back live, tab highlight moved correctly both times |
-| UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | **VERIFIED, actually screenshotted (North Star hardening pass)** | The Phase 4 fix is now visually confirmed live, not just bundle-grepped: a real CDP screenshot of "Show me crime hotspots in Bengaluru Urban" shows a dark self-drawn canvas (no third-party tiles) with 5 real district labels (Chikkaballapura, Bengaluru Rural, Kolar, Ramanagara, Bengaluru Urban), zoom controls, a "20 km" scale bar, and amber hotspot-density dots correctly clustered around Bengaluru Urban — exactly what the data and the fix both claimed. Evidence rail correctly labels these "GEOSPATIAL ANALYSIS — NN% evidence strength", distinct from the "FIR RECORD — NN% text similarity" items below them (BUG-011's confidence-kind distinction holding up visually, not just in the API payload). **Still not done**: true district boundary polygons (unchanged, correctly deferred) |
+| UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | **VERIFIED live, and a real Phase-4-era regression found+fixed (2026-08-26, map-investigator-grade pass)** | The Phase 4 "5 district labels visible" claim was true only for a broad, spread-out query — a TIGHT result cluster (a handful of FIRs in one taluk) hit `fitBounds`'s `maxZoom:11` and zoomed in so far that every neighbouring district fell outside the viewport, leaving one label ("Mandya") floating in an otherwise blank dark canvas with no legend anywhere. Confirmed by comparing this exact defect against the already-committed `docs/screenshots/2026-08-26-conversational-architecture/06-case-locations-map.png`. Fixed: `maxZoom` capped at 9 (a tight cluster now keeps 2-3 neighbouring district labels in frame), a legend added (individual FIR point vs. hotspot density), hotspot fill/line opacity raised so the aggregate region is visible where large enough. Live-verified both regimes via CDP post-deploy — see `docs/screenshots/2026-08-26-map-investigator-grade/` (tight cluster: 3 labels + legend + scale; broad statewide: 6 labels + visible hotspot outline). **Still not done**: true district boundary polygons (unchanged, correctly deferred — no shapefile in this dataset) |
 | UI-25 | Network view | `viz/NetworkView.tsx` | Force-directed graph | VERIFIED | Screenshotted live: 12 labeled nodes, correct sizing/coloring, legible |
 | UI-26 | Sankey view | `viz/SankeyView.tsx` | Money-flow diagram | **FIXED** (North Star Phase 5) | Above 25 nodes, only the 20 highest-value nodes keep a label (every node stays hoverable via the existing tooltip, so no information is lost). Deployed bundle byte-verified identical (sha256) to the local build carrying the fix. Live data flow re-confirmed (Harish Savadi, 60-destination trail) |
 | UI-27 | Trend view | `viz/TrendView.tsx` | Forecast bands (ECharts) | VERIFIED | Screenshotted live: proper band chart, axis labels, real dates |
@@ -110,6 +110,8 @@ that stated, not `VERIFIED`.
 | RAG-31 | `EVIDENCE_FOR` ("what evidence supports that?") | same | Yes, live curl | VERIFIED — re-shows the previous turn's citations/evidence; same `nothing_prior` refusal on a first turn |
 | RAG-32 | Ambiguous person names ask instead of guess | `node_orchestrate` (new, this pass) | Yes, unit-tested; live-tested only the "clear leader" path (no tie found in the live dataset for the names tried) | PARTIAL — the tie-break logic itself has direct unit coverage (`test_an_ambiguous_name_asks_instead_of_guessing`); a live query that actually produces a tied `record_count` was not found this pass |
 | RAG-33 | Session-focus persistence across the FULL turn (not just pre-retrieval) | `node_retrieve` (bug fix, this pass) | Yes, live: "Open FIR X" then, one turn later, "What happened?" answered about X | VERIFIED — this was a real, previously-unnoticed gap: `node_orchestrate` persisted focus BEFORE retrieval ran, but `FIR_LOOKUP` resolves `active_fir` DURING retrieval, so it was never saved; the next turn found no case ever opened. Fixed by persisting again after retrieval resolves |
+
+| RAG-34 | Pronoun after a multi-person `CASE_PEOPLE` turn asks instead of refusing blindly | `orchestrator.py` (`_recent_person_candidates`, new 2026-08-26) | Yes, live console + curl, reproduced pre-fix first | VERIFIED — found live in this pass's own conversational sanity check: "Who is involved?" (2 accused, correctly leaves `active_person` unset) → "Does he have priors?" used to fall to a bare `no_subject` refusal, discarding the two names the previous turn had just shown. Now checks the previous turn's own `accused:` citations and, with 2+ candidates, asks which one by name — reusing the existing `ambiguous_person` clarification path (RAG-32's mechanism), sourced from `vx_conversation_turn` instead of a fresh name search. Regression test confirmed to fail against pre-fix code. Also fixed in the same pass: `CASE_LOCATIONS`'s "nothing to map" refusal was reusing `EXPLAIN_REASONING`'s "this is the first answer" message verbatim, which is false on any turn but the actual first one (caught live on turn 7 of the same session) — now has its own accurate message |
 
 **A note on how RAG-24–33 were found**: the mega-prompt this pass ran against asked whether the
 conversational layer was "genuinely conversational" or "intent classification + isolated
@@ -253,6 +255,19 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
 ---
 
 ## What this matrix does NOT yet cover (honest, not silent)
+
+- **Added 2026-08-26 (map-investigator-grade pass)**: the full 19-turn golden
+  conversation a "VERITAS FINAL PRODUCT PASS" mega-prompt specified (open case → ...
+  → briefing → switch case → switch back → ambiguous reference → unauthorized case)
+  was NOT driven end to end through the live console this pass — a shorter 9-turn
+  live curl/SSE sanity check was, covering FIR_LOOKUP/CASE_CONTEXT/CASE_PEOPLE/
+  pronoun-disambiguation(RAG-34)/EXPLAIN_REASONING/EVIDENCE_FOR/CASE_LOCATIONS/a
+  guilt-probability refusal/a Kannada round-trip, plus a 2-turn cross-station
+  authorization check, all against the live production API post-deploy. It found
+  and fixed RAG-34 live. A full CDP-driven run of the entire specified script,
+  including explicit case-switch-and-back and a genuine ambiguous-name tie, remains
+  for a future pass. QuickML was re-checked directly against the live AppSail
+  configuration (not re-guessed) — `QUICKML_ENDPOINT_KEY` is still absent, unchanged.
 
 - Full click-through of every UI control listed UNKNOWN in §1 — narrowed significantly
   this pass (UI-06/13/15/16/17/18/21/22/23/28/29 moved PARTIAL/UNKNOWN → VERIFIED via a
