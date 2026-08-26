@@ -47,8 +47,8 @@ that stated, not `VERIFIED`.
 | UI-20 | Case explorer — case-status filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven this pass either — status chips (Under Investigation/Convicted/etc.) were visible with correct live counts but not clicked |
 | UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | **VERIFIED** (North Star hardening pass) | CDP: clicked on a real case card — sent "What is the status of FIR 100222201202600022?" and received the correct grounded, cited answer |
 | UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it; re-confirmed this pass |
-| UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | PARTIAL | Case index confirmed rendering; switch to viz not driven this pass either |
-| UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | **FIXED** (North Star Phase 4) | All 31 real district centres (dot + DOM-marker label, not a symbol-layer text-field — avoids needing a third-party glyph service) plus a native `ScaleControl`. Console bundle grepped live for the fix (`Bengaluru Urban`, `ScaleControl`, `district-dot` all present in the served chunk); a live hotspot query confirmed the map data flow (`polygons`/`fir_points`) unaffected. **Not done**: true district boundary polygons — no shapefile is bundled and none is fetched at runtime, so centroid+label is what the data honestly supports, not fabricated precision. No browser/CDP tooling available this session to visually screenshot the render — verified by bundle content and data flow, not a rendered screenshot |
+| UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | **VERIFIED** (North Star hardening pass) | CDP: a hotspot query auto-switched the pane to "Geospatial — hotspot density"; clicked "Case index" and it switched back live, tab highlight moved correctly both times |
+| UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | **VERIFIED, actually screenshotted (North Star hardening pass)** | The Phase 4 fix is now visually confirmed live, not just bundle-grepped: a real CDP screenshot of "Show me crime hotspots in Bengaluru Urban" shows a dark self-drawn canvas (no third-party tiles) with 5 real district labels (Chikkaballapura, Bengaluru Rural, Kolar, Ramanagara, Bengaluru Urban), zoom controls, a "20 km" scale bar, and amber hotspot-density dots correctly clustered around Bengaluru Urban — exactly what the data and the fix both claimed. Evidence rail correctly labels these "GEOSPATIAL ANALYSIS — NN% evidence strength", distinct from the "FIR RECORD — NN% text similarity" items below them (BUG-011's confidence-kind distinction holding up visually, not just in the API payload). **Still not done**: true district boundary polygons (unchanged, correctly deferred) |
 | UI-25 | Network view | `viz/NetworkView.tsx` | Force-directed graph | VERIFIED | Screenshotted live: 12 labeled nodes, correct sizing/coloring, legible |
 | UI-26 | Sankey view | `viz/SankeyView.tsx` | Money-flow diagram | **FIXED** (North Star Phase 5) | Above 25 nodes, only the 20 highest-value nodes keep a label (every node stays hoverable via the existing tooltip, so no information is lost). Deployed bundle byte-verified identical (sha256) to the local build carrying the fix. Live data flow re-confirmed (Harish Savadi, 60-destination trail) |
 | UI-27 | Trend view | `viz/TrendView.tsx` | Forecast bands (ECharts) | VERIFIED | Screenshotted live: proper band chart, axis labels, real dates |
@@ -232,11 +232,13 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
 ## What this matrix does NOT yet cover (honest, not silent)
 
 - Full click-through of every UI control listed UNKNOWN in §1 — narrowed significantly
-  this pass (UI-06/13/15/16/17/18/21/22/28/29 moved PARTIAL/UNKNOWN → VERIFIED via a
+  this pass (UI-06/13/15/16/17/18/21/22/23/28/29 moved PARTIAL/UNKNOWN → VERIFIED via a
   real CDP session). Still not driven: UI-07 (voice toggle — hardware-gated), UI-20
-  (case-status filter chips), UI-23 (viz pane switcher).
-- Map rendering as an actual geographic tool (pan/zoom/cluster/drill-down) — API-level
-  hotspot data is verified; MapLibre rendering itself is not driven this pass either.
+  (case-status filter chips).
+- Map rendering as an actual geographic tool — **now visually verified this pass** (see
+  UI-24: real district labels, scale, zoom, hotspot clustering, all screenshotted live).
+  Pan/drag interaction specifically was not driven (a screenshot proves render
+  correctness, not drag-to-pan behavior).
 - Voice pipeline end to end — no audio input device in this environment. This is a hard
   environmental constraint, not a skipped step.
 - A real FINANCIAL trail (RAG-07) — every person queried this session either had no
