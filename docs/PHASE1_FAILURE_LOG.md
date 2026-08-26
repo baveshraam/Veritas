@@ -1875,6 +1875,177 @@ been answering incorrectly in production.
 
 ---
 
+## BUG-029 — Session focus resolved during retrieval was never persisted for the next turn
+
+Severity: **P0**
+Component: `packages/rag_agent/rag_agent/orchestrator.py`
+Status: **FIXED, deployed, live-verified (conversational-architecture pass, 2026-08-26)**
+
+### How this was found
+Building the first case-scoped conversational follow-up (`CASE_CONTEXT`, "what
+happened?") and live-testing the exact sequence a real officer would type: "What is the
+status of FIR 100222201202600022?" then, one turn later in the same session, "What
+happened?". The second turn should have answered about the same case with no FIR number
+restated — and would have, based on the code, since `SessionFocus.active_fir` is read at
+the start of every turn. It didn't.
+
+### Symptoms
+```
+POST /chat {"session_id": "s1", "query": "What is the status of FIR 100222201202600022?"}
+  -> correctly answers, and the response shows active_fir resolved in-turn
+POST /chat {"session_id": "s1", "query": "What happened?"}
+  -> CASE_CONTEXT needs an open case; none given
+```
+The second call's `get_session_focus("s1")` returned `active_fir: None` — as if the
+first turn had never opened anything, despite the first turn's own response having
+named the FIR correctly.
+
+### Root cause
+`node_orchestrate` calls `upsert_session_focus(...)` once, immediately after resolving
+pronouns/named entities — deliberately, so a session-store hiccup later in the turn
+can't lose that resolution (the existing comment there says exactly this). But
+`FIR_LOOKUP`'s own resolution of `active_fir` happens *inside* `node_retrieve`, which
+runs strictly after `node_orchestrate` — `_run_specialists`'s FIR_LOOKUP branch sets
+`state.active_entities.active_fir = rows[0]["fir_id"]` directly on the in-memory state,
+with no corresponding write to storage. `node_orchestrate`'s one persistence call had
+already run and already returned before that assignment ever happened, so it was never
+captured. This is not a new bug introduced by this pass's other work — it predates every
+intent added this pass and would have silently undercut ANY future case-scoped
+follow-up, which is exactly why it is logged as the most consequential fix in the pass
+that found it.
+
+### Why no prior test caught this
+Existing tests for `FIR_LOOKUP` (`test_an_exact_identifier_hit_suppresses_semantic_search`
+and neighbours) call `orch._run_specialists(state, widen=False)` directly and assert on
+the returned `state` object in-process — which correctly shows `active_fir` set, because
+the assertion runs against the SAME Python object the assignment mutated. None of them
+went through a second, separate `InvestigationState` simulating a follow-up turn reading
+`SessionFocus` back from storage, which is the only shape of test that could have caught
+a persistence gap rather than an in-memory mutation.
+
+### Fix
+`node_retrieve` now calls `upsert_session_focus(...)` again, once, at the very end —
+after HippoRAG, `_run_specialists` (which is where `FIR_LOOKUP` and the new
+`CASE_PEOPLE` branch resolve `active_fir`/`active_person`), and ToG have all run. This
+does not replace `node_orchestrate`'s own persistence call; it captures whatever
+retrieval itself additionally resolved, on top of what orchestration already resolved
+and saved.
+
+### Regression test
+`packages/rag_agent/tests/test_engine.py::test_fir_lookup_persists_the_case_it_opens_for_the_next_turn`
+— monkeypatches `upsert_session_focus` to record every call, drives `FIR_LOOKUP` through
+`node_retrieve`, and asserts the LAST recorded call carries `active_fir` set. Confirmed
+to fail against the pre-fix code first (only `node_orchestrate`'s pre-retrieval call was
+recorded, carrying `active_fir=None`).
+
+### Verification
+`python -m pytest` — 352 collected, all green. **Live-verified post-deploy** (commit
+`2e1da7d`, deployed `52852000000317055`): the exact sequence above — FIR lookup, then
+"What happened?" one turn later — now correctly answers about the same case. Re-verified
+through the real console via CDP, not curl alone (see
+`docs/screenshots/2026-08-26-conversational-architecture/03-case-context-what-happened.png`).
+
+---
+
+## BUG-030 — A surname outside the name-pool sample was clipped off a known first name, resolving to a different person
+
+Severity: **P0**
+Component: `data/data/nlp/entities.py`
+Status: **FIXED, deployed, live-verified (conversational-architecture pass, 2026-08-26)**
+
+### How this was found
+Live-testing the conversational flow above: after "Who are the key people in this
+case?" named "Usha Naika" as one of two accused, the follow-up "Tell me more about Usha
+Naika" was typed verbatim — copying the exact name the system's own previous answer had
+just shown.
+
+### Symptoms
+```
+POST /chat {"query": "Tell me more about Usha Naika."}
+```
+Trace: `resolved 'Usha' to Usha Pujari (25 record(s)); 4 other person(s) share this
+name`. The query named "Usha Naika" — a specific person already known to be the
+accused on the open case — and the system silently answered, at 0.95 confidence, about
+"Usha Pujari," an entirely different person with more records in the database. Nothing
+in the response indicated a substitution had occurred; it read exactly like a correct
+answer to the question asked.
+
+### Root cause
+`data.nlp.entities._person_spans`'s `flush()` builds a capitalised-token group
+(`["Usha", "Naika"]` here — both immediately adjacent, single-space-separated), then
+computes `pool_idx` — the indices of tokens that appear in `ka_names.csv`, a 271-entry
+first-name/common-surname sample. "Usha" is in the pool; "Naika" is not. The span was
+built as `(group[pool_idx[0]][1], group[pool_idx[-1]][2])` — literally "from the first
+pool match to the last pool match" — which for a single pool match collapses to just
+that one token. So the NER layer saw "Usha", not "Usha Naika", and everything downstream
+(`intents.named_person`, `sql_agent.person_by_name`) correctly and honestly resolved
+"Usha" to whichever person by that (truncated) name had the most records — which is
+exactly what `person_by_name`'s own ranking is designed to do, working correctly on bad
+input. The ambiguous-name safeguard added earlier in this same pass (asking when two
+matches are tied) never got a chance to run, because the query it saw was never
+ambiguous — it was simply wrong.
+
+### Why "Was Ramesh Gowda" already worked
+This is why the fix could not simply be "span the whole capitalised group" — `"Ramesh"`
+and `"Gowda"` are BOTH in the pool, and `"Was"` (capitalised only because it starts the
+sentence) is not; the original from-first-to-last-pool-match logic correctly excluded
+"Was" for exactly this case, and a naive whole-group fix would have regressed it (the
+first attempted fix did exactly this and was caught by
+`test_ner_extracts_each_entity_type` failing before being corrected).
+
+### Fix
+Extend the span from the pool-matched core (`pool_idx[0]` to `pool_idx[-1]`) outward,
+one adjacent token at a time in each direction, stopping only at a query stopword
+(`_QUERY_STOPWORDS` — the same list that already excludes "Was", "Does", "Show", etc.)
+or a known place name. "Was Ramesh Gowda" still stops at "Was" (a stopword); "Usha
+Naika" now extends past "Usha" to include "Naika" (neither a stopword nor a place name).
+
+### Regression test
+`data/tests/test_nlp.py::test_a_surname_outside_the_pool_is_not_clipped_off_a_known_first_name`
+— asserts `("PERSON", "Usha Naika")` is extracted from "Tell me more about Usha Naika.".
+Confirmed to fail against the pre-fix code first (extracted `"Usha"` only). The full
+existing NER suite (`test_ner_extracts_each_entity_type`, `test_unknown_names_are_still_
+detected_as_persons`, `test_query_stopwords_are_not_mistaken_for_names`) re-run and
+green, confirming no regression on the cases the original logic was written for.
+
+### Verification
+`python -m pytest` — 352 collected, all green. **Live-verified post-deploy** (commit
+`d26f3fd`, deployed `52852000000325022`): the identical query — "Tell me more about
+Usha Naika." — now resolves `'Usha Naika' to Usha Naika (19 record(s))` and answers
+about the correct person, cited first.
+
+---
+
+## BUG-031 — "previous cases" (plural) never matched PERSON_HISTORY
+
+Severity: P2
+Component: `packages/rag_agent/rag_agent/intents.py`
+Status: **FIXED, deployed, live-verified (conversational-architecture pass, 2026-08-26)**
+
+### Reproduction (original)
+Live, as a follow-up in the same 14-turn session that found BUG-029/030: "What previous
+cases involve her?" classified as `CRIME_SEARCH` (matching the bare keyword "cases"),
+not `PERSON_HISTORY` — the keyword list had `"previous case"` (singular only), and the
+word-boundary keyword regex (`\bprevious case\b`, deliberately fixed by BUG-019's own
+precedent to not do substring matches) does not match "previous case**s**". The answer
+was a global 10,000-case count with no connection to the person the pronoun "her" had
+just resolved to.
+
+### Fix
+Added `"previous cases"` as a second, separate keyword — same pattern BUG-019 already
+established (word-boundary matching per literal keyword string, not a stem/regex
+generalisation).
+
+### Regression test
+`test_engine.py::test_previous_cases_plural_is_recognised_as_person_history`.
+
+### Verification
+`python -m pytest` green. **Live-verified post-deploy** (commit `cc46f75`, deployed
+`52852000000318035`): the identical query now classifies `PERSON_HISTORY` and returns
+the named person's own case history.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1907,8 +2078,11 @@ been answering incorrectly in production.
 | BUG-026 Copilot leads render canonical name with no link to the as-filed name | P2 | **OPEN** — found live this pass (North Star hardening pass) via CDP; entity resolution is working correctly, the UI just doesn't cross-reference the two names it already has in scope. Documented in `docs/QA_FUNCTIONALITY_MATRIX.md`, not fixed |
 | BUG-027 `/jobs/audit-verify` still failed every unattended Cron fire after BUG-025 | **P1** | **FIXED, deployed, live-verified** (North Star hardening pass) — same synchronous-cold-start class as BUG-024, applied to the one job endpoint BUG-024's fix never touched; `sync=true` preserves the manual-check behaviour |
 | BUG-028 "does X have priors" rendered "crime type not recorded" for every case | **P0** | **FIXED, deployed, live-verified** (North Star hardening pass) — the flagship identity-resolution capability (`CLAUDE.md` §0) was silently degraded in production; root cause was ZCQL's 4-JOIN cap colliding with `_case()`'s column expectations, fixed by chaining two in-budget queries instead of one over-budget one |
+| BUG-029 session focus resolved during retrieval was never persisted for the next turn | **P0** | **FIXED, deployed, live-verified** (conversational-architecture pass) — `node_orchestrate` persisted focus BEFORE retrieval ran; `FIR_LOOKUP`'s own resolution happened DURING retrieval and was never saved, so "Open FIR X" then "What happened?" forgot X. The single highest-value fix in its pass — without it, no case-scoped conversational follow-up could ever fire on turn 2 |
+| BUG-030 a surname outside the NER name-pool sample was clipped off a known first name | **P0** | **FIXED, deployed, live-verified** (conversational-architecture pass) — "Usha Naika" resolved to a DIFFERENT "Usha" (the database's most prolific one) and answered about her at full confidence; a wrong-person answer, not a refusal. Fixed by extending the PERSON span outward from the pool-matched core through adjacent non-stopword tokens |
+| BUG-031 "previous cases" (plural) never matched PERSON_HISTORY | P2 | **FIXED, deployed, live-verified** (conversational-architecture pass) — same word-boundary-keyword class as BUG-019; the keyword list had the singular only |
 
-**4 P0, 17 P1, 7 P2, 1 P3 across 28 tracked defects — see each row's Status for the
+**6 P0, 17 P1, 8 P2, 1 P3 across 31 tracked defects — see each row's Status for the
 current, precise state; this line intentionally does not collapse them into a single
 aggregate count, which drifted out of sync with the table itself across sessions.**
 

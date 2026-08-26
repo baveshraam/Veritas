@@ -106,3 +106,102 @@ changes.
 **Docs updated**: `docs/QA_FUNCTIONALITY_MATRIX.md` (many rows), `docs/PHASE1_FAILURE_LOG.md`
 (BUG-026, BUG-027, summary counts), `docs/VERITAS_HANDOFF.md` (created), this file
 (created).
+
+---
+
+## 2026-08-26 (later, same day) — Conversational architecture pass
+
+A separate mega-prompt this pass: not a North-Star gap-closing audit, a question about
+the conversational layer's own architecture — how much of it was genuinely conversational
+(explicit state, follow-ups that build on each other) versus intent classification over
+isolated deterministic tools that happened to share a session id.
+
+**Read the orchestrator/intents/state code first**, rather than assuming. Found:
+`SessionFocus` (active_person/active_fir/active_location) already existed and persisted
+across turns, and pronoun/named-entity resolution against it already worked — but nothing
+let a follow-up talk ABOUT the open case itself ("what happened", "who's involved", "what
+next", "prepare the briefing") or ABOUT the previous answer ("why these", "what
+evidence") — every such question fell through to a literal-text vector search of the
+words in the question, which could not possibly be about either. The Investigation
+Copilot already had correct, tested logic for leads/similar-cases/briefing — it just
+wasn't reachable from `/chat`, only from `/copilot`.
+
+**Built (commit `2e1da7d`):**
+- Seven new intents: `CASE_CONTEXT`, `CASE_PEOPLE`, a case-scoped branch of
+  `SIMILAR_CASES`, `NEXT_STEPS`, `BRIEFING` (all gated on `SessionFocus.active_fir` via
+  new `intents.NEEDS_CASE`, mirroring the existing `NEEDS_SUBJECT` pattern), plus
+  `EXPLAIN_REASONING`/`EVIDENCE_FOR` (read the previous turn's own stored citations/trace)
+  and `CASE_LOCATIONS` (tallies districts over the previous turn's cited FIRs). The three
+  Copilot-backed intents reuse `copilot.brief.leads_for_case`/`similar_cases_for`/
+  `generate_copilot_brief` directly (promoted from private helpers) rather than
+  duplicating the logic.
+- Ambiguous person names (a tied top match by `record_count`, no clear leader) now ask
+  which one instead of silently picking the first.
+- Every case-scoped branch re-validates station scope on EVERY use, through the same
+  scoped `fir_by_id()` query `FIR_LOOKUP` already uses — not trusted from whenever
+  `active_fir` was first set. `active_fir` being present in session state is not itself a
+  permission.
+- 33 new regression tests (350 → collected count at this point), covering routing,
+  authorization, focus persistence, and the meta-question fallbacks.
+
+**Found and fixed while live-verifying (this is where the pass earned its keep):**
+- **The persisted-focus bug (the most consequential single fix this pass)**:
+  `node_orchestrate` persists `SessionFocus` BEFORE retrieval runs, but `FIR_LOOKUP` (and
+  the new `CASE_PEOPLE`) resolve `active_fir`/`active_person` DURING retrieval — that
+  resolution was never saved. "Open FIR X" followed one turn later by "What happened?"
+  forgot X was ever opened, discovered live over curl before it was ever unit-tested.
+  Fixed by persisting again at the end of `node_retrieve`. Without this fix, none of the
+  new case-scoped intents could ever fire on turn 2 of a real conversation — the feature
+  work above would have shipped genuinely dead.
+- **`data/data/nlp/entities.py` NER bug**: "Tell me more about Usha Naika" resolved to a
+  DIFFERENT "Usha" (25 records, the database's most prolific one) and answered about her
+  at full confidence — a wrong-person answer, not an honest refusal. Root cause:
+  PERSON-span extraction spanned only from the first to the last POOL-matching token in a
+  capitalised run; "Usha" is in the 271-name `ka_names.csv` sample, "Naika" is not, so the
+  span clipped to just "Usha". Fixed by extending the span from the pool-matched core
+  outward through adjacent capitalised tokens, stopping only at a query stopword or a
+  known place name — verified this doesn't regress the existing "Was Ramesh Gowda" →
+  "Ramesh Gowda" (excludes "Was") test case. (commit `d26f3fd`)
+- **`PERSON_HISTORY` keyword gap**: "What previous cases involve her?" (plural) matched no
+  keyword ("previous case" was singular-only) and fell to `CRIME_SEARCH`'s bare "cases",
+  answering with a global 10,000-case count instead of the named person's own record.
+  (commit `cc46f75`)
+
+**Live-verified, real deployment, real console — not curl alone:**
+A single session was driven through a real 14-turn investigation, both over curl/SSE
+and through the actual console via a headless-Chrome/CDP session: open FIR → case
+context → accused (network view, real PageRank-sized nodes) → named-person priors →
+associates → why-these → case-scoped similar cases (structured explanation, not a bare
+score) → their geography (map view) → financial trail (honest negative finding) →
+what-evidence-supports-that → next steps (Copilot leads) → prepare the briefing (Copilot
+draft). Also verified: an unknown FIR refuses correctly; the capability question answers
+without touching records; an IO's cross-station refusal holds across BOTH the FIR lookup
+and its case-scoped follow-up (no leak); a Kannada follow-up ("ಏನಾಯಿತು?") round-trips
+correctly through a brand-new intent with zero Kannada-specific code, because translation
+runs before intent classification. 8 screenshots committed to
+`docs/screenshots/2026-08-26-conversational-architecture/` — this project's first
+screenshot set kept in the repo rather than a session scratchpad.
+
+**QuickML**: re-checked directly (fetched the live AppSail `configuration.environment.
+variables` object over the Admin API) rather than trusted from a prior pass's note.
+`QUICKML_ENDPOINT_KEY` is still absent. No code change — `llm.status()` already
+distinguishes "configured, not yet contacted" / "deterministic (LLM degraded: ...)" /
+"deterministic (QuickML not configured)" / a real `quickml (model)` success, which is
+what this pass's mega-prompt asked health reporting to do. Confirmed still BLOCKED, not
+faked.
+
+**Deploys**: three, each live-verified before moving to the next — `52852000000317055`
+(the conversational-architecture feature commit), `52852000000325022` (the NER fix),
+`52852000000318035` (the keyword fix). No console/frontend deploy — nothing in
+`apps/web/` changed; every new capability is reachable through the existing chat pane.
+
+**Test suite**: 352 collected, all green throughout (35 new: 33 conversational + 1 NER +
+1 keyword regression test).
+
+**Docs updated**: `docs/VERITAS_HANDOFF.md` (rewritten for this pass), this file,
+`docs/QA_FUNCTIONALITY_MATRIX.md` (RAG-24–33 added, "does NOT yet cover" section
+updated), `docs/screenshots/2026-08-26-conversational-architecture/` (new).
+
+**Not done, by the mega-prompt's own stop condition**: no differentiator features, no
+North-Star P0/P1 gap-closing beyond what this pass's own live verification happened to
+surface. `docs/VERITAS_NORTH_STAR.md`'s prioritized gap list is untouched.
