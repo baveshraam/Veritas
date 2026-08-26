@@ -1,5 +1,11 @@
 # Screenshots — map made investigator-grade, 2026-08-26
 
+**Superseded** by `docs/screenshots/2026-08-26-real-basemap/` (same day, later pass): the
+self-drawn dark canvas these screenshots show has been replaced with a real MapLibre +
+OpenFreeMap basemap (real roads/terrain/place names). Everything below this note is kept
+for history — the zoom-cap and legend fixes it documents are still in effect, just now
+drawn over real geography instead of a plain background.
+
 Captured live against the deployed console
 (`https://veritas-60077763394.development.catalystserverless.in/app/index.html?as=DSP`)
 via headless Chrome driven over CDP, per `[[veritas-console-verification]]`.

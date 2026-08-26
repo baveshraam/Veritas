@@ -311,3 +311,74 @@ UI rows stands, re-confirmed only where this pass's fixes actually touched them 
 map). `docs/VERITAS_NORTH_STAR.md`'s Part 3 P0/P1 list remains untouched — narrative
 diversity and the LLM-fluency gap (still QuickML-blocked) are still the largest named
 items there.
+
+---
+
+## 2026-08-26 (later still) — Real geographic basemap
+
+A "VERITAS MAP BASEMAP UPGRADE" mega-prompt judged the self-drawn dark-canvas map (real
+district centroids labeled, but no roads, no terrain, no basemap at all underneath) as
+still not good enough for a competition-final product, and asked for a real MapLibre +
+OpenFreeMap basemap while keeping every existing Veritas overlay.
+
+**Inspected `MapView.tsx` first.** The basemap was a flat `background-color` layer
+(`MAP_BG = "#080d12"`), with `NEXT_PUBLIC_MAP_STYLE` already wired as an escape hatch for
+a real style URL — the smallest sound integration was to change the *default* that
+fallback resolves to, not to rebuild the component.
+
+**Built (`apps/web/components/viz/MapView.tsx`, `apps/web/app/globals.css`,
+`apps/web/components/viz/palette.ts`):**
+- Default style is now `https://tiles.openfreemap.org/styles/liberty` (OSM-derived, no
+  API key/registration/quota) — the fifth documented Catalyst exception (`CLAUDE.md` §2):
+  no service in the catalog is a map tile provider. Only a viewport tile z/x/y crosses the
+  network, never an FIR's coordinates.
+- District reference dots/labels re-styled for contrast against a real (non-black)
+  basemap: two-tone dot (light fill, dark ring), dark chip behind each name — the old
+  low-opacity-white styling was tuned for a near-black canvas and would nearly vanish on
+  liberty's pale cropland/light terrain.
+- A compact `AttributionControl` added, styled to match the console's glass chrome — ODbL
+  requires crediting OSM now that real tile data is in use, unlike the old canvas which
+  had no third-party data to credit. The CSS that force-hid all attribution now hides only
+  the MapLibre logo.
+- Every other overlay (FIR points, hotspot polygons, legend, scale, v14's `maxZoom: 9`
+  fix) is untouched. `MAP_BG` deleted from `palette.ts` — no remaining callers.
+
+**Verified locally before deploying**: API on `localhost:8000` against the existing
+sqlite mirror (`data/.veritas/ds.sqlite3`), console on `localhost:3000`, signed in via
+`?as=DSP`, driven headlessly over CDP (Chrome `--headless=new
+--remote-debugging-port=9222`). Four queries, each screenshotted and judged against a
+"would a competition judge recognize this as Karnataka within seconds" checklist: a tight
+Mandya cluster, a bare statewide-phrased query (correctly falls back to the true busiest
+district — Bengaluru Urban, with the basemap's own "Bengaluru" label visible), a distant
+district (Bidar, on the Telangana border, to prove re-centering works anywhere in the
+state, not just near Bengaluru), and a district with no hotspot evidence (Kodagu — honest
+refusal, graceful fallback to the case index, no broken map).
+
+**Deployed** (`scripts/deploy-console.sh` — console-only; nothing in `apps/api` or the
+packages changed) and **re-verified live** against
+`https://veritas-60077763394.development.catalystserverless.in/app/index.html`, replaying
+the same four queries plus one explicit no-subject refusal ("Show me the money trail").
+One real platform fact surfaced along the way: the first live CDP attempt hit a cold
+AppSail container mid-warm-up (the sign-in gate's own "still loading the duty roster" copy
+handled it correctly — this was not a map bug); waiting for warm-up and retrying
+reproduced identical rendering to local. The live dataset turned out to have hotspot
+evidence for Kodagu where the local sqlite mirror didn't (a data-state difference between
+the two backends, not a bug) and produced the most visually striking screenshot of the
+pass — dense Western Ghats forest green around Madikeri, immediately recognizable as a
+hill district.
+
+**Test suite**: unchanged at 354 (frontend-only change). `npx tsc --noEmit` clean.
+
+**Docs updated**: `CLAUDE.md` (v15 changelog, §2's exception table, §8), this file,
+`docs/QA_FUNCTIONALITY_MATRIX.md` (UI-24 rewritten),
+`docs/screenshots/2026-08-26-real-basemap/` (new — 4 local + 5 live screenshots + README),
+`docs/screenshots/2026-08-26-map-investigator-grade/README.md` (marked superseded, kept
+for history), `docs/VERITAS_HANDOFF.md`, `docs/VERITAS_STATUS.html`.
+
+**Not done this pass**: true district *boundary* polygons — still not part of this
+dataset, still correctly not fabricated rather than approximated. Pan/drag gesture
+interaction was not driven live (a screenshot proves render correctness, not drag
+behavior) — unchanged from v14's own note on this. The broader "19-turn golden
+conversation through the console" and North Star P0/P1 gap-closing items named as
+outstanding in the prior two entries remain outstanding — this pass was scoped to the
+map, as its own mega-prompt asked.

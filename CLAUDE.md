@@ -109,7 +109,7 @@ Each step genuinely depends on the last. Identity cannot move.
 | Scheduling | **Cron** | none | `veritas_refresh` (6h), `veritas_audit_verify` (12h) |
 | PDF export | **SmartBrowz** | headless Chrome | Local renderer demoted to offline fallback |
 
-### The four documented exceptions
+### The five documented exceptions
 Each is permitted under the organizers' clarification. These are **absences, not
 preferences** — for each, no Catalyst service exists.
 
@@ -119,6 +119,7 @@ preferences** — for each, no Catalyst service exists.
 | Vector index | numpy over a Stratus blob | QuickML's RAG is a managed upload-documents pipeline — no arbitrary-embedding store, no custom retrieval hook. HippoRAG's Personalized-PageRank seeding cannot run inside it |
 | Knowledge graph | NetworkX over `vx_graph_edge` | No Catalyst service is a graph database. Every GDS algorithm was ported exactly |
 | Audit-log immutability | SHA-256 hash chain | Data Store has no `RULE` and no triggers. App-layer append-only, enforced by the same code that could bypass it, is strictly weaker — so it was rebuilt in the data instead (§7) |
+| Map tiles | OpenFreeMap (`tiles.openfreemap.org`, MapLibre "liberty" style) | No Catalyst service is a map tile provider — the catalog has no mapping capability at all. No API key, no registration, no per-request quota. Only a viewport tile z/x/y crosses the network, never an FIR's exact coordinates (§8) |
 
 **Not built** (described only — Appendix A): Kafka, Flink, Iceberg, Kubernetes, Keycloak,
 OPA, Kong, MLflow, Airflow.
@@ -414,8 +415,13 @@ language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low
 Evidence Evaluator: 3 corroborating records → Synthesis."* Explainability made visible rather
 than merely logged.
 
-The basemap is a self-drawn dark canvas, **not a tile service** — FIR coordinates must never
-leave the network inside a third-party tile request URL.
+The basemap is a real MapLibre style served by **OpenFreeMap** (`tiles.openfreemap.org`,
+OSM-derived, no API key or registration — the fifth documented exception, §2). What crosses
+the network is a tile z/x/y for the current viewport, never an FIR's exact coordinates or any
+investigative text; a viewport request reveals district-level location at most, which is
+already non-sensitive metadata (every FIR's District is a plain ER column). Veritas's own
+overlays — FIR points, hotspot density polygons, district reference labels, legend, scale —
+render on top, unchanged by the swap.
 
 ---
 
@@ -904,3 +910,58 @@ volume justifies the training cost.
     full UI judge-review click-through (login → every panel → export → failure states)
     was likewise not repeated in full; the prior pass's own CDP verification of most
     of §1's UI rows stands, re-confirmed only where this pass's own fixes touched them.
+- **v15 (real geographic basemap) — the map stopped being a plain dark canvas.**
+  - **The self-drawn canvas basemap is gone.** `MapView.tsx` now loads a real MapLibre
+    style, OpenFreeMap's `liberty` (`tiles.openfreemap.org`, OSM-derived) — real roads,
+    water, terrain and place names, with no API key, no registration and no per-request
+    quota. This is the **fifth documented Catalyst exception** (§2): no service in Zia's
+    catalog is a map tile provider, so nothing was displaced. What crosses the network is
+    a tile z/x/y for the current viewport, never an FIR's exact coordinates or any
+    investigative text — the same non-leak guarantee the old architecture note asserted,
+    now satisfied by a real basemap instead of by having no basemap at all.
+  - **Every Veritas overlay is unchanged**: FIR points, hotspot density polygons, the
+    legend, the scale control, the `maxZoom: 9` fix from v14. The district reference
+    dots/labels were re-styled only for contrast (a two-tone dot, a dark chip behind each
+    name) since liberty's terrain ranges from pale cropland to saturated green forest to
+    blue water — the old low-opacity-white styling was tuned for a near-black background
+    and would have nearly vanished on a light one.
+  - **Attribution restored, correctly this time.** The old CSS force-hid
+    `.maplibregl-ctrl-attrib` — harmless when there was no third-party data source to
+    credit, wrong now that the tiles are OSM data under ODbL. A compact
+    `AttributionControl` renders bottom-right, styled to match the console's glass
+    chrome instead of MapLibre's default light skin.
+  - **Dead code removed**: `palette.ts`'s `MAP_BG` constant (the flat background colour
+    the self-drawn canvas used) had no remaining callers once the style object was
+    replaced with a URL; deleted rather than left stale.
+  - **`NEXT_PUBLIC_MAP_STYLE` still works as an escape hatch** — it now overrides the
+    OpenFreeMap default instead of the flat-background default, so pointing at a
+    self-hosted tile server (the honest upgrade path once one has somewhere to run)
+    remains a zero-code-change operation.
+  - **Verified locally first**: API on `localhost:8000` against the existing sqlite
+    mirror (`data/.veritas/ds.sqlite3`, the same 10,000-case dataset), console on
+    `localhost:3000`, driven headlessly over CDP. Four queries — a tight single-district
+    cluster (Mandya), a bare statewide-phrased query (falls back to the true busiest
+    district, Bengaluru Urban), a distant district (Bidar, on the Telangana border, to
+    confirm re-centering works anywhere in the state) and a district with no hotspot
+    evidence (Kodagu, honest refusal + graceful fallback to the case index) — all judged
+    against the same checklist a competition judge would use: real geography recognizable
+    within seconds, overlays obvious, legend/scale/zoom all present, not cluttered.
+  - **Deployed** (`scripts/deploy-console.sh`, console-only — nothing in `apps/api` or the
+    packages changed) and **re-verified live** against
+    `https://veritas-60077763394.development.catalystserverless.in/app/index.html`, same
+    four queries plus one explicit no-subject refusal. One real platform fact surfaced:
+    the first live attempt hit a cold AppSail container (the sign-in gate's own "still
+    loading the duty roster — the service is warming up" message, not a map bug) — waiting
+    for warm-up and retrying confirmed identical rendering to local. The live dataset
+    turned out to have hotspot evidence for Kodagu where the local mirror didn't — not a
+    bug, just a different data state between the two backends — and produced the most
+    visually striking shot of the pass (dense Western Ghats forest around Madikeri).
+  - **`docs/screenshots/2026-08-26-real-basemap/`** holds both sets (4 local + 5 live), and
+    supersedes `docs/screenshots/2026-08-26-map-investigator-grade/` (kept for history,
+    marked superseded — the zoom-cap and legend fixes it documents are still in effect,
+    just now drawn over real geography).
+  - **Test suite**: unchanged at 354 (frontend-only change; `npx tsc --noEmit` clean).
+  - **Not done this pass**: true district *boundary* polygons — still not part of this
+    dataset, still correctly not fabricated. Pan/drag interaction was not driven live
+    (screenshots prove render correctness, not gesture handling) — unchanged from v14's
+    own note on this.

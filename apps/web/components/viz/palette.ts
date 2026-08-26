@@ -14,9 +14,6 @@ export const ACCENT = "#d8a657";
 export const GRID = "rgba(255,255,255,0.07)";
 export const TEXT_DIM = "#9fb1be";
 export const TEXT_FAINT = "#63757f";
-/** The self-drawn basemap ground. Deliberately not a tile service: FIR coordinates
- *  must never leave the network inside a third-party tile request URL. */
-export const MAP_BG = "#080d12";
 
 /** Map a 0-1 intensity onto the shared ramp. */
 export function ramp(t: number): string {

@@ -683,7 +683,15 @@ body::after {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-.maplibregl-ctrl-attrib, .maplibregl-ctrl-logo { display: none !important; }
+.maplibregl-ctrl-logo { display: none !important; }
+/* Real OSM tiles need attribution (ODbL) — unlike the old self-drawn canvas, which had
+ * no third-party data to credit. Kept compact and dim so it reads as a footnote. */
+.maplibregl-ctrl-attrib {
+  background: rgba(18, 26, 33, 0.85) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.maplibregl-ctrl-attrib a { color: var(--text-faint) !important; }
+.maplibregl-ctrl-attrib.maplibregl-compact-show { background: rgba(18, 26, 33, 0.92) !important; }
 
 /* MapLibre ships a light control skin that glares against the ink basemap. */
 .maplibregl-ctrl-group {

@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ramp, rgba, ACCENT, MAP_BG } from "./palette";
+import { ramp, rgba, ACCENT } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
 type Point = { lat: number; lng: number; fir_id: string };
@@ -51,12 +51,25 @@ const DISTRICTS: { code: string; name: string; lat: number; lng: number }[] = [
   { code: "KA31", name: "Vijayanagara", lat: 15.27, lng: 76.39 },
 ];
 
+// OpenFreeMap ("liberty" style) — an OSM-derived, MapLibre-compatible tile service with
+// no API key, no registration and no per-request quota. No Catalyst service is a map
+// tile provider (the catalog has no mapping capability at all), so this is the same
+// documented-exception category as Kannada ASR/TTS or the graph/vector store (§2 of
+// CLAUDE.md): kept external only because nothing in Zia's catalog does this job.
+// What crosses the network is a tile z/x/y for the current viewport — never an FIR's
+// exact coordinates or any investigative text. A viewport tile request reveals roughly
+// "an officer is looking at Mandya district", which is already non-sensitive metadata
+// (every FIR's District is a plain ER column); it never reveals which case, which
+// person, or which record. Self-hosting these tiles is the honest upgrade path once a
+// tile server has somewhere to run; NEXT_PUBLIC_MAP_STYLE points at one without a code
+// change.
+const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+
 /**
- * Hotspot map. The basemap is a plain dark canvas rather than a tile service —
- * the architecture requires self-hosted tiles (FIR locations must not be sent to a
- * third-party tile provider as part of a request URL), and no tile server is
- * running here. Point a MapLibre style at your own tile server via
- * NEXT_PUBLIC_MAP_STYLE and this picks it up.
+ * Hotspot map over a real OpenStreetMap-derived basemap, so an officer can orient a
+ * result against actual roads, towns and terrain instead of a blank canvas. Veritas's
+ * own overlays (FIR points, hotspot density, district reference labels, legend, scale)
+ * are unchanged — only the ground they sit on is now real geography.
  */
 export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_points: Point[] } }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -64,15 +77,11 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
 
   useEffect(() => {
     if (!ref.current || map.current) return;
-    const style = process.env.NEXT_PUBLIC_MAP_STYLE;
+    const style = process.env.NEXT_PUBLIC_MAP_STYLE || DEFAULT_STYLE;
 
     map.current = new maplibregl.Map({
       container: ref.current,
-      style: style ?? {
-        version: 8,
-        sources: {},
-        layers: [{ id: "bg", type: "background", paint: { "background-color": MAP_BG } }],
-      },
+      style,
       center: [76.6, 14.5],
       zoom: 5.6,
       attributionControl: false,
@@ -81,6 +90,10 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
     // Native MapLibre feature, not a new dependency: a real distance scale so an
     // officer can judge how far apart two points on the map actually are.
     map.current.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-left");
+    // Real tiles are OSM data — ODbL requires attribution, unlike the old self-drawn
+    // canvas which had no third-party data to credit. Compact (a small "i" that
+    // expands) keeps it out of the way of the investigative overlays.
+    map.current.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
     const addDistricts = () => {
       const m = map.current;
@@ -98,20 +111,29 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
       });
       // A small dot at every real district centre — the vector layer handles this
       // fine. The NAME next to it is drawn as an HTML marker, not a symbol-layer
-      // text-field: a `text-field` layer needs MapLibre's `glyphs` PBF service to
-      // rasterise text, which is exactly the kind of third-party request this map
-      // was built to avoid (see the module docstring). A DOM marker uses the
-      // console's own font stack — no glyph server, no new dependency.
+      // text-field: liberty's own `glyphs` service rasterises the basemap's OWN
+      // labels, but Veritas's district reference names are our data, not the
+      // basemap's, and a DOM marker uses the console's own font stack with no extra
+      // request. A two-tone dot (light fill, dark ring) and a dark chip behind the
+      // name both stay legible regardless of what's under them — liberty's terrain
+      // ranges from pale cropland to saturated green forest to blue water.
       m.addLayer({
         id: "district-dot", type: "circle", source: "districts",
-        paint: { "circle-radius": 2.5, "circle-color": rgba("#ffffff", 0.35) },
+        paint: {
+          "circle-radius": 3,
+          "circle-color": rgba("#ffffff", 0.92),
+          "circle-stroke-width": 1.25,
+          "circle-stroke-color": rgba("#0a1016", 0.75),
+        },
       });
       for (const d of DISTRICTS) {
         const el = document.createElement("div");
         el.textContent = d.name;
         el.style.cssText =
-          "font-size:10px;color:rgba(255,255,255,0.55);white-space:nowrap;" +
-          "transform:translateY(4px);pointer-events:none;font-family:inherit;";
+          "font-size:10px;color:#e9eff4;white-space:nowrap;" +
+          "background:rgba(6,10,14,0.72);padding:1px 5px;border-radius:4px;" +
+          "border:1px solid rgba(255,255,255,0.12);" +
+          "transform:translateY(5px);pointer-events:none;font-family:inherit;";
         new maplibregl.Marker({ element: el, anchor: "top" })
           .setLngLat([d.lng, d.lat]).addTo(m);
       }
