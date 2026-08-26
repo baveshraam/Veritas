@@ -140,7 +140,24 @@ def _person_spans(text: str) -> list[tuple[int, int]]:
             return
         pool_idx = [i for i, (t, _, _) in enumerate(group) if t.lower() in _name_pool()]
         if pool_idx:
-            spans.append((group[pool_idx[0]][1], group[pool_idx[-1]][2]))
+            # Extend from the pool-matched core outward through adjacent capitalised
+            # tokens that aren't query stopwords or place names. ka_names.csv is a
+            # first-name/common-surname SAMPLE, not exhaustive — a less common surname
+            # sitting right next to a known first name ("Usha Naika": "Usha" is in the
+            # pool, "Naika" is not) used to be clipped to just the pool token, which
+            # then resolved to a DIFFERENT, unrelated "Usha" in the database (whichever
+            # had the most records) with nothing to show a substitution had happened —
+            # a wrong-person answer delivered at full confidence, not an honest "not
+            # found". Stopwords are still excluded on the leading side, which is what
+            # keeps "Was Ramesh Gowda" as "Ramesh Gowda" and not "Was Ramesh Gowda".
+            lo, hi = pool_idx[0], pool_idx[-1]
+            while lo > 0 and group[lo - 1][0].lower() not in _QUERY_STOPWORDS \
+                    and group[lo - 1][0].lower() not in known:
+                lo -= 1
+            while hi < len(group) - 1 and group[hi + 1][0].lower() not in _QUERY_STOPWORDS \
+                    and group[hi + 1][0].lower() not in known:
+                hi += 1
+            spans.append((group[lo][1], group[hi][2]))
         else:
             # tier 2: drop stopwords and gazetteer terms; whatever survives is a
             # candidate person name, even though we've never seen it before.

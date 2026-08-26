@@ -121,6 +121,16 @@ def test_unknown_names_are_still_detected_as_persons():
     assert ("PERSON", "Zzyzx Qwertius") in got
 
 
+def test_a_surname_outside_the_pool_is_not_clipped_off_a_known_first_name():
+    """Found live: 'Tell me more about Usha Naika' resolved to a DIFFERENT 'Usha' in
+    the database (whichever had the most records) because NER saw only 'Usha' —
+    'Naika' isn't in ka_names.csv's surname sample. The wrong person's full criminal
+    history was then answered at high confidence, with nothing to indicate a
+    substitution had happened. 'Usha' alone is in the pool; 'Naika' alone is not."""
+    got = _labels("Tell me more about Usha Naika.")
+    assert ("PERSON", "Usha Naika") in got
+
+
 def test_query_stopwords_are_not_mistaken_for_names():
     for q in ("Show crime hotspots in Kolar",
               "Trace the money trail",
