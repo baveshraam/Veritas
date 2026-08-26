@@ -51,5 +51,11 @@ client/
 .objkey
 .appsail-deploy.log
 
-# VSCode Markdown Preview Enhanced local export cache (machine-specific)
+# VSCode Markdown Preview Enhanced local export cache (machine-specific) — this glob had
+# been silently swallowing docs/VERITAS_STATUS.html and docs/PHASE1_TRUTH_TABLE.html too,
+# which are hand-maintained deliverables, not preview-cache output; every prior pass that
+# claimed to "update and commit" VERITAS_STATUS.html was updating a file that never
+# actually made it into the pushed repo. Found and fixed 2026-08-27.
 docs/*.html
+!docs/VERITAS_STATUS.html
+!docs/PHASE1_TRUTH_TABLE.html

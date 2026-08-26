@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Veritas — System Status &amp; Engineering Acceptance Report</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+:root{
+  --bg:#0b0f14; --panel:#111823; --panel2:#0e1520; --border:#233042; --border-soft:#1a2431;
+  --text:#dbe4ee; --text-dim:#8ea0b5; --text-faint:#5f7086;
+  --accent:#4fb3ff; --accent-dim:#2c6a94;
+  --pass:#2fbf71; --pass-bg:#123322; --pass-bd:#1f6b45;
+  --partial:#e8b23a; --partial-bg:#3a2f10; --partial-bd:#8a6b1c;
+  --fail:#f0554f; --fail-bg:#3a1414; --fail-bd:#8a2c27;
+  --unknown:#7d8fa6; --unknown-bg:#1c2733; --unknown-bd:#3a4d63;
+  --open:#e8813a; --open-bg:#3a2410; --open-bd:#8a4e1c;
+  --fixed:#3ad0c4; --fixed-bg:#0e332f; --fixed-bd:#1c6b62;
+  --mono: "SF Mono", "Cascadia Code", Consolas, "Courier New", monospace;
+  --sans: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+*{box-sizing:border-box;}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.55;}
+body{padding-bottom:80px;}
+a{color:var(--accent);text-decoration:none;}
+a:hover{text-decoration:underline;}
+code, .mono{font-family:var(--mono);font-size:0.92em;}
+
+/* ---------- header ---------- */
+header.top{position:sticky;top:0;z-index:50;background:rgba(11,15,20,0.97);backdrop-filter:blur(6px);border-bottom:1px solid var(--border);padding:14px 24px;}
+header.top h1{margin:0;font-size:19px;font-weight:700;letter-spacing:0.2px;}
+header.top .sub{color:var(--text-dim);font-size:12.5px;margin-top:3px;}
+nav.jump{display:flex;flex-wrap:wrap;gap:2px;margin-top:12px;}
+nav.jump a{font-size:12px;padding:5px 10px;border-radius:5px;color:var(--text-dim);background:var(--panel2);border:1px solid var(--border-soft);}
+nav.jump a:hover{color:var(--text);border-color:var(--accent-dim);text-decoration:none;}
+
+main{max-width:1180px;margin:0 auto;padding:0 24px;}
+section{padding:40px 0 8px;border-top:1px solid var(--border-soft);}
+section:first-of-type{border-top:none;}
+h2{font-size:20px;margin:0 0 4px;color:#fff;}
+h2 .num{color:var(--text-faint);font-weight:500;margin-right:8px;}
+.section-desc{color:var(--text-dim);font-size:13px;margin:0 0 20px;max-width:900px;}
+h3{font-size:15px;color:var(--text);margin:28px 0 10px;border-left:3px solid var(--accent-dim);padding-left:10px;}
+h3:first-of-type{margin-top:14px;}
+p{margin:0 0 12px;}
+ul{margin:0 0 14px;padding-left:20px;}
+li{margin-bottom:5px;}
+
+/* ---------- badges ---------- */
+.b{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;white-space:nowrap;border:1px solid transparent;}
+.b-pass{background:var(--pass-bg);color:var(--pass);border-color:var(--pass-bd);}
+.b-partial{background:var(--partial-bg);color:var(--partial);border-color:var(--partial-bd);}
+.b-fail{background:var(--fail-bg);color:var(--fail);border-color:var(--fail-bd);}
+.b-unknown{background:var(--unknown-bg);color:var(--unknown);border-color:var(--unknown-bd);}
+.b-open{background:var(--open-bg);color:var(--open);border-color:var(--open-bd);}
+.b-fixed{background:var(--fixed-bg);color:var(--fixed);border-color:var(--fixed-bd);}
+.b-p0{background:#3a1414;color:#ff8a85;border:1px solid #8a2c27;}
+.b-p1{background:#3a2410;color:#ffab6b;border:1px solid #8a4e1c;}
+.b-p2{background:#2a2a10;color:#e8d23a;border:1px solid #6b6b1c;}
+.b-p3{background:#1c2733;color:#9fb3c8;border:1px solid #3a4d63;}
+
+/* ---------- stat cards ---------- */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:22px;}
+.stat{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;}
+.stat .n{font-size:26px;font-weight:800;color:#fff;line-height:1.1;}
+.stat .l{font-size:11.5px;color:var(--text-dim);margin-top:4px;text-transform:uppercase;letter-spacing:0.4px;}
+.stat.pass .n{color:var(--pass);} .stat.partial .n{color:var(--partial);}
+.stat.fail .n{color:var(--fail);} .stat.unknown .n{color:var(--unknown);}
+.stat.accent .n{color:var(--accent);}
+
+.factgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:0;border:1px solid var(--border);border-radius:10px;overflow:hidden;margin-bottom:22px;}
+.factgrid .fact{padding:12px 16px;border-bottom:1px solid var(--border-soft);border-right:1px solid var(--border-soft);background:var(--panel);}
+.factgrid .fact .k{font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:0.3px;}
+.factgrid .fact .v{font-size:13.5px;margin-top:3px;color:var(--text);}
+.factgrid .fact .v.mono{font-size:12.5px;}
+
+/* ---------- tables ---------- */
+.twrap{overflow-x:auto;border:1px solid var(--border);border-radius:10px;margin-bottom:18px;}
+table{width:100%;border-collapse:collapse;font-size:12.8px;background:var(--panel);}
+thead th{position:sticky;top:0;background:var(--panel2);text-align:left;padding:9px 11px;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;color:var(--text-dim);border-bottom:1px solid var(--border);white-space:nowrap;}
+tbody td{padding:8px 11px;border-bottom:1px solid var(--border-soft);vertical-align:top;}
+tbody tr:last-child td{border-bottom:none;}
+tbody tr:hover{background:rgba(79,179,255,0.04);}
+td.id, th.id{white-space:nowrap;font-family:var(--mono);color:var(--text-dim);font-size:12px;}
+td.center{text-align:center;}
+
+.filterbar{display:flex;gap:8px;align-items:center;margin:0 0 10px;}
+.filterbar input{flex:1;max-width:360px;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:8px 12px;border-radius:7px;font-size:13px;}
+.filterbar input:focus{outline:none;border-color:var(--accent-dim);}
+.filterbar .count{font-size:11.5px;color:var(--text-faint);}
+
+/* ---------- details/collapsible ---------- */
+details.bug{border:1px solid var(--border);border-radius:8px;margin-bottom:8px;background:var(--panel);}
+details.bug[open]{border-color:var(--border);}
+details.bug summary{cursor:pointer;padding:11px 14px;font-size:13px;list-style:none;display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
+details.bug summary::-webkit-details-marker{display:none;}
+details.bug summary::before{content:"▸";color:var(--text-faint);font-size:11px;transition:transform .15s;}
+details.bug[open] summary::before{transform:rotate(90deg);}
+details.bug summary .id{font-family:var(--mono);color:var(--accent);font-weight:700;min-width:64px;}
+details.bug summary .title{flex:1;color:var(--text);}
+details.bug .bugbody{padding:0 16px 16px 40px;font-size:12.8px;color:var(--text-dim);}
+details.bug .bugbody dl{margin:0;display:grid;grid-template-columns:110px 1fr;gap:6px 12px;}
+details.bug .bugbody dt{color:var(--text-faint);text-transform:uppercase;font-size:10.5px;letter-spacing:0.3px;padding-top:2px;}
+details.bug .bugbody dd{margin:0;color:var(--text);}
+
+details.phase{border-left:2px solid var(--border-soft);margin-bottom:2px;}
+details.phase summary{cursor:pointer;padding:9px 0 9px 16px;font-size:13px;list-style:none;color:var(--text);}
+details.phase summary::-webkit-details-marker{display:none;}
+details.phase summary::before{content:"▸ ";color:var(--text-faint);}
+details.phase[open] summary::before{content:"▾ ";}
+details.phase .phasebody{padding:2px 0 14px 16px;}
+
+/* ---------- misc ---------- */
+.pipeline{display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin:14px 0 22px;font-size:12.5px;}
+.pipeline .step{background:var(--panel2);border:1px solid var(--border);padding:8px 12px;border-radius:7px;color:var(--text);}
+.pipeline .arrow{color:var(--text-faint);}
+
+.risk-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-bottom:14px;}
+.risk-col{background:var(--panel);border:1px solid var(--border);border-radius:10px;padding:14px 16px;}
+.risk-col h4{margin:0 0 10px;font-size:12.5px;text-transform:uppercase;letter-spacing:0.3px;color:var(--text-dim);}
+.risk-col ul{margin:0;padding-left:18px;font-size:12.8px;}
+.risk-col li{margin-bottom:8px;color:var(--text-dim);}
+.risk-col li b{color:var(--text);}
+
+.readiness{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;}
+.readiness .col{border-radius:10px;padding:16px 18px;border:1px solid;}
+.readiness .col.ready{background:var(--pass-bg);border-color:var(--pass-bd);}
+.readiness .col.caution{background:var(--partial-bg);border-color:var(--partial-bd);}
+.readiness .col.no{background:var(--fail-bg);border-color:var(--fail-bd);}
+.readiness .col h4{margin:0 0 10px;font-size:13px;}
+.readiness .col.ready h4{color:var(--pass);}
+.readiness .col.caution h4{color:var(--partial);}
+.readiness .col.no h4{color:var(--fail);}
+.readiness ul{margin:0;padding-left:18px;font-size:12.8px;}
+.readiness li{margin-bottom:7px;color:var(--text);}
+
+blockquote.verdict{border-left:3px solid var(--accent-dim);margin:0 0 16px;padding:4px 0 4px 16px;color:var(--text);font-size:14px;}
+.footnote{color:var(--text-faint);font-size:11.5px;margin-top:6px;}
+.callout{background:var(--panel);border:1px solid var(--border);border-left:3px solid var(--accent-dim);border-radius:6px;padding:12px 16px;font-size:12.8px;color:var(--text-dim);margin-bottom:16px;}
+.callout b{color:var(--text);}
+hr.soft{border:none;border-top:1px solid var(--border-soft);margin:26px 0;}
+
+footer{max-width:1180px;margin:40px auto 0;padding:20px 24px;border-top:1px solid var(--border-soft);color:var(--text-faint);font-size:11.5px;}
+
+@media(max-width:640px){
+  main{padding:0 14px;}
+  section{padding:28px 0 4px;}
+  details.bug .bugbody{padding-left:16px;}
+  details.bug .bugbody dl{grid-template-columns:1fr;}
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <h1>VERITAS — System Status &amp; Engineering Acceptance Report</h1>
+  <div class="sub">Internal QA / engineering snapshot — not a demo deck. Report generated 2026-08-26 07:52 UTC against commit <code>5022c46</code>, live deployment <code>52852000000316042</code>. <b>Stale as of two later 2026-08-26 passes</b> — the North Star hardening pass (commit <code>e1426ef</code>) and the conversational-architecture pass (commits <code>2e1da7d</code>&ndash;<code>d865293</code>, live deployment <code>52852000000318035</code>, test count 352) — this file's body (§1&ndash;12 below) was not regenerated either time; see <code>docs/VERITAS_HANDOFF.md</code> (current operational state), <code>docs/QA_FUNCTIONALITY_MATRIX.md</code> §3 rows RAG-24&ndash;33 (the 8 new conversational intents: case-scoped follow-ups, meta-questions about the previous answer, ambiguous-name clarification), and <code>docs/WORK_LOG.md</code>'s "Conversational architecture pass" entry for what changed since. In short: 7 new conversational intents reusing the existing Investigation Copilot rather than duplicating it, a real session-focus persistence bug fixed (the reason a follow-up like "what happened?" could forget a just-opened case), a wrong-person NER bug fixed (a surname outside the name gazetteer was silently clipped off a known first name), and a full 14-turn live investigation verified through both the API and the real console. <b>Further stale as of a third 2026-08-26 pass</b> (commits <code>2a903ba</code>, <code>2d382d4</code>, <code>06fa7e1</code>; API deployment <code>52852000000325027</code>; test count 354) that fixed two real, live-found defects this section (§2 row 7, §5 P1 map gap) still describes as fully closed: the map's `maxZoom:11` fit-bounds collapsed all geographic context on a tight result cluster (fixed, capped at 9, plus a legend and clearer hotspot-density fill — see <code>docs/screenshots/2026-08-26-map-investigator-grade/</code>), and a pronoun follow-up after a multi-person <code>CASE_PEOPLE</code> turn ("does he have priors?") refused instead of asking which of the named candidates was meant (fixed, reuses the existing ambiguous-name clarification path). <b>Further stale as of a fourth 2026-08-26 pass</b> (real-basemap pass) that replaced the self-drawn dark-canvas map this section (§2 row 7, §3 Geography row, §5 UI-24) still describes as the current map: <code>viz/MapView.tsx</code> now loads a real MapLibre style, OpenFreeMap's <code>liberty</code> (OSM-derived, no API key/registration — the fifth documented Catalyst exception), with every existing overlay (FIR points, hotspot density, district labels, legend, scale, the <code>maxZoom:9</code> fix) kept and re-tuned for a real basemap. See <code>docs/screenshots/2026-08-26-real-basemap/</code> (supersedes <code>docs/screenshots/2026-08-26-map-investigator-grade/</code>). <b>Further stale as of a fifth 2026-08-26 pass</b> (finishing pass — commits <code>d3eba10</code>, <code>5b33622</code>; API deployment <code>52852000000306056</code>; test count 361) that finally drove the full 19-turn golden conversation this section has referenced as outstanding since the second pass: found and fixed 4 real live bugs (a stale <code>active_person</code> surviving a case switch that silently bypassed the ambiguous-pronoun clarification path entirely; <code>EXPLAIN_REASONING</code>'s regex missing natural verb phrasing like "why did you <i>select</i> those cases"; <code>NEXT_STEPS</code> missing the passive "investigat<b>ed</b> next"; a decided refusal still running generic search and padding the Evidence rail with unrelated citations) and closed BUG-026 (Copilot leads now show the as-filed name alongside the canonical one when they differ). All 19 turns, a Kannada follow-up, and an IO cross-station authorization check are now confirmed correct live through the console — see <code>docs/screenshots/2026-08-26-full-investigation-walkthrough/</code>. QuickML and PDF export were both re-checked directly against the live platform this pass and remain correctly BLOCKED (no code fix possible without a credential this environment cannot obtain). <b>Further stale as of a sixth pass, 2026-08-27</b> (finalization pass — commit <code>37cc5c6</code>; API deployment <code>52852000000306055</code>; test count 369): a fresh adversarial stress conversation (deliberately different phrasing from the golden script) found and fixed three more real live bugs — a Kannada query crashing the whole turn on a tokenizer exception the translation layer didn't catch broadly enough; a district-scoped question with no person in it being hijacked into a person-ambiguity clarification because bare "this"/"that" was treated as a person pronoun even as an ordinary determiner ("this district"); and "go back to the first case" silently running an irrelevant search instead of refusing honestly (no case-history stack exists). Also closed this pass: <code>veritas_audit_verify</code>'s Cron job had its first-ever real unattended success observed directly (<code>success_count: 1, failure_count: 0</code>), the one item every prior pass's handoff had left open. <b>No browser/CDP tooling was available in this pass's environment</b> — everything above was verified over the live HTTP/SSE API directly, not through the console UI; no UI rows were re-verified and no new screenshots were taken this pass. See <code>docs/VERITAS_HANDOFF.md</code> and <code>docs/WORK_LOG.md</code> for the current operational state.</div>
+  <nav class="jump">
+    <a href="#exec">1. Executive Status</a>
+    <a href="#northstar">2. North Star Checklist</a>
+    <a href="#inventory">3. System Inventory</a>
+    <a href="#history">4. Work History</a>
+    <a href="#ledger">5. Bug Ledger</a>
+    <a href="#qa">6. QA / Acceptance</a>
+    <a href="#e2e">7. E2E Investigations</a>
+    <a href="#data">8. Data Foundation</a>
+    <a href="#deploy">9. Deployment / CI-CD</a>
+    <a href="#risks">10. Remaining Risks</a>
+    <a href="#demo">11. Demo Readiness</a>
+    <a href="#verdict">12. Final Verdict</a>
+  </nav>
+</header>
+
+<main>
+
+<!-- =================================================================== -->
+<section id="exec">
+<h2><span class="num">1.</span>Executive Status</h2>
+<p class="section-desc">All numbers below are counted directly from the source documents named in each caption, not estimated. Where a document tallies a number itself (bug severities, test counts), that count is used verbatim; where this report tallies rows from a table, the method is stated.</p>
+
+<div class="factgrid">
+  <div class="fact"><div class="k">North Star phases</div><div class="v">6 / 6 complete, live-verified <span class="b b-pass">DONE</span></div></div>
+  <div class="fact"><div class="k">Core investigation workflow</div><div class="v">Trusted single-record lookup — live-verified, both API and browser</div></div>
+  <div class="fact"><div class="k">Current commit</div><div class="v mono">5022c46f — "deploy: relay BUG-019/025 (intent word-boundary fix; docs)"</div></div>
+  <div class="fact"><div class="k">Working tree</div><div class="v">Clean — re-confirmed at report time (<code>git status</code>)</div></div>
+  <div class="fact"><div class="k">Live API</div><div class="v"><span class="b b-pass">UP</span> <code>veritas-api-50043864344.development.catalystappsail.in</code> — <code>/health</code> returned 200 at report time</div></div>
+  <div class="fact"><div class="k">Live console</div><div class="v"><span class="b b-pass">UP</span> <code>veritas-60077763394.development.catalystserverless.in/app/</code> — 200 at report time</div></div>
+  <div class="fact"><div class="k">Live deployment</div><div class="v mono">52852000000316042 — Aug 26, 2026 03:59 AM, status: success, memory 2048MB</div></div>
+  <div class="fact"><div class="k">Tests</div><div class="v">358 passed, 2 skipped (AppSail-only dependency, by design), 0 failed — re-run at report time</div></div>
+  <div class="fact"><div class="k">Last verified timestamp</div><div class="v">2026-08-26 07:52 UTC (this report's own live check) — see §9 for the full deploy/verify history through the night of Aug 25–26</div></div>
+</div>
+
+<h3>Bug ledger totals — <code>docs/PHASE1_FAILURE_LOG.md</code>, its own summary line</h3>
+<div class="stats">
+  <div class="stat fail"><div class="n">3</div><div class="l">P0 — all fixed</div></div>
+  <div class="stat partial"><div class="n">15</div><div class="l">P1 — 14 fixed, 1 open</div></div>
+  <div class="stat unknown"><div class="n">6</div><div class="l">P2 — 4 fixed, 1 partial, 1 open</div></div>
+  <div class="stat"><div class="n">1</div><div class="l">P3 — fixed</div></div>
+  <div class="stat accent"><div class="n">25</div><div class="l">Total tracked defects</div></div>
+  <div class="stat pass"><div class="n">23</div><div class="l">Fixed / partially fixed</div></div>
+  <div class="stat open"><div class="n">2</div><div class="l">Still open (BUG-015, BUG-022)</div></div>
+</div>
+
+<h3>Component-level status tally — <code>docs/QA_FUNCTIONALITY_MATRIX.md</code></h3>
+<p class="section-desc" style="margin-top:-4px;">Counted by scanning every status cell across the UI (30), API (12), RAG (23), ML (13), NLP (11), Deployment (14) and Data-integrity (6) tables — 109 numbered rows. A status string like "FIXED (code, ASGI-level); live UNVERIFIABLE" is counted once, under its leading word; this is an approximate tally over free-text statuses, not a rigid enum, and is presented as such.</p>
+<div class="stats">
+  <div class="stat pass"><div class="n">67</div><div class="l">Verified</div></div>
+  <div class="stat partial"><div class="n">18</div><div class="l">Partial</div></div>
+  <div class="stat fail"><div class="n">5</div><div class="l">Broken</div></div>
+  <div class="stat unknown"><div class="n">10</div><div class="l">Unknown</div></div>
+  <div class="stat"><div class="n">1</div><div class="l">N/A (by design)</div></div>
+  <div class="stat fail"><div class="n">1</div><div class="l">False claim (doc vs. reality)</div></div>
+</div>
+<p class="footnote">Unknown is never counted as Fail in this report, per the audit's own explicit rule. "Unknown" means genuinely unexercised (no audio input device in this environment, no browser/CDP tooling for a specific click, a Cron schedule that has not yet had its next unattended fire) — not a defect.</p>
+
+<div class="callout"><b>What changed between audit start and now, in one line:</b> the Phase 1 audit began at 201 green tests and 89 hand-built truth-table rows with 18 BROKEN + 4 FALSE CLAIM; two fix passes plus six North Star phases later, the same 89-row table reads 56 VERIFIED / 16 PARTIAL / 3 BROKEN / 2 FALSE CLAIM / 11 UNKNOWN (see §2/§6), the test suite is at 358, and every fix that reached "passes in process" was subsequently re-driven against the live, deployed system — not left at that stage.</div>
+
+</section>
+
+<!-- =================================================================== -->
+<section id="northstar">
+<h2><span class="num">2.</span>North Star Checklist</h2>
+<p class="section-desc">Every requirement in <code>docs/CAPABILITY_TARGET_AND_GAPS.md</code> Part 1 (the 13-stage investigation loop plus the cross-cutting evidence/trust bar), scored against Part 2's stage-by-stage comparison to the live system. Status reflects the North Star document's own verdict, not a re-derivation.</p>
+
+<div class="filterbar"><input type="text" data-filter-target="t-northstar" placeholder="Filter requirements…"><span class="count" id="cnt-northstar"></span></div>
+<div class="twrap"><table id="t-northstar" class="filterable">
+<thead><tr><th>Requirement</th><th>Status</th><th>Current implementation</th><th>Live verified</th><th>Limitation</th></tr></thead>
+<tbody>
+<tr><td>1. Case initiation — recognize a case reference instantly</td><td><span class="b b-pass">Close to target</span></td><td><code>FIR_NUMBER_RE</code> matches both 18-digit and short forms; exact-record lookup is the primary path</td><td>Yes — RAG-01/02</td><td>None material</td></tr>
+<tr><td>2. Case context — assembled live, not a stale dossier</td><td><span class="b b-partial">Partial</span></td><td>HippoRAG seeds retrieval from the question's entities every turn</td><td>Trace confirms firing; not independently re-verified this pass</td><td>None beyond general retrieval-quality gaps (stage 9)</td></tr>
+<tr><td>3. Entity discovery — inspectable match confidence per person</td><td><span class="b b-partial">Partial</span></td><td>Fellegi-Sunter → <code>vx_accused_identity</code>, F1 0.989 claimed (independently corroborated at 0.998 on a 600-case sample)</td><td>Alias found live for person 803</td><td>Answer key not persisted — cannot re-verify F1 against the live Catalyst dataset, only a fresh local run</td></tr>
+<tr><td>4. Link analysis — graph algorithms as ranking signal, not decoration</td><td><span class="b b-pass">Close to target</span></td><td>PageRank/Louvain/betweenness ported exactly, run on the co-offending projection</td><td>Yes — network view renders live, Louvain communities plural and realistic</td><td>Minimal</td></tr>
+<tr><td>5. Timeline construction — wired to the same evidence as everything else</td><td><span class="b b-partial">Partial</span></td><td>Copilot timeline exists, content extensively verified at API level</td><td>Overlay click-through UNKNOWN this pass</td><td>Unclosed verification loop, not a defect</td></tr>
+<tr><td>6. Evidence handling — contemporaneous, hashed, unbroken audit trail</td><td><span class="b b-pass">Close to target</span></td><td><code>ChainHash = sha256(PrevHash‖ResponseHash)</code>, matches SWGDE/NIST digital-evidence pattern</td><td><code>GET /jobs/audit-verify</code> → <code>intact:true</code> against the real live log</td><td>None material</td></tr>
+<tr><td>7. Geographic intelligence — real algorithms, honest ground truth</td><td><span class="b b-pass">Fixed (Phase 4)</span></td><td>KDE/DBSCAN verified; map now carries 31 real district labels + a native scale control</td><td>Bundle-grepped live for the fix; data flow confirmed</td><td>No real district boundary polygons — centroid+label is what the data honestly supports</td></tr>
+<tr><td>8. Financial intelligence — two-detector AML pattern (rule + GNN)</td><td><span class="b b-partial">Partial (Phase 5)</span></td><td>Reachability bug fixed — detectors now actually run on a real trail</td><td>Rule detector live-verified reachable; no live positive example this session; GNN's <code>torch</code> absent from the deployed image by design</td><td>GNN verified to degrade correctly, not verified to detect, on this deployment</td></tr>
+<tr><td>9. Cross-case discovery — genuine MO-based similarity, not label matching</td><td><span class="b b-pass">Fixed (Phase 2)</span></td><td>All 20 crime types now carry 3 MO variants + per-case slot-filling; similarity explains itself (shared IPC sections, MO clause) instead of a bare score</td><td>Live backfill confirmed: 5 distinct narratives for 5 Theft cases, previously identical</td><td>Was the North Star's largest named gap (BUG-023) — now closed</td></tr>
+<tr><td>10. Investigative leads — capped, actionable, human-decided</td><td><span class="b b-pass">Matches target</span></td><td>Direct-co-accused-only leads; subject-less network/money questions correctly refuse</td><td>Yes, live</td><td>None material</td></tr>
+<tr><td>11. Verification — CRAG accept/widen/refuse, no bypass</td><td><span class="b b-pass">Fixed, with a caveat</span></td><td>BUG-006 (unsupporting citations) fixed; BUG-020 (a regression <i>from that same fix</i>, deleting authoritative refusals) found and fixed in the same pass</td><td>Both live-verified</td><td>Worth naming: this loop is delicate and depends on re-testing every related path after any change, not on any single fix being permanent</td></tr>
+<tr><td>12. Briefing / reporting — structured, prosecutor-adjacent export</td><td><span class="b b-partial">Partial</span></td><td>PDF export gated correctly in UI; two of three root causes fixed live</td><td>Live-tested; still returns HTML, not PDF</td><td>One platform identity requirement (interactive Catalyst OAuth) remains, undiagnosable from this environment</td></tr>
+<tr><td>13. Audit / collaboration — CJIS-analogous RBAC + logging + periodic verification</td><td><span class="b b-pass">Matches target</span></td><td>All 6 roles resolve correctly, station/masking scoping live-confirmed, audit-verify Cron now live-verified</td><td>Yes — and 2 P0 auth defects (BUG-002, BUG-003) were found and fixed specifically here</td><td>None open at P0/P1; the fact 2 P0s existed here argues for continued scrutiny of this surface</td></tr>
+<tr><td>AI interface — supports human decisions, never replaces them, explicit refusal, no protected-attribute leakage</td><td><span class="b b-partial">Partial</span></td><td>Leakage rules independently re-verified in code; every live answer stays grounded and cited</td><td>LLM fluency layer (QuickML) reachability fixed for auth (BUG-021); gateway itself still rejects the request (BUG-022, open)</td><td>A fluency gap, not a truthfulness gap — the deterministic extractive path is correct on its own</td></tr>
+<tr><td>Data foundation — every structured dimension real and tested</td><td><span class="b b-pass">Solid, one gap fixed</span></td><td>Schema conformity, referential integrity, identity, co-offending, financial ground truth, graph, reproducibility all independently confirmed in code</td><td>23-check integrity suite, re-run this session</td><td>Narrative diversity was the one broken dimension (BUG-023) — now fixed and has a regression test</td></tr>
+</tbody>
+</table></div>
+
+<h3>Prioritized gap ranking at the time the North Star was written (for record — see §5 for current status of each)</h3>
+<div class="twrap"><table>
+<thead><tr><th>Priority</th><th>Item</th><th>Status now</th></tr></thead>
+<tbody>
+<tr><td><span class="b b-p0">P0</span></td><td>BUG-023 — narrative diversity collapse undermines "similar past cases"</td><td><span class="b b-pass">FIXED</span> — North Star Phase 2</td></tr>
+<tr><td><span class="b b-p0">P0</span></td><td>No narrative-diversity test existed</td><td><span class="b b-pass">FIXED</span> — regression test added alongside Phase 2</td></tr>
+<tr><td><span class="b b-p0">P0</span></td><td>BUG-022 — LLM fluency layer not reachable live</td><td><span class="b b-open">OPEN</span> — narrowed to a specific console-only endpoint key</td></tr>
+<tr><td><span class="b b-p1">P1</span></td><td>Map has no geographic reference (UI-24)</td><td><span class="b b-pass">FIXED</span> — Phase 4</td></tr>
+<tr><td><span class="b b-p1">P1</span></td><td>Financial detectors unverified live (ML-09/10)</td><td><span class="b b-partial">PARTIAL</span> — reachable and verified live, no positive-case example found</td></tr>
+<tr><td><span class="b b-p1">P1</span></td><td>Identity answer key not persisted</td><td><span class="b b-open">OPEN</span> — not addressed this pass</td></tr>
+<tr><td><span class="b b-p1">P1</span></td><td>BUG-011 — similarity shown as evidential confidence</td><td><span class="b b-pass">FIXED</span> — <code>confidence_kind</code> axis, live-verified</td></tr>
+<tr><td><span class="b b-p1">P1</span></td><td>BUG-008 — "how many" never returns a count</td><td><span class="b b-pass">FIXED</span> — live-verified authoritative count</td></tr>
+<tr><td><span class="b b-p2">P2</span></td><td>BUG-018 — PDF export is HTML, not PDF</td><td><span class="b b-partial">PARTIAL</span> — 2/3 root causes fixed; 1 platform question open</td></tr>
+<tr><td><span class="b b-p2">P2</span></td><td>BUG-014 — saturated risk score, unvalidated calibration</td><td><span class="b b-pass">FIXED (reporting)</span> — honest <code>calibrated:false</code> now shown</td></tr>
+<tr><td><span class="b b-p2">P2</span></td><td>BUG-017 — doc vs. deployed reality on model weights</td><td><span class="b b-pass">FIXED</span> — <code>/health</code> now reports the real backend</td></tr>
+<tr><td><span class="b b-p3">P3</span></td><td>BUG-016 — Kannada latency</td><td><span class="b b-partial">PARTIALLY FIXED</span> — cold-start tax removed, inherent generation-time cost remains</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<!-- =================================================================== -->
+<section id="inventory">
+<h2><span class="num">3.</span>Complete System Inventory</h2>
+<p class="section-desc">Every major module found by walking the repository (routes, components, intents, ML modules, NLP modules, Catalyst services) — see the categorized detail tables in §6, which this section indexes. This is the answer to "what does the running system actually contain."</p>
+
+<div class="twrap"><table>
+<thead><tr><th>Domain</th><th>What exists</th><th>Where</th><th>Status snapshot</th></tr></thead>
+<tbody>
+<tr><td>Authentication / RBAC</td><td>Catalyst Auth (deployed) + signed-JWT fallback (local); 6 roles × station scoping + identity masking, enforced at query-construction time AND response middleware</td><td><code>apps/api/api/auth/</code>, <code>packages/policy/</code></td><td><span class="b b-pass">Verified live</span> — all 6 roles, both P0 auth bugs found here fixed</td></tr>
+<tr><td>Conversational RAG</td><td>LangGraph pipeline: orchestrate → retrieve (HippoRAG + specialists + ToG) → CRAG evaluate → synthesize; 16 intents including CAPABILITY / NOT_INFERABLE</td><td><code>packages/rag_agent/</code></td><td><span class="b b-pass">Verified live</span> — 23 RAG capabilities tracked, 21 verified</td></tr>
+<tr><td>Case / FIR lookup</td><td>Exact 18-digit and short-form FIR number matching; role/station-scoped reads; refuses a nonexistent record rather than answering from neighbours</td><td><code>orchestrator.py</code>, <code>sql_agent.py</code>, <code>records.py</code></td><td><span class="b b-pass">Verified live</span></td></tr>
+<tr><td>Person / identity resolution</td><td>Fellegi-Sunter probabilistic record linkage reconstructing people the ER's schema has no entity for; F1 0.989 claimed, 0.998 on an independent sample</td><td><code>packages/ml_models/entity_resolution/</code></td><td><span class="b b-partial">Partial</span> — solid in code, answer key not persisted for live re-verification</td></tr>
+<tr><td>Network / graph</td><td>NetworkX over a flat edge table; PageRank / Louvain / betweenness ported exactly from Neo4j GDS; co-offending projection, not the whole graph</td><td><code>data/data/graph.py</code>, <code>gds.py</code></td><td><span class="b b-pass">Verified live</span></td></tr>
+<tr><td>Similar cases</td><td>Hybrid dense+lexical vector search plus a structured explanation (shared IPC sections, crime type, district, MO clause)</td><td><code>data/data/vectors.py</code>, <code>copilot/brief.py</code></td><td><span class="b b-pass">Fixed, live-verified</span> (Phase 2) — was the platform's largest named data gap</td></tr>
+<tr><td>Geography / hotspots</td><td>KDE (Gaussian, Scott's rule) + DBSCAN; self-drawn dark canvas map (no third-party tile requests), now with real district labels + scale control</td><td><code>packages/ml_models/spatial/</code>, <code>viz/MapView.tsx</code></td><td><span class="b b-pass">Fixed, live-verified</span> (Phase 4)</td></tr>
+<tr><td>Timeline</td><td>Copilot chronology from FIR registration, arrests/surrenders, chargesheet events</td><td><code>copilot/brief.py:_timeline</code></td><td><span class="b b-partial">Partial</span> — API content verified extensively; interactive overlay UNKNOWN</td></tr>
+<tr><td>Financial intelligence</td><td>Directed <code>TRANSFERRED_TO</code> graph edges, role-capped traversal depth, Sankey visualization; negative-finding evidence when no trail exists</td><td><code>graph_agent.py</code>, <code>SankeyView.tsx</code></td><td><span class="b b-pass">Verified live</span> — real 60-transfer trail rendered correctly</td></tr>
+<tr><td>AML detection</td><td>Rule-based structuring detector (auditable) + GNN suspicious-subgraph classifier (degrades gracefully without <code>torch</code>)</td><td><code>ml_models/financial/</code></td><td><span class="b b-partial">Partial</span> — reachability bug fixed (Phase 5); no live positive example found; GNN unavailable on the deployed image by design</td></tr>
+<tr><td>Forecasting / risk / recidivism</td><td>Prophet + MinT reconciliation; XGBoost+SHAP risk (now isotonic-calibrated with an honest <code>calibrated</code> flag); LightGBM 180-day recidivism</td><td><code>ml_models/forecasting/</code>, <code>risk/</code></td><td><span class="b b-partial">Partial</span> — forecast verified; risk score fixed at the reporting level, saturation on this dataset is a data-volume limit</td></tr>
+<tr><td>Causal analysis</td><td>DoWhy backdoor adjustment over real Census 2011 data, named unmeasured confounder (police strength)</td><td><code>ml_models/causal/</code></td><td><span class="b b-open">Open (platform-constrained)</span> — <code>dowhy</code> deliberately not in the deployed image (~405MB against a measured ~420MB headroom); the honest decline is the correct live behaviour</td></tr>
+<tr><td>Kannada NLP</td><td>NLLB-200 (CTranslate2 int8) translation both directions; script detection; full round-trip pipeline</td><td><code>data/data/nlp/translate.py</code></td><td><span class="b b-pass">Verified live</span> — round trip now 4.3s (was 13.4s) after warm-up fix</td></tr>
+<tr><td>Voice / ASR / TTS</td><td>faster-whisper (Kannada ASR), TTS reply path</td><td><code>data/data/nlp/speech.py</code></td><td><span class="b b-unknown">Unknown</span> — no audio input device available in any audit environment; hard environmental constraint, not a defect</td></tr>
+<tr><td>Copilot / briefing</td><td>Timeline + top-5 similar cases + capped direct-co-accused leads + paste-ready diary paragraph</td><td><code>copilot/brief.py</code>, <code>Copilot.tsx</code></td><td><span class="b b-partial">Partial</span> — station-scoping and masking bugs found and fixed here (BUG-003, BUG-004); diary is deterministic text, not LLM prose (QuickML gap)</td></tr>
+<tr><td>Evidence / citations</td><td>1-based citation numbering built from evidence before the answer is written; <code>confidence_kind</code> distinguishes support / similarity / model-estimate</td><td><code>synthesis_agent.py</code>, <code>EvidenceRail.tsx</code></td><td><span class="b b-pass">Fixed, live-verified</span> — was the single most consequential finding (BUG-006)</td></tr>
+<tr><td>Audit chain</td><td>SHA-256 hash chain, tamper-evident by construction; verified on a Cron schedule</td><td><code>apps/api/api/audit.py</code></td><td><span class="b b-pass">Verified live</span> — <code>intact:true</code> against the real log</td></tr>
+<tr><td>Alerts</td><td>Isolation Forest district-spike anomaly feed</td><td><code>ml_models/risk/anomalies.py</code>, <code>alerts.py</code></td><td><span class="b b-pass">Fixed, live-verified</span> — moved from an unauthenticated WebSocket to authenticated SSE after the transport itself proved unreachable through the platform gateway</td></tr>
+<tr><td>Cron</td><td>6h graph/vector refresh, 12h audit verification</td><td>Catalyst Cron, <code>jobs.py</code></td><td><span class="b b-pass">Fixed, live-verified</span> — both jobs had never once succeeded since creation (wrong hostname + stale token); corrected and re-verified by direct call</td></tr>
+<tr><td>Exports</td><td>PDF/HTML session export via SmartBrowz (target) with a local-renderer fallback</td><td><code>apps/api/api/routers/export.py</code></td><td><span class="b b-partial">Partial</span> — 2 of 3 root causes fixed; still serves the honest HTML fallback pending a platform identity requirement</td></tr>
+<tr><td>Deployment / CI-CD</td><td>GitHub Actions relay build → Catalyst signed-URL upload → AppSail upsert; see §9</td><td><code>.github/workflows/relay-deploy.yml</code></td><td><span class="b b-pass">Verified</span> — every deployment this pass traced end to end</td></tr>
+<tr><td>Catalyst services in use</td><td>AppSail, Web Client Hosting (Slate), Catalyst Authentication, Data Store, File Store, Cache, QuickML LLM Serving, Cron, SmartBrowz</td><td>— </td><td>See §9; 7 of 9 fully working live, QuickML gateway and SmartBrowz identity resolution both have one open platform question each</td></tr>
+</tbody>
+</table></div>
+</section>
+
+<!-- =================================================================== -->
+<section id="history">
+<h2><span class="num">4.</span>Complete Work History</h2>
+<p class="section-desc">Reconstructed from <code>git log</code> and the phase-completion docs. Grouped into the six North Star phases plus the Phase 1 audit that preceded them and the deployment-era work that preceded that. Each phase is collapsible; expand for the commit-level detail.</p>
+
+<details class="phase" open>
+<summary><b>Overnight finalization pass</b> — 2026-08-26 03:39–03:56 — BUG-005, BUG-016, BUG-017, BUG-018, BUG-019, BUG-022, BUG-025</summary>
+<div class="phasebody">
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th><th>Problem addressed</th></tr></thead>
+<tbody>
+<tr><td class="mono">03:39</td><td class="id mono">37023b3</td><td>QuickML endpoint key header</td><td>BUG-022 — sends <code>X-QUICKML-ENDPOINT-KEY</code> when configured; key itself unobtainable from this environment</td></tr>
+<tr><td class="mono">03:39</td><td class="id mono">e0170b3</td><td>PDF export admin-scope credential</td><td>BUG-018 — tested and disproved the credential-scope hypothesis; narrowed to a genuine Catalyst User Management identity requirement</td></tr>
+<tr><td class="mono">03:43</td><td class="id mono">d09cb88</td><td>Replace <code>/alerts</code> WebSocket with SSE</td><td>BUG-005 — sidesteps an apparent AppSail gateway limitation on WebSocket proxying for custom runtimes rather than resolving the platform question</td></tr>
+<tr><td class="mono">03:43</td><td class="id mono">29d2e99</td><td>Warm NLLB/whisper at container start; report real backend on <code>/health</code></td><td>BUG-016 (cold-start tax) + BUG-017 (doc vs. reality on model weights)</td></tr>
+<tr><td class="mono">03:44</td><td class="id mono">b8af173</td><td>deploy: relay overnight finalization pass</td><td>All five fixes above, live</td></tr>
+<tr><td class="mono">03:56</td><td class="id mono">4fe5342</td><td>Word-boundary keyword matching for intent classification</td><td>BUG-019 — <code>"fir" in "firs"</code> substring match</td></tr>
+<tr><td class="mono">03:56</td><td class="id mono">a54d5d8</td><td>Repoint both Catalyst Cron jobs — org id instead of app id, stale token</td><td>BUG-025 — both jobs had never once succeeded since Jul 13, 2026 (0/20 success)</td></tr>
+<tr><td class="mono">03:56</td><td class="id mono">5022c46</td><td>deploy: relay BUG-019/025; docs</td><td>Current HEAD</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 6</b> — 2026-08-26 02:34–03:03 — Full Investigation Briefing (capstone)</summary>
+<div class="phasebody">
+<p>PDF export's diagnostic path fixed twice more: the SDK method name (<code>smart_browz</code>, not <code>smartbrowz</code>) and the unbound SDK context (a fresh <code>initialize()</code> instead of the request's own captured context). Timeline/leads/diary/similar-cases assembly re-verified together as one workflow. Declared complete and live-verified at 03:03 (<code>0e5104f</code> — "all six North Star phases complete and live-verified").</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">02:34</td><td class="id mono">437a1db</td><td>PDF export surfaces WHY it degraded (diagnostic headers)</td></tr>
+<tr><td class="mono">02:35</td><td class="id mono">975a76a</td><td>deploy: relay Phase 6 diagnostics</td></tr>
+<tr><td class="mono">02:47</td><td class="id mono">1f28a68</td><td>PDF export was calling a method that doesn't exist on the SDK</td></tr>
+<tr><td class="mono">02:47</td><td class="id mono">1aff306</td><td>deploy: relay Phase 6 (smart_browz fix)</td></tr>
+<tr><td class="mono">02:54</td><td class="id mono">6692987</td><td>PDF export used an unbound SDK context, not the request's own</td></tr>
+<tr><td class="mono">02:54</td><td class="id mono">44fcc54</td><td>deploy: relay SmartBrowz SDK-context fix</td></tr>
+<tr><td class="mono">03:01</td><td class="id mono">1516780</td><td>docs: BUG-018 two root causes fixed live, remaining identity question documented</td></tr>
+<tr><td class="mono">03:03</td><td class="id mono">0e5104f</td><td>docs: all six North Star phases complete and live-verified</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 5</b> — 2026-08-26 02:25–02:31 — Financial Intelligence</summary>
+<div class="phasebody">
+<p>Found and fixed a real reachability bug making AML detectors structurally unreachable from chat (the FINANCIAL intent's specialist branch never called the detectors). Sankey view's label overlap at high fan-out (60+ destination nodes) resolved by keeping labels only on the 20 highest-value nodes, all still hoverable.</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">02:25</td><td class="id mono">5fb78fb</td><td>AML detectors were structurally unreachable from chat</td></tr>
+<tr><td class="mono">02:26</td><td class="id mono">315b077</td><td>deploy: relay Phase 5</td></tr>
+<tr><td class="mono">02:31</td><td class="id mono">eff9e4d</td><td>docs: Phase 5 live-verified</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 4</b> — 2026-08-26 02:15–02:17 — Geographic Intelligence</summary>
+<div class="phasebody">
+<p>Map had no geographic reference at all — no district outlines, scale, or labels, reading as an abstract scatter plot. Fixed with all 31 real district centres (dot + DOM-marker label, deliberately not a symbol-layer text-field, to avoid needing a third-party glyph service) plus a native <code>ScaleControl</code>. Real district boundary polygons deliberately not fabricated — no shapefile is bundled.</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">02:15</td><td class="id mono">2a55993</td><td>Map has real geographic reference (UI-24)</td></tr>
+<tr><td class="mono">02:17</td><td class="id mono">48b2977</td><td>docs: Phase 4 live-verified</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 3</b> — 2026-08-26 02:06–02:12 — Person Network &amp; Investigative Leads</summary>
+<div class="phasebody">
+<p>Network view was mislabeling PageRank as <code>risk_score</code> — a genuine centrality measure was presented under the name of a different capability entirely. Field renamed <code>pagerank</code> end to end (payload + TypeScript type), matching the confidence-kind discipline BUG-011 established.</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">02:06</td><td class="id mono">54a1432</td><td>docs: Phase 2 live-verified (preceding this phase)</td></tr>
+<tr><td class="mono">02:08</td><td class="id mono">8801efb</td><td>Network view no longer mislabels PageRank as risk_score</td></tr>
+<tr><td class="mono">02:08</td><td class="id mono">04ad568</td><td>deploy: relay Phase 3</td></tr>
+<tr><td class="mono">02:12</td><td class="id mono">ee17c73</td><td>docs: Phase 3 live-verified</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 2</b> — 2026-08-26 01:19–01:50 — Data Foundation Correction + Cross-Case Discovery (BUG-023)</summary>
+<div class="phasebody">
+<p>The single largest data-foundation gap named in the North Star: 12 of 20 crime types produced narratives with zero descriptive content, and the other 8 had exactly one fixed sentence each — an embedding model correctly learned that same-crime-type cases were near-identical text, because they were. Fixed by widening <code>_MO_VARIANTS</code> to all 20 crime types (3 variants each) plus per-case time-of-day and offender-count slot-filling, backfilled live via a new <code>/jobs/regenerate_narratives</code> endpoint that touched only <code>BriefFacts</code> — no case, accused, identity, financial, or graph row was altered. Similarity now explains itself (shared IPC sections, crime type, district, MO clause) instead of showing a bare embedding score.</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">00:53</td><td class="id mono">c7cb864</td><td>docs: North Star, implementation strategy, and synthetic-data audit (the documents that named this gap)</td></tr>
+<tr><td class="mono">01:50</td><td class="id mono">3528636</td><td>Phase 2 - narrative diversity + explainable cross-case similarity</td></tr>
+<tr><td class="mono">01:50</td><td class="id mono">d20595f</td><td>deploy: relay Phase 2</td></tr>
+<tr><td class="mono">02:06</td><td class="id mono">54a1432</td><td>docs: Phase 2 live-verified against the deployed system</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>North Star Phase 1</b> — 2026-08-26 00:53–01:19 — Trusted Single-Record Lookup (BUG-008, BUG-011, BUG-014)</summary>
+<div class="phasebody">
+<p>Closed the three gaps blocking the foundational lookup workflow named in the Implementation Strategy: BUG-008 ("how many" questions returned narratives, never a number — now an exact, authoritative, role/station-scoped count), BUG-011 (vector similarity displayed as evidential confidence — now a distinct <code>confidence_kind</code> axis: support / similarity / model_estimate), and BUG-014 (saturated 1.00 risk score with no calibration — now isotonic-calibrated with an honest <code>calibrated:false</code> fallback when the calibration split can't support it).</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">00:53</td><td class="id mono">93475a8</td><td>Phase 1 - trusted single-record lookup (BUG-008, BUG-011, BUG-014)</td></tr>
+<tr><td class="mono">01:10</td><td class="id mono">42c8820</td><td>deploy: relay Phase 1</td></tr>
+<tr><td class="mono">01:19</td><td class="id mono">65a826d</td><td>docs: Phase 1 live-verified against the deployed system</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>Phase 1 audit — first and second fix passes</b> — 2026-08-25 20:25–23:12 — 20 defects found and mostly fixed in one continuous session</summary>
+<div class="phasebody">
+<p>The audit that started this whole effort. Built the 89-row truth table from scratch by driving the live deployment directly (real tokens, all 6 roles), found the single most consequential defect in the system (BUG-006 — unsupporting citations at 0.97 confidence), two P0 authorization bypasses (BUG-002, BUG-003), and thirteen more P1/P2 defects, fixing eighteen of them before the pass ended. The evaluator fix (BUG-006) itself introduced a regression (BUG-020) that was caught and fixed within the same continuous pass — recorded honestly rather than smoothed over, because it is evidence about how delicate that code path is, not just about what was wrong with it.</p>
+<div class="twrap"><table>
+<thead><tr><th>Time</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">20:25</td><td class="id mono">0ae26af</td><td>audit: establish phase 1 truth table</td></tr>
+<tr><td class="mono">20:27</td><td class="id mono">5ca7284</td><td>fix(auth): the copilot took its case id from the URL but read it unscoped (BUG-003, P0)</td></tr>
+<tr><td class="mono">20:30</td><td class="id mono">a88c0aa</td><td>fix(rag): the evaluator drew the support/context line and synthesis ignored it (BUG-006, P0)</td></tr>
+<tr><td class="mono">20:34</td><td class="id mono">e2f68dc</td><td>fix(auth,web): unverified mode kept the previous officer's bearer token (BUG-002, P0)</td></tr>
+<tr><td class="mono">20:35</td><td class="id mono">53e457a</td><td>fix(api): the alerts WebSocket accepted every connection unauthenticated (BUG-005)</td></tr>
+<tr><td class="mono">20:42</td><td class="id mono">3d31092</td><td>fix(rag): five different situations were all reported as "record not found" (BUG-010)</td></tr>
+<tr><td class="mono">20:44</td><td class="id mono">b7702a7</td><td>fix(rag,api): two claims the system made that its own behaviour did not support (BUG-009, BUG-012)</td></tr>
+<tr><td class="mono">20:47</td><td class="id mono">1ddb275</td><td>test: add a data-integrity suite, and correct two wrong assumptions it exposed (see the "got wrong" note, §5 footer)</td></tr>
+<tr><td class="mono">20:49</td><td class="id mono">32df3bd</td><td>fix(rag): CRIME_SEARCH outvoted specific intents with generic verbs (BUG-007)</td></tr>
+<tr><td class="mono">20:52</td><td class="id mono">cdc118e</td><td>docs: record the phase 1 failure log</td></tr>
+<tr><td class="mono">20:55</td><td class="id mono">6200995</td><td>test: add investigation acceptance tests</td></tr>
+<tr><td class="mono">20:59</td><td class="id mono">9393a8b</td><td>docs: record verified system state — first fix pass, 271 tests green</td></tr>
+<tr><td class="mono">21:45</td><td class="id mono">a71793e</td><td>deploy: relay Phase 1 fixes to AppSail (deployment 52852000000304010)</td></tr>
+<tr><td class="mono">22:22</td><td class="id mono">2d4eee5</td><td>fix(rag): authoritative findings, retrieval suppression, and QuickML's real auth bug (BUG-013, BUG-020, BUG-021)</td></tr>
+<tr><td class="mono">22:23</td><td class="id mono">71dc2a4</td><td>deploy: relay the authoritative-evidence / retrieval-suppression / QuickML-auth fixes (deployment 52852000000310011)</td></tr>
+<tr><td class="mono">22:34</td><td class="id mono">562b7b5</td><td>docs: record the second deploy — console live for the first time, three fixes live-verified</td></tr>
+<tr><td class="mono">22:45</td><td class="id mono">2052a8b</td><td>docs: QA functionality matrix + BUG-023 (narrative template repetition) discovered</td></tr>
+<tr><td class="mono">23:00</td><td class="id mono">058c773</td><td>fix(api): /jobs/refresh ran a multi-minute recompute inside the HTTP request (BUG-024)</td></tr>
+<tr><td class="mono">23:00</td><td class="id mono">10200f2</td><td>deploy: relay the /jobs/refresh background-thread fix</td></tr>
+<tr><td class="mono">23:10</td><td class="id mono">97f5435</td><td>docs: BUG-024 live-verified to genuine completion; ML-12 resolved (out-of-band by design)</td></tr>
+<tr><td class="mono">23:12</td><td class="id mono">f4398fe</td><td>docs: case explorer filters and PDF export gating verified live</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+<details class="phase">
+<summary><b>Pre-audit deployment era</b> — 2026-07-15 through 2026-07-26 — getting a healthy stack onto Catalyst in the first place</summary>
+<div class="phasebody">
+<p>Everything before the Phase 1 audit began: fitting the image through AppSail's bundle sandbox (multiple failed image sizes down to 0.88GB), discovering and fixing the live-Data-Store JOIN restriction (moved reads to a local SQLite mirror), the pagination-duplication artifact, per-request SDK context binding, hybrid Catalyst/JWT auth, the console's asset-prefix and build-time API URL bugs that made a healthy API look dead behind a blank page, the 18-digit FIR number recognition fix, and the district-code fallback bug. This is the work <code>CLAUDE.md</code>'s own changelog (v5–v11) documents in full; summarized here only because it is the ground everything in this report stands on.</p>
+<div class="twrap"><table>
+<thead><tr><th>Date</th><th>Commit</th><th>Change</th></tr></thead>
+<tbody>
+<tr><td class="mono">07-15</td><td class="id mono">051ae66</td><td>Coerce DesignationID before role lookup — live Data Store returns strings, every deployed officer silently became an IO</td></tr>
+<tr><td class="mono">07-15</td><td class="id mono">87fb987</td><td>Hydrated read mirror on Catalyst — live ZCQL refuses JOINs on value-related tables</td></tr>
+<tr><td class="mono">07-15</td><td class="id mono">25fe0f0</td><td>Dedupe paged reads on ROWID — Data Store duplicates one row at a page boundary, even under ORDER BY</td></tr>
+<tr><td class="mono">07-15</td><td class="id mono">2ae3e50</td><td>Hybrid deployed auth — Catalyst session first, signed JWT fallback</td></tr>
+<tr><td class="mono">07-15</td><td class="id mono">b6722d5</td><td>Normalize datetimes to Data Store's display strings before SDK writes</td></tr>
+<tr><td class="mono">07-15</td><td class="id mono">f1dccc9</td><td>docs: v8 changelog — the live-Catalyst findings, consolidated</td></tr>
+<tr><td class="mono">07-26</td><td class="id mono">ff60464</td><td>Make the hosted console load — /app assetPrefix + deployed API URL as the default</td></tr>
+<tr><td class="mono">07-26</td><td class="id mono">71fba9e</td><td>Redesign the console — dark instrument glass, make a citation traceable</td></tr>
+<tr><td class="mono">07-26</td><td class="id mono">f14fe32</td><td>Recognise the 18-digit FIR number, and refuse a FIR that does not exist</td></tr>
+<tr><td class="mono">07-26</td><td class="id mono">c8d1dd9</td><td>The district fallback must speak KAnn, not a raw DistrictID</td></tr>
+</tbody>
+</table></div>
+</div>
+</details>
+
+</section>
+
+<!-- =================================================================== -->
+<section id="ledger">
+<h2><span class="num">5.</span>Bug / Issue Ledger</h2>
+<p class="section-desc">All 25 tracked defects from <code>docs/PHASE1_FAILURE_LOG.md</code>, most-severe first. Expand any row for root cause, fix, and live-verification evidence.</p>
+
+<div class="stats" style="margin-bottom:22px;">
+  <div class="stat fail"><div class="n">3</div><div class="l">P0</div></div>
+  <div class="stat partial"><div class="n">15</div><div class="l">P1</div></div>
+  <div class="stat unknown"><div class="n">6</div><div class="l">P2</div></div>
+  <div class="stat"><div class="n">1</div><div class="l">P3</div></div>
+</div>
+
+<div class="filterbar"><input type="text" id="bugfilter" placeholder="Filter bugs by keyword…"><span class="count" id="cnt-bugs"></span></div>
+<div id="bug-list">
+
+<details class="bug" data-sev="P0"><summary><span class="id">BUG-002</span><span class="b b-p0">P0</span><span class="title">Unverified demonstration mode kept the previous officer's bearer token</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/web (LoginGate, api.ts)</dd>
+<dt>Symptom</dt><dd>Console shows a rank labelled "unverified" and states record-scoped answers will be refused — while the API answers them, at a different rank.</dd>
+<dt>Root cause</dt><dd>The fallback path entered demonstration mode via <code>onIn({badge_no:"",role,...})</code> without ever calling <code>setToken(null)</code>. <code>loadToken()</code> reads <code>localStorage</code>, so a prior sign-in's token stayed attached to every request.</dd>
+<dt>Fix</dt><dd><code>enterUnverified()</code> calls <code>setToken(null)</code> before entering demonstration mode; the note now states what continuing actually does.</dd>
+<dt>Live verified</dt><dd>Yes — reproduced in the browser via CDP: seeded a stale token, forced a real roster failure, confirmed <code>localStorage.getItem('veritas_token')</code> returns null exactly on choosing a demonstration role. Screenshots taken at both points.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P0"><summary><span class="id">BUG-003</span><span class="b b-p0">P0</span><span class="title">/copilot read any case, ignoring the station rule /fir enforces</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api/routers/copilot.py, packages/rag_agent/copilot/brief.py</dd>
+<dt>Symptom</dt><dd>An IO refused a case by <code>GET /fir/9992</code> (403) could read that same case's entire Copilot brief — narrative, accused, associates, six named investigative leads — via <code>GET /copilot/9992</code> (200).</dd>
+<dt>Root cause</dt><dd><code>brief._case()</code> read the case with a hardcoded <code>fir_by_id(fir_id, "SHO", "")</code> scope, on the premise "the copilot is opened from a case the officer already has in hand" — false, since <code>fir_id</code> arrives straight from the URL.</dd>
+<dt>Fix</dt><dd><code>generate_copilot_brief(fir_id, officer_role, officer_ps_code)</code> now applies <code>can_view_fir</code> itself, inside the function that reads the case, and raises <code>NotPermitted</code>; the router maps that to the same 403 <code>/fir</code> returns.</dd>
+<dt>Live verified</dt><dd>Yes, both deploys — <code>/fir/9992</code> and <code>/copilot/9992</code> both 403 for the same IO.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P0"><summary><span class="id">BUG-006</span><span class="b b-p0">P0</span><span class="title">Answers cited records that did not support them</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent (evaluator, orchestrator)</dd>
+<dt>Symptom</dt><dd>The single most consequential finding in the audit. An exact FIR lookup returned the correct FIR at 0.97 confidence, followed by five unrelated cyber-crime cases from a different district, three years earlier, cited as corroborating evidence. Not confined to FIR lookups — the same five-item pad appeared under every intent tested: hotspots, forecast, alias check, person history, causal.</dd>
+<dt>Root cause</dt><dd>Two causes, one concept applied inconsistently. (1) <code>RELEVANCE_FLOOR</code> was documented as "below this an item is context, not support" and used to decide <i>whether</i> to answer — but <code>node_synthesize</code> then cited the entire ranked batch, floor and all. Worse, <code>RELEVANCE_FLOOR</code> (0.5) sat above <code>ACCEPT_THRESHOLD</code> (0.45), so a batch where nothing cleared the floor could still be accepted on <code>max(confidence)</code>. (2) Semantic search ran unconditionally — "Vector search always contributes" — even behind a successful exact-identifier lookup.</dd>
+<dt>Fix</dt><dd><code>evaluator.supporting(evidence)</code> is now the single definition of "supports an answer," used by <code>score_batch()</code>, <code>evaluate()</code>, and <code>node_synthesize</code> alike. <code>InvestigationState.exact_lookup_hit</code> suppresses semantic search once the query named a record and the store held it.</dd>
+<dt>Live verified</dt><dd>Yes, twice over — via the API (1 citation, was 6) and by driving an actual chat turn through the deployed console in a headless browser, confirming exactly one citation rendered in the Evidence rail.</dd>
+<dt>Remaining</dt><dd>None. (Its own fix introduced BUG-020, caught and fixed in the same session — see below.)</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-001</span><span class="b b-p1">P1</span><span class="title">A cold container blocks the first request; the console calls it a timeout</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api (warm-up), data/ds (mirror hydration), apps/web (LoginGate)</dd>
+<dt>Symptom</dt><dd>Console shows "The duty roster could not be loaded — the request timed out," with six demonstration roles, instead of the six named officers.</dd>
+<dt>Root cause</dt><dd>Two, stacked: (1) the first request performs the whole read-mirror hydration synchronously — 37 tables, ~105k rows, paged at the Data Store's 300-row cap; (2) the warm-up thread meant to absorb that cost in the background was gated on <code>VERITAS_MODELS_FOLDER_ID</code>, which is not set on the deployed app, so it never ran.</dd>
+<dt>Fix</dt><dd>The warm thread is no longer gated — only <code>ensure_models()</code> stays behind that variable. The console's 8s timer now moves to a "slow" state that says the service is warming up and offers, rather than forces, the unverified fallback.</dd>
+<dt>Live verified</dt><dd>Yes — a deliberate, authorized container restart measured exactly one request at 22.72s (of 150 polled), every other at 0.13–0.2s. Reconfirmed on the next redeploy at 22.9s.</dd>
+<dt>Remaining</dt><dd>~23 seconds, once per container, is the real, unavoidable hydration cost — the fix ensures the mechanism meant to absorb it actually runs and that the console tells the truth about it, not that the cost disappears.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-004</span><span class="b b-p1">P1</span><span class="title">Identity masked on /person was printed in full by /fir and the Copilot</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api/routers/records.py, packages/rag_agent/copilot/brief.py, packages/policy</dd>
+<dt>Symptom</dt><dd>Same person's name is <code>null</code> on <code>/person</code> and fully spelled out on <code>/fir</code> and in the Copilot's leads, for the same officer.</dd>
+<dt>Root cause</dt><dd><code>mask_person_fields</code> was applied only on <code>/person</code>. Also found: <code>_draft_summary</code> called it on a <i>case</i> dict, which contains none of the masked field names — a no-op masking call that had never actually masked anything.</dd>
+<dt>Fix</dt><dd><code>policy.mask_person_name(officer_role, name)</code> — the same rank rule for a bare name — applied at all three sites; below DSP the value becomes <code>"[name withheld — rank]"</code>, not blank, since blank would falsely claim no name was recorded.</dd>
+<dt>Live verified</dt><dd>Yes, both deploys — zero DSP-visible names appear anywhere in an SHO's Copilot brief.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-005</span><span class="b b-p1">P1</span><span class="title">The /alerts WebSocket accepted every connection unauthenticated</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api/routers/alerts.py</dd>
+<dt>Symptom</dt><dd>Any client opening a WebSocket to <code>/alerts</code> with no credential of any kind received district anomaly alerts.</dd>
+<dt>Root cause</dt><dd><code>ws.accept()</code> with no check of any kind — the route appears to have been left open rather than resolved, since a browser WebSocket cannot set an Authorization header and a URL-embedded token would leak identity into access logs.</dd>
+<dt>Fix, attempt 1</dt><dd>Token as the first frame, verified before anything streams. Fixed correctly in-process (a real ASGI WebSocket test passes) — but live, a real WebSocket client and raw curl with proper upgrade headers both got Starlette's own 404, while REST routes through the identical domain worked and CORS visibly processed the request. Conclusion: the AppSail gateway does not appear to proxy WebSocket upgrades to this custom-runtime app at all.</dd>
+<dt>Fix, attempt 2 (shipped)</dt><dd>Replaced the transport entirely — <code>/alerts</code> is now GET + SSE via <code>sse_starlette</code>, the exact mechanism already proven live on <code>/chat</code>, authenticated with the same <code>Depends(current_officer)</code> every other route uses. This sidesteps the platform question rather than resolving it.</dd>
+<dt>Live verified</dt><dd>Yes, post-deploy: unauthenticated <code>GET /alerts</code> → 401; authenticated → real streaming district anomaly alerts observed.</dd>
+<dt>Remaining</dt><dd>Whether AppSail proxies WebSocket upgrades for custom-runtime apps at all remains an open platform question — no longer load-bearing for this feature.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-007</span><span class="b b-p1">P1</span><span class="title">Generic verbs outvoted specific topic words in intent routing</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/intents.py</dd>
+<dt>Symptom</dt><dd>"Find cases similar to FIR …" classified as <code>CRIME_SEARCH</code>, not <code>SIMILAR_CASES</code>, and answered with unrelated criminal profiles.</dd>
+<dt>Root cause</dt><dd><code>CRIME_SEARCH</code>'s keywords include <code>show</code>, <code>list</code>, <code>find</code>, <code>cases</code> — verbs almost every question in this domain uses, not topic words. Flat hit-count scoring let the generic pair beat the specific single word "similar."</dd>
+<dt>Fix</dt><dd><code>CRIME_SEARCH</code> now scores last, as the fallback it actually is — if any other intent scored at all, it wins.</dd>
+<dt>Live verified</dt><dd>Yes — routes to <code>SIMILAR_CASES</code> correctly.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-008</span><span class="b b-p1">P1</span><span class="title">"How many …" is answered with narratives and never a number</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/orchestrator.py, agents/sql_agent.py</dd>
+<dt>Symptom</dt><dd>"How many theft cases are there in Mandya district?" returned five narrative excerpts, confidence 0.76, and no number anywhere.</dd>
+<dt>Root cause</dt><dd><code>CRIME_SEARCH</code> was a declared intent with no branch in <code>_run_specialists</code> — every turn fell through to semantic search alone, even though <code>search_firs</code> and <code>crime_counts_by_district</code> already existed and were simply unused.</dd>
+<dt>Fix</dt><dd><code>sql_agent.count_firs()</code> — an exact, role/station-scoped count — plus up to 5 supporting FIR samples, emitted as authoritative evidence. Vector search is skipped once the count has settled the turn, since semantic neighbours cannot corroborate a count, only pad it.</dd>
+<dt>Live verified</dt><dd>Yes — "How many theft cases are there in Mandya district?" → "73 case(s) Theft in Mandya are recorded within your access scope," <code>authoritative:true</code>, vector search step shows "Skipped."</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-009</span><span class="b b-p1">P1</span><span class="title">A question about the tool was routed through record retrieval</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent (intents, orchestrator)</dd>
+<dt>Symptom</dt><dd>"what all could you answer" swept the vector index (eight criminal profiles retrieved and discarded) before refusing with "check whether the record exists in the system" — a question that was never about records.</dd>
+<dt>Root cause</dt><dd>No intent covered questions about the system itself, so the query fell to <code>UNKNOWN</code> and ran the default retrieval path.</dd>
+<dt>Fix</dt><dd>A <code>CAPABILITY</code> intent, matched by shape before keyword scoring, short-circuits before retrieval. <code>capability_answer()</code> returns one honest paragraph with no citations — there is no record behind a description of a tool.</dd>
+<dt>Live verified</dt><dd>Yes.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-010</span><span class="b b-p1">P1</span><span class="title">Five different situations shared one refusal message</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent (evaluator, orchestrator)</dd>
+<dt>Symptom</dt><dd>"who could be the suspect," "show me the money trail," "show me the co-offender network," an unknown person's name, and a nonexistent FIR number all produced the identical sentence — "check whether the record exists in the system" — after each swept the vector index and discarded the results. For "who could be the suspect" specifically, refusing was the <i>correct</i> outcome; the defect was reporting it as a failed lookup rather than as the right refusal.</dd>
+<dt>Root cause</dt><dd><code>NOT_FOUND_MESSAGE</code> was the only refusal string in the system; nothing carried <i>why</i>.</dd>
+<dt>Fix</dt><dd><code>evaluator.REFUSAL_MESSAGES</code> — one message per situation — and <code>InvestigationState.refusal_reason</code> carrying which applies. <code>node_retrieve</code> now short-circuits the three situations retrieval cannot answer (CAPABILITY, NOT_INFERABLE, a subject-needed intent with no subject) before running retrieval at all, so they no longer sweep the index only to discard the results.</dd>
+<dt>Live verified</dt><dd>Yes, both deploys.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-011</span><span class="b b-p1">P1</span><span class="title">Vector similarity is displayed to the officer as evidential confidence</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>vector_agent.py, prediction_agent.py, state.py, apps/web</dd>
+<dt>Symptom</dt><dd>A semantically-similar but substantively unrelated record showed a "fair" confidence band in the evidence rail — cosine similarity to a query string and "how well this record supports this claim" are different quantities, rendered identically.</dd>
+<dt>Root cause</dt><dd><code>vector_agent.search</code> set <code>confidence = raw hybrid score</code>, which then flowed into the CRAG accept/reject decision, citation ranking, and the console's strong/fair/weak band — three different uses of one overloaded number.</dd>
+<dt>Fix</dt><dd><code>EvidenceItem.confidence_kind: "support" | "similarity" | "model_estimate"</code> — a category, not a calibration — set at each origin point. The console labels each kind distinctly instead of one undifferentiated percentage.</dd>
+<dt>Live verified</dt><dd>Yes, both API and console — vector hits show <code>"similarity"</code>, risk/recidivism show <code>"model_estimate"</code>, exact/graph/authoritative items show <code>"support"</code>; console bundle grepped for the new UI strings.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-012</span><span class="b b-p1">P1</span><span class="title">/health reported an LLM it had never reached</span><span class="b b-partial">FIXED (reporting)</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/llm.py</dd>
+<dt>Symptom</dt><dd><code>/health</code> reported <code>"quickml (glm-4.7-flash)"</code> while every chat answer was the deterministic extractive fallback, and kept reporting it after every failure.</dd>
+<dt>Root cause</dt><dd>Two, compounding: <code>status()</code> treated "endpoint URL configured" as equivalent to "working," and the actual production failure (<code>_token()</code> returning <code>None</code>) raised <code>LLMUnavailable</code> directly instead of going through <code>_degrade()</code>, so the cooldown/status never tripped.</dd>
+<dt>Fix</dt><dd>The missing-credential path now degrades correctly; <code>status()</code> distinguishes configured-but-uncontacted from genuinely working.</dd>
+<dt>Live verified</dt><dd>Yes — reporting is now honest. Investigating the fix led directly to finding and fixing BUG-021, the real underlying reachability bug.</dd>
+<dt>Remaining</dt><dd>Reachability itself depended on BUG-021 (fixed) and now BUG-022 (open, see below).</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-013</span><span class="b b-p1">P1</span><span class="title">A money-trail question was answered with a theft record</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/orchestrator.py</dd>
+<dt>Symptom</dt><dd>"Show me the money trail for Usha Naika" returned <code>visualization:none</code>, zero transfer evidence, and a confident citation about her unrelated criminal cases — not about money at all.</dd>
+<dt>Root cause</dt><dd>When <code>money_trail()</code> returned no rows, the FINANCIAL branch added no evidence and said nothing, letting semantic search supply the default top-ranked item. The ALIAS_CHECK branch immediately above it already solved exactly this with an explicit "no alias recorded" item; FINANCIAL did not.</dd>
+<dt>Fix</dt><dd>An empty trail now emits its own negative-finding evidence: "No bank account is linked to this person in the records… This is an absence in the financial layer, not a finding that no money moved."</dd>
+<dt>Live verified</dt><dd>Yes — 1 citation (was 5), the negative finding and nothing else.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-020</span><span class="b b-p1">P1</span><span class="title">The evaluator's relevance floor deleted authoritative refusals (CAUSAL regression)</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>evidence/evaluator.py, state.py, agents/prediction_agent.py</dd>
+<dt>Symptom</dt><dd>Introduced by the BUG-006 fix itself, in the same session: "Why does crime correlate with literacy?" lost its honest "cannot be produced" decline and answered instead from five unrelated criminal profiles.</dd>
+<dt>Root cause</dt><dd>The causal decline sets <code>confidence=0.0</code> by convention ("not applicable," not "irrelevant") — <code>RELEVANCE_FLOOR</code> cannot tell that apart from a genuinely weak hit, so <code>supporting()</code> correctly-by-its-own-logic dropped it while unrelated vector hits above 0.5 survived.</dd>
+<dt>Fix</dt><dd><code>EvidenceItem.authoritative: bool</code> — an axis orthogonal to confidence. <code>supporting()</code> keeps an authoritative item regardless of its confidence value; an authoritative item triggers an immediate ACCEPT rather than a widen-first retry.</dd>
+<dt>Live verified</dt><dd>Yes, post-deploy — the causal question returns exactly 1 citation, the honest decline, no criminal profiles.</dd>
+<dt>Remaining</dt><dd>None — recorded as an example of the loop's delicacy, not merely as a closed ticket.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-021</span><span class="b b-p1">P1</span><span class="title">QuickML _token() called a method that does not exist on the SDK</span><span class="b b-pass">FIXED (authentication)</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/llm.py</dd>
+<dt>Symptom</dt><dd>The real root cause behind BUG-012 — the LLM had never once been successfully called, in any environment.</dd>
+<dt>Root cause</dt><dd><code>catalyst_app()._app._credential.get_token()</code> — confirmed by extracting and reading the real installed <code>zcatalyst-sdk</code> 1.4.0 wheel directly: <code>initialize()</code> returns the <code>CatalystApp</code> object <i>directly</i> (no <code>._app</code> wrapper exists anywhere on it), and credential objects expose <code>.token()</code>, never <code>.get_token()</code>. Both attribute lookups raised <code>AttributeError</code> on every call, swallowed by a bare <code>except Exception: return None</code>.</dd>
+<dt>Fix</dt><dd><code>credential.token()</code> — the exact call the SDK's own HTTP client makes internally — dispatched by credential type, with <code>_switch_user("admin")</code> first to match the scope Data Store calls already run under.</dd>
+<dt>Live verified</dt><dd>Yes — the failure mode changed from an internal <code>AttributeError</code> to a real HTTP 400 from QuickML's own gateway, proof the credential now resolves correctly inside AppSail.</dd>
+<dt>Remaining</dt><dd>See BUG-022 — a separate, second problem the fixed credential exposed.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-014</span><span class="b b-p2">P2</span><span class="title">Risk score returns a saturated 1.00</span><span class="b b-pass">FIXED (reporting level)</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/ml_models/risk/scoring.py</dd>
+<dt>Root cause</dt><dd>The risk model fit a raw <code>XGBClassifier</code> and returned <code>predict_proba</code> directly with no calibration step — unlike the recidivism model one function below it, which was already isotonic-calibrated. A raw XGBoost margin-derived score is known to saturate near 0/1 on skewed data.</dd>
+<dt>Fix</dt><dd>The same isotonic-calibration pattern, adapted to <code>cv="prefit"</code> so TreeSHAP still explains the real fitted booster. <code>RiskResult.calibrated: bool</code> reports honestly whether calibration actually succeeded — a failed calibration is never silently reported as a successful one.</dd>
+<dt>Live verified</dt><dd>Yes — still returns 1.00 for a heavy-prior person, now correctly labeled "(NOT calibrated — a ranking score, not a probability)" because the live dataset's calibration split lacks enough class balance for isotonic regression to fit.</dd>
+<dt>Remaining</dt><dd>The saturation itself persists — a genuinely heavy-prior person can score at the top of the range — but is no longer misrepresented as a calibrated probability, which is the actual defect this bug named.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-015</span><span class="b b-p2">P2</span><span class="title">The causal layer declines to produce an estimate live</span><span class="b b-open">OPEN — platform-constrained</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/ml_models (DoWhy)</dd>
+<dt>Root cause</dt><dd><code>dowhy</code> is not installed in the deployed image, by deliberate v7-era design decision. Measured directly (not guessed): the full new dependency closure is ≈405MB (dominated by <code>llvmlite</code>+<code>numba</code>, ≈150MB — the same dependency class the v7 changelog already removed once for SHAP). Against the current 0.88GB image and the empirically measured ~1.3GB bundle-sandbox ceiling, adding it lands at ≈1.28GB — inside the ceiling on paper, with essentially zero margin against a limit that has already killed two prior deploys outright.</dd>
+<dt>Decision</dt><dd>Not deployed. A live redeploy experiment to "see if it fits" was deliberately not attempted — gambling a working, verified deployment to test a P2 capability is exactly the trial-and-error this project's rules exclude.</dd>
+<dt>Live verified</dt><dd>The honest decline is confirmed as the correct, sole citation (via the BUG-020 fix) — the refusal is correctly worded and does not overclaim.</dd>
+<dt>Remaining</dt><dd>Open, by measured platform-budget decision, not by omission.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-016</span><span class="b b-p2">P2</span><span class="title">A Kannada turn takes 13.4s against 0.5s for English</span><span class="b b-partial">PARTIALLY FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>data/nlp/translate.py</dd>
+<dt>Root cause found and fixed</dt><dd>Nothing paid the ~20s NLLB weight-load cost proactively — it landed on whichever officer's query happened to be first after a container start, indistinguishable from a hang. <code>translate.warm()</code>/<code>speech.warm()</code> now run from the same background thread that fetches the Data Store mirror on startup.</dd>
+<dt>What remains, and why it is not a code defect</dt><dd>A separate cost — translating a long, multi-sentence extractive answer took 10.8s even on an already-warm model, against 2.1s for the short inbound query — is consistent with autoregressive generation time scaling with output token count on CPU. NLLB has no GPU here; generation is inherently sequential. Not fixable short of a smaller model or truncating answers before translation.</dd>
+<dt>Live verified</dt><dd>Yes — post-deploy round trip measured at 4.3s total (was 13.4s).</dd>
+<dt>Remaining</dt><dd>The inherent long-answer generation cost, documented honestly rather than claimed fixed.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-017</span><span class="b b-p2">P2</span><span class="title">The changelog says the model weights left the image; they did not</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>documentation / deployment configuration</dd>
+<dt>Root cause</dt><dd>The AppSail app's live configuration had no <code>VERITAS_MODELS_FOLDER_ID</code>, so <code>ensure_models()</code> had never run — yet the File Store side was genuinely real (a folder with 8 chunks, confirmed by downloading and inspecting the first chunk directly as a standard Hugging Face hub cache layout). The architecture was real but never wired: the intended <code>_TransformersBackend</code> path needs an <code>HF_HOME</code>-rooted cache that was never configured, so the baked-in CTranslate2 directory kept serving instead.</dd>
+<dt>Fix</dt><dd>Set <code>VERITAS_MODELS_FOLDER_ID</code>, <code>VERITAS_MODELS_FILE_IDS</code>, and <code>HF_HOME</code> via the configuration API. No code change needed for the fetch itself — it simply had never been invoked. Added <code>model_fetch.status()</code>/<code>translate.backend_status()</code>, surfaced on <code>/health</code> as live, checkable facts (<code>model_weights</code>, <code>nllb_backend</code>) instead of something inferred from response latency.</dd>
+<dt>Live verified</dt><dd>Yes — <code>/health</code> now reports the real backend rather than an inferred one.</dd>
+<dt>Remaining</dt><dd>None on the reporting question; documentation corrected accordingly.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-018</span><span class="b b-p2">P2</span><span class="title">PDF export returns HTML, not a PDF</span><span class="b b-partial">PARTIALLY FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api/routers/export.py</dd>
+<dt>Symptom</dt><dd><code>/export/pdf</code> returns <code>text/html</code>, the local fallback renderer — the console is not lying about it (it names the download <code>.html</code>), but SmartBrowz, listed as the deployed PDF path, was not actually running.</dd>
+<dt>Root causes found and fixed (2 of 3)</dt><dd>(1) <code>app.smartbrowz()</code> never existed on the SDK — the real method is <code>smart_browz()</code> (confirmed against the installed <code>zcatalyst-sdk</code> package directly, same methodology as BUG-021). (2) A fresh, unbound <code>zcatalyst_sdk.initialize()</code> was used instead of the request's own captured Catalyst context.</dd>
+<dt>Third hypothesis tested and disproven</dt><dd><code>_switch_user("admin")</code> — the exact fix that resolved BUG-021's identical failure class — was tried and the identical <code>INVALID_ID</code>/"No such User" error persisted byte-for-byte. This rules the credential-scope hypothesis out conclusively: Data Store/Cache/Graph calls already succeed under that exact scope, so the token is accepted; SmartBrowz's API layer appears to require a genuine Catalyst User Management identity distinct from any service-token scope, reachable only through an interactive Catalyst Authentication sign-in this environment has no browser to drive.</dd>
+<dt>Live verified</dt><dd>Yes — the failure mode changed twice, each time in the direction the fix intended, narrowing rather than merely persisting.</dd>
+<dt>Remaining</dt><dd>One platform identity requirement needing interactive OAuth or vendor/console access — genuinely outside what this environment's tooling can drive.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P2"><summary><span class="id">BUG-022</span><span class="b b-p2">P2</span><span class="title">QuickML's gateway rejects the request body/route, independent of auth</span><span class="b b-open">OPEN — narrowed, not resolved</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/llm.py, external (Zoho QuickML gateway)</dd>
+<dt>Symptom</dt><dd>With BUG-021 fixed, every LLM call now reaches QuickML and is rejected: HTTP 400, <code>PATTERN_NOT_MATCHED</code>, "Error in processing zoho-inputstream parameter" — identical byte-for-byte regardless of request body or headers tried, including against a separately-valid Catalyst OAuth token outside AppSail.</dd>
+<dt>What was ruled out</dt><dd>Not a credential/auth problem (a valid token gets a service-level response, not 401/403); not the request body shape; not a header this session could identify.</dd>
+<dt>Narrowed further</dt><dd>QuickML's sibling "pipeline endpoints" surface documents a required per-endpoint <code>X-QUICKML-ENDPOINT-KEY</code> header, obtainable only from that model's own console popup — unreachable over the Admin API this project provisions with. The LLM Serving invoke contract itself is not published anywhere reachable (checked the dedicated docs pages and the machine-readable dump). Code now sends the header when configured — nothing fabricated, effective the moment someone copies the real key from the console.</dd>
+<dt>Why this stops here</dt><dd>Continuing to vary the request against a live, billed, production LLM endpoint by guesswork is the trial-and-error this project's own rules exclude.</dd>
+<dt>What is unaffected regardless</dt><dd>Every chat turn still produces a grounded, cited, extractive answer. Nothing about this gap makes any live answer less true — only less fluent.</dd>
+<dt>Remaining</dt><dd>The endpoint key's value, and whether this surface even uses the same header, remain unverifiable without console access.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-023</span><span class="b b-p1">P1</span><span class="title">Every FIR narrative for a given crime type is the same template</span><span class="b b-pass">FIXED — North Star Phase 2</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>data/data/generator/build.py, narrative_backfill.py (new), copilot/brief.py</dd>
+<dt>Symptom</dt><dd>Sampling 60 cases each for Theft, Hurt, Cyber Crime, and Robbery: every sampled case of a given crime type reduced to the exact same sentence once date and district were normalized out. 12 of 20 crime types had zero descriptive MO content at all; the other 8 had exactly one fixed sentence.</dd>
+<dt>Root cause</dt><dd><code>_MO</code> was a fixed dictionary of exactly 8 crime types, each mapped to one sentence — every FIR narrative had only three variable slots: date, district, and a crime-type-determined string chosen from that fixed set of 8.</dd>
+<dt>Not a duplicate-record bug</dt><dd>Every affected row is a real, distinct FIR — different case id, date, accused, victims, coordinates. The problem is that the one free-text field meant to carry case-specific detail did not, for any of the eight crime types it covered.</dd>
+<dt>Fix</dt><dd><code>_MO_VARIANTS</code> widens coverage to all 20 crime types, 3 variants each, plus per-case time-of-day and offender-count slot-filling derived from real, already-generated facts. A live backfill (<code>/jobs/regenerate_narratives</code>) recomputed only <code>BriefFacts</code> for the existing dataset — no case, accused, identity, financial, or graph row was touched. Cross-case similarity now explains itself (shared IPC sections, crime type, district, MO clause) instead of a bare embedding score.</dd>
+<dt>Live verified</dt><dd>Yes, end to end: FIR 100222201202600022's narrative changed from "Hurt — routine method" to a genuinely specific sentence; 5 sampled Theft/MVT cases in Mandya returned 5 distinct narratives (previously identical); the Copilot's similar-cases panel now shows a real, structured explanation per match.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-024</span><span class="b b-p1">P1</span><span class="title">POST /jobs/refresh fails with a 500 against the live dataset</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>apps/api/routers/jobs.py, data/gds.py, data/embeddings/index_job.py</dd>
+<dt>Symptom</dt><dd>The scheduled 6-hourly refresh — recomputing PageRank/Louvain/betweenness, republishing the graph, rebuilding the vector index — failed with a plain-text 500 in ~15.7–16s against the live, full-size dataset, two independent runs.</dd>
+<dt>What was ruled out</dt><dd>Not an auth problem (the audit-verify job worked correctly with the identical token, before and after); both Stratus-dependent calls in the pipeline are already correctly guarded against Stratus being unreachable.</dd>
+<dt>Root cause, narrowed but not conclusively isolated</dt><dd>No server-side traceback was available (no runtime log endpoint over the Admin API). Timed locally: the three-algorithm GDS pass on the real projection scale finishes in ~8s — comfortably under the observed failure window — which argues the bottleneck more plausibly sits in the ~7,000-row Data Store write-back or the 13,835-document vector reindex, neither of which was timed directly.</dd>
+<dt>Fix</dt><dd>The whole recompute moves to a background thread, the same pattern the AppSail warm-up already uses. The endpoint returns <code>{"status":"started"}</code> immediately; a non-reentrant guard reports <code>{"status":"already_running"}</code> rather than starting a second overlapping run.</dd>
+<dt>Live verified</dt><dd>Yes, end to end, including letting the real job run to genuine completion (5–6 minutes) — <code>already_running</code> at the 2-minute mark, cleared by 5–6 minutes; <code>/health</code> afterward showed unchanged FIR/graph counts and a genuinely changed indexed-document count (13,835 → 13,729), proof the reindex actually ran.</dd>
+<dt>Remaining</dt><dd>Whether Catalyst Cron's own schedule invokes this endpoint on time was not directly observed this pass — see BUG-025.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P1"><summary><span class="id">BUG-025</span><span class="b b-p1">P1</span><span class="title">Both Catalyst Cron jobs had never once succeeded (DEP-12)</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>Catalyst Cron configuration (not application code)</dd>
+<dt>How found</dt><dd>Followed up on a previously-logged "unobserved" note (DEP-12) instead of leaving it there — listed the live Cron jobs directly over the Admin API.</dd>
+<dt>Symptom</dt><dd>Both <code>veritas_audit_verify</code> (12h) and <code>veritas_refresh</code> (6h) showed <code>success_count:0, failure_count:20</code> and were disabled — never once successful since creation on Jul 13, 2026.</dd>
+<dt>Root cause, two stacked</dt><dd>(1) Wrong hostname — both jobs' URL used the org id (<code>60077763394</code>) instead of the AppSail app's own numeric id (<code>50043864344</code>), a copy-paste error at creation time that likely never resolved to the deployed app at all. (2) A stale job token, found only after fixing (1) — the configured header predates the current <code>VERITAS_JOB_TOKEN</code>, rotated at some point after the jobs were created.</dd>
+<dt>Fix</dt><dd>Both jobs corrected via the Admin API (hostname, current token, re-enabled) — not a code change; the endpoints themselves were already correct.</dd>
+<dt>Live verified</dt><dd>Yes — both endpoints called exactly as the corrected Cron configuration now would: audit-verify returned <code>intact:true</code>; refresh returned <code>{"status":"started"}</code>.</dd>
+<dt>Remaining</dt><dd>The schedule's own next unattended fire (up to 6h/12h out) is what would confirm end-to-end automatic operation — not yet observed, but the configuration that was actually broken is fixed and independently re-verified by direct call.</dd>
+</dl></div></details>
+
+<details class="bug" data-sev="P3"><summary><span class="id">BUG-019</span><span class="b b-p3">P3</span><span class="title">"fir" matches inside "firs", routing a search to the lookup intent</span><span class="b b-pass">FIXED</span></summary>
+<div class="bugbody"><dl>
+<dt>Component</dt><dd>packages/rag_agent/intents.py</dd>
+<dt>Root cause</dt><dd><code>classify("show me murder firs")</code> → <code>FIR_LOOKUP</code>, because keyword matching was a bare substring check and <code>"fir" in "firs"</code>. Harmless while <code>FIR_LOOKUP</code>'s branch was a no-op without a real number match — stops being harmless the moment that branch does anything on its own.</dd>
+<dt>Fix</dt><dd>Word-boundary matching (<code>\bkeyword\b</code>) per keyword, compiled once at import.</dd>
+<dt>Live verified</dt><dd>Yes.</dd>
+<dt>Remaining</dt><dd>None.</dd>
+</dl></div></details>
+
+</div>
+
+<hr class="soft">
+<div class="callout"><b>One thing this audit got wrong, recorded deliberately (not a bug in the product):</b> the first duplicate-graph-edge hypothesis was wrong. <code>vx_graph_edge</code> holds 12 apparently-duplicate <code>TRANSFERRED_TO</code> rows; they are one row per transaction between the same account pair, correctly preserved because <code>load_graph()</code> builds a <code>MultiDiGraph</code> — a plain <code>DiGraph</code> would have silently kept the last one and deleted money from the trail. A blanket <code>DISTINCT</code>, or a "fix" to force the first (wrong) assertion to pass, would have destroyed real data. Recorded here so it is not re-derived incorrectly later.</div>
+</section>
+
+<!-- =================================================================== -->
+<section id="qa">
+<h2><span class="num">6.</span>QA / Acceptance — Full Functionality Matrix</h2>
+<p class="section-desc">Reproduced from <code>docs/QA_FUNCTIONALITY_MATRIX.md</code>, built independently by walking the repository (routes, components, modules) rather than by the defects found — so it catches things the bug-driven audit would not think to look for. Every row uses this document's own legend: <span class="b b-pass">VERIFIED</span> driven live or in-process and observed correct; <span class="b b-partial">PARTIAL</span> some but not all paths verified; <span class="b b-fail">BROKEN</span> reproduced failing; <span class="b b-unknown">UNKNOWN</span> not yet exercised, never upgraded on inspection alone.</p>
+
+<div class="filterbar"><input type="text" data-filter-target="t-qa" placeholder="Filter across every QA row…"><span class="count" id="cnt-qa"></span></div>
+
+<h3>6.1 Console UI surfaces and controls (30)</h3>
+<div class="twrap"><table id="t-qa" class="filterable">
+<thead><tr><th class="id">ID</th><th>Surface</th><th>What it does</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">UI-01</td><td>Login gate — roster load</td><td>Loads <code>/auth/officers</code>, renders 6 roles</td><td><span class="b b-pass">VERIFIED</span></td><td>Live screenshot, real roster</td></tr>
+<tr><td class="id">UI-02</td><td>Login gate — sign in</td><td><code>POST /auth/token</code>, stores JWT</td><td><span class="b b-pass">VERIFIED</span></td><td>CDP: entered main console as DSP</td></tr>
+<tr><td class="id">UI-03</td><td>Login gate — <code>?as=ROLE</code> shortcut</td><td>Auto-signs in from URL param</td><td><span class="b b-pass">VERIFIED</span></td><td>Used for every screenshot this pass</td></tr>
+<tr><td class="id">UI-04</td><td>Login gate — roster failure / slow state</td><td>8s→"slow", real failure→"failed", offers unverified fallback</td><td><span class="b b-pass">VERIFIED</span></td><td>CDP: forced real network failure, screenshotted both states</td></tr>
+<tr><td class="id">UI-05</td><td>Login gate — unverified/demo entry clears token</td><td><code>setToken(null)</code> before entering</td><td><span class="b b-pass">VERIFIED</span></td><td>CDP: localStorage before/after</td></tr>
+<tr><td class="id">UI-06</td><td>Command bar — EN/KN toggle</td><td>Sets <code>language</code> state</td><td><span class="b b-partial">PARTIAL</span></td><td>Click not driven; API-level Kannada VERIFIED</td></tr>
+<tr><td class="id">UI-07</td><td>Command bar — voice on/off toggle</td><td>Sets <code>voiceOut</code></td><td><span class="b b-unknown">UNKNOWN</span></td><td>Not exercised</td></tr>
+<tr><td class="id">UI-08</td><td>Command bar — Export PDF button</td><td>Downloads session as file</td><td><span class="b b-partial">PARTIAL</span></td><td>Gating confirmed live; text/html fallback confirmed (BUG-018)</td></tr>
+<tr><td class="id">UI-09</td><td>Command bar — Switch (sign out)</td><td><code>setToken(null)</code>, returns to LoginGate</td><td><span class="b b-pass">VERIFIED</span></td><td>Real manual sign-in click confirmed live</td></tr>
+<tr><td class="id">UI-10</td><td>Command bar — health readout</td><td>FIR/node/index counts, live-status dot</td><td><span class="b b-pass">VERIFIED</span></td><td>Screenshot matches <code>/health</code> exactly</td></tr>
+<tr><td class="id">UI-11</td><td>Chat pane — send text query</td><td>Types, submits, streams SSE</td><td><span class="b b-pass">VERIFIED</span></td><td>CDP: real query, real streamed answer, real citation</td></tr>
+<tr><td class="id">UI-12</td><td>Chat pane — push-to-talk mic</td><td>Records audio, waveform</td><td><span class="b b-unknown">UNKNOWN</span></td><td>No audio input device in any audit environment</td></tr>
+<tr><td class="id">UI-13</td><td>Chat pane — citation chip click</td><td>Scrolls/highlights evidence rail item</td><td><span class="b b-partial">PARTIAL, code-traced</span></td><td>Wiring confirmed by reading the call chain, not interactively driven</td></tr>
+<tr><td class="id">UI-14</td><td>Evidence rail — item expand</td><td>Shows full content + source query</td><td><span class="b b-pass">VERIFIED</span></td><td>Visible in chat screenshot</td></tr>
+<tr><td class="id">UI-15</td><td>Evidence rail — "Ask about this case"</td><td>Opens Copilot overlay for a FIR</td><td><span class="b b-partial">PARTIAL</span></td><td>Not clicked directly; overlay itself confirmed via UI-22</td></tr>
+<tr><td class="id">UI-16</td><td>Evidence thread — citation-to-card line draw</td><td>SVG line from chip to card</td><td><span class="b b-partial">PARTIAL, code-traced</span></td><td>Wiring confirmed; not verified visually</td></tr>
+<tr><td class="id">UI-17</td><td>Reasoning trace panel</td><td>Plain-language agent trace, off by default</td><td><span class="b b-partial">PARTIAL</span></td><td>Present in screenshot, not expanded/inspected</td></tr>
+<tr><td class="id">UI-18</td><td>Case explorer — search box</td><td>Filters <code>/cases</code> by text</td><td><span class="b b-partial">PARTIAL</span></td><td>Typed into live; result not screenshotted</td></tr>
+<tr><td class="id">UI-19</td><td>Case explorer — crime-type filter chips</td><td>Toggles facet filter</td><td><span class="b b-pass">VERIFIED</span></td><td>Clicked "Theft," count correctly narrowed 24→19</td></tr>
+<tr><td class="id">UI-20</td><td>Case explorer — case-status filter chips</td><td>Toggles facet filter</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Not driven</td></tr>
+<tr><td class="id">UI-21</td><td>Case explorer — "Ask about this case" per card</td><td>Sends a templated chat query</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Not driven</td></tr>
+<tr><td class="id">UI-22</td><td>Case explorer — "Copilot brief" per card</td><td>Opens Copilot overlay</td><td><span class="b b-pass">VERIFIED</span></td><td>Clicked live, overlay rendered correctly</td></tr>
+<tr><td class="id">UI-23</td><td>Context view — pane switcher</td><td>Toggles case index vs map/graph/sankey/trend</td><td><span class="b b-partial">PARTIAL</span></td><td>Case index confirmed; switch to viz not driven</td></tr>
+<tr><td class="id">UI-24</td><td>Map view</td><td>Self-drawn canvas, hotspot density, case points</td><td><span class="b b-pass">FIXED — Phase 4</span></td><td>31 real district centres + labels + ScaleControl; bundle-grepped for the fix; no true boundary polygons (honest ceiling — no shapefile bundled)</td></tr>
+<tr><td class="id">UI-25</td><td>Network view</td><td>Force-directed graph</td><td><span class="b b-pass">VERIFIED</span></td><td>Screenshotted live: 12 labeled nodes, legible</td></tr>
+<tr><td class="id">UI-26</td><td>Sankey view</td><td>Money-flow diagram</td><td><span class="b b-pass">FIXED — Phase 5</span></td><td>Top-20-value labeling above 25 nodes; bundle byte-verified (sha256)</td></tr>
+<tr><td class="id">UI-27</td><td>Trend view</td><td>Forecast bands (ECharts)</td><td><span class="b b-pass">VERIFIED</span></td><td>Screenshotted live: proper band chart, real dates</td></tr>
+<tr><td class="id">UI-28</td><td>Copilot overlay — timeline/leads/diary/similar cases</td><td>Renders <code>/copilot/{id}</code></td><td><span class="b b-partial">PARTIAL</span></td><td>API-level content extensively verified; overlay not opened via click</td></tr>
+<tr><td class="id">UI-29</td><td>Copilot — "Copy" diary button</td><td>Clipboard copy</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Not driven</td></tr>
+<tr><td class="id">UI-30</td><td>Alert toasts</td><td>Alert feed (now SSE, was WebSocket)</td><td><span class="b b-pass">FIXED, live-verified</span></td><td>Post BUG-005 fix: authenticated → real streaming district anomaly alerts</td></tr>
+</tbody>
+</table></div>
+
+<h3>6.2 API routes (12)</h3>
+<div class="twrap"><table class="filterable" data-shared="t-qa">
+<thead><tr><th class="id">ID</th><th>Route</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">API-01</td><td><code>POST /auth/token</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Every live session in this audit used it</td></tr>
+<tr><td class="id">API-02</td><td><code>GET /auth/officers</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, all 6 roles</td></tr>
+<tr><td class="id">API-03</td><td><code>POST /chat</code> (SSE)</td><td><span class="b b-pass">VERIFIED</span></td><td>Extensively, both API and browser</td></tr>
+<tr><td class="id">API-04</td><td><code>GET /cases</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, all roles, scoping confirmed</td></tr>
+<tr><td class="id">API-05</td><td><code>GET /fir/{id}</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, scoping + masking confirmed</td></tr>
+<tr><td class="id">API-06</td><td><code>GET /person/{id}</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, masking confirmed</td></tr>
+<tr><td class="id">API-07</td><td><code>GET /copilot/{id}</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, scoping + masking confirmed</td></tr>
+<tr><td class="id">API-08</td><td><code>POST /export/pdf</code></td><td><span class="b b-partial">PARTIAL, root-caused</span></td><td>2 real bugs fixed; still returns text/html — 1 platform identity question open</td></tr>
+<tr><td class="id">API-09</td><td><code>GET /alerts</code> (SSE, was WS)</td><td><span class="b b-pass">FIXED, live-verified</span></td><td>Unauthenticated 401; authenticated → real alerts</td></tr>
+<tr><td class="id">API-10</td><td><code>POST /jobs/refresh</code></td><td><span class="b b-pass">VERIFIED (fixed)</span></td><td>BUG-024 fixed: background thread, redeployed and live-verified to genuine completion</td></tr>
+<tr><td class="id">API-11</td><td><code>GET /jobs/audit-verify</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Real job token: <code>{"intact":true}</code></td></tr>
+<tr><td class="id">API-12</td><td><code>GET /health</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Extensively, every deploy</td></tr>
+</tbody>
+</table></div>
+
+<h3>6.3 Conversational RAG — every intent (23)</h3>
+<div class="twrap"><table class="filterable" data-shared="t-qa">
+<thead><tr><th class="id">ID</th><th>Intent / capability</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">RAG-01</td><td><code>FIR_LOOKUP</code> (exact)</td><td><span class="b b-pass">VERIFIED</span></td><td>Repeatedly, live</td></tr>
+<tr><td class="id">RAG-02</td><td><code>FIR_LOOKUP</code> (nonexistent)</td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-03</td><td><code>PERSON_HISTORY</code></td><td><span class="b b-pass">VERIFIED</span></td><td>"does X have priors" — live</td></tr>
+<tr><td class="id">RAG-04</td><td><code>PERSON_NETWORK</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-05</td><td><code>ALIAS_CHECK</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-06</td><td><code>FINANCIAL</code> (empty trail)</td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-07</td><td><code>FINANCIAL</code> (real trail)</td><td><span class="b b-pass">VERIFIED</span></td><td>12 citations, all GRAPH_RELATIONSHIP, zero padding</td></tr>
+<tr><td class="id">RAG-08</td><td><code>HOTSPOT</code> (named district)</td><td><span class="b b-pass">VERIFIED</span></td><td>Prior pass, live</td></tr>
+<tr><td class="id">RAG-09</td><td><code>HOTSPOT</code> (no district — fallback)</td><td><span class="b b-pass">VERIFIED</span></td><td>Prior pass, live</td></tr>
+<tr><td class="id">RAG-10</td><td><code>FORECAST</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Prior pass, live</td></tr>
+<tr><td class="id">RAG-11</td><td><code>RISK</code></td><td><span class="b b-partial">PARTIAL</span></td><td>Answers correctly; calibration unvalidated (BUG-014)</td></tr>
+<tr><td class="id">RAG-12</td><td><code>CAUSAL</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Correctly declines; BUG-020 fix confirmed</td></tr>
+<tr><td class="id">RAG-13</td><td><code>SIMILAR_CASES</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live, this pass</td></tr>
+<tr><td class="id">RAG-14</td><td><code>CRIME_SEARCH</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Exact count, authoritative, no vector padding</td></tr>
+<tr><td class="id">RAG-15</td><td><code>CAPABILITY</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-16</td><td><code>NOT_INFERABLE</code></td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">RAG-17</td><td>Pronoun/reference resolution</td><td><span class="b b-pass">VERIFIED</span></td><td>3-turn live session, both pronouns resolved correctly</td></tr>
+<tr><td class="id">RAG-18</td><td>Multi-turn session continuity</td><td><span class="b b-pass">VERIFIED</span></td><td>Same session, subject persisted across all 3 turns</td></tr>
+<tr><td class="id">RAG-19</td><td>HippoRAG retrieval</td><td><span class="b b-partial">PARTIAL</span></td><td>Trace shows it firing, not independently re-verified</td></tr>
+<tr><td class="id">RAG-20</td><td>Think-on-Graph deep-dive</td><td><span class="b b-partial">PARTIAL</span></td><td>Trace shows it firing on relational intents</td></tr>
+<tr><td class="id">RAG-21</td><td>LLM-fluent synthesis</td><td><span class="b b-fail">BROKEN</span></td><td>Confirmed NOT firing — extractive fallback throughout (BUG-021/022)</td></tr>
+<tr><td class="id">RAG-22</td><td>Extractive (deterministic) synthesis</td><td><span class="b b-pass">VERIFIED</span></td><td>Every live answer, this session</td></tr>
+<tr><td class="id">RAG-23</td><td>Citation numbering/grounding</td><td><span class="b b-pass">VERIFIED</span></td><td>Extensively</td></tr>
+</tbody>
+</table></div>
+
+<h3>6.4 Analytics / ML — traced input → data → algorithm → output → evidence (13)</h3>
+<div class="twrap"><table class="filterable" data-shared="t-qa">
+<thead><tr><th class="id">ID</th><th>Capability</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">ML-01</td><td>Fellegi-Sunter entity resolution</td><td><span class="b b-partial">PARTIAL</span></td><td>Output confirmed consistent; F1=0.989 claim not re-measured live</td></tr>
+<tr><td class="id">ML-02</td><td>KDE + DBSCAN hotspots</td><td><span class="b b-pass">VERIFIED (API level)</span></td><td>Named-district query returns real clusters + points</td></tr>
+<tr><td class="id">ML-03</td><td>Prophet + MinT forecast</td><td><span class="b b-pass">VERIFIED (API level)</span></td><td>30-day series, plausible values</td></tr>
+<tr><td class="id">ML-04</td><td>XGBoost + SHAP risk scoring</td><td><span class="b b-partial">PARTIAL, honestly so</span></td><td>Returns 1.00 for a heavy-prior person, correctly labeled NOT calibrated</td></tr>
+<tr><td class="id">ML-05</td><td>LightGBM recidivism</td><td><span class="b b-partial">PARTIAL</span></td><td>Fires; value not checked against answer key</td></tr>
+<tr><td class="id">ML-06</td><td>Isolation Forest district-spike alerts</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Only reachable through <code>/alerts</code>, previously live-blocked</td></tr>
+<tr><td class="id">ML-07</td><td>Louvain community detection</td><td><span class="b b-pass">VERIFIED</span></td><td>Person 803 → community 28, plural communities confirmed</td></tr>
+<tr><td class="id">ML-08</td><td>PageRank / betweenness centrality</td><td><span class="b b-pass">VERIFIED</span></td><td>Network view renders real PageRank sizing/color; field renamed from mislabeled <code>risk_score</code></td></tr>
+<tr><td class="id">ML-09</td><td>Rule-based AML structuring detector</td><td><span class="b b-partial">VERIFIED reachable, PARTIAL positive case</span></td><td>Root cause fixed (was checking the wrong account); detector genuinely runs; no live positive example found this session</td></tr>
+<tr><td class="id">ML-10</td><td>GNN suspicious-subgraph AML</td><td><span class="b b-partial">PARTIAL</span></td><td>Reachability fixed; <code>torch</code> still absent by size constraint; degrades gracefully (verified)</td></tr>
+<tr><td class="id">ML-11</td><td>DoWhy causal effects</td><td><span class="b b-fail">BROKEN, live (by design)</span></td><td>Correctly declines with a precise reason (dowhy not installed)</td></tr>
+<tr><td class="id">ML-12</td><td>Aequitas fairness audit</td><td><span class="b b-pass">N/A (by design)</span></td><td>Standalone out-of-band CLI script, never wired to any API/UI — confirmed from its own module docstring, not a gap</td></tr>
+<tr><td class="id">ML-13</td><td>Isolation-Forest-driven <code>/alerts</code> feed</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Blocked by BUG-005 in earlier passes; transport now fixed, feed itself not re-exercised</td></tr>
+</tbody>
+</table></div>
+
+<h3>6.5 NLP / voice / Kannada (11)</h3>
+<div class="twrap"><table class="filterable" data-shared="t-qa">
+<thead><tr><th class="id">ID</th><th>Capability</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">NLP-01</td><td>Kannada script detection</td><td><span class="b b-pass">VERIFIED</span></td><td>Live and prior</td></tr>
+<tr><td class="id">NLP-02</td><td>Kannada → English translation</td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">NLP-03</td><td>English → Kannada answer translation</td><td><span class="b b-pass">VERIFIED</span></td><td>Live</td></tr>
+<tr><td class="id">NLP-04</td><td>Full round-trip Kannada pipeline</td><td><span class="b b-pass">VERIFIED</span></td><td>"How many theft cases in Mandya" round-tripped correctly</td></tr>
+<tr><td class="id">NLP-05</td><td>Kannada latency</td><td><span class="b b-partial">MEASURED</span></td><td>13.3–13.4s → 4.3s after warm-up fix (BUG-016)</td></tr>
+<tr><td class="id">NLP-06</td><td>Speech-to-text (faster-whisper)</td><td><span class="b b-unknown">UNKNOWN</span></td><td>No audio input device in any audit environment</td></tr>
+<tr><td class="id">NLP-07</td><td>Text-to-speech</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Same constraint</td></tr>
+<tr><td class="id">NLP-08</td><td>Translation-unavailable fallback</td><td><span class="b b-unknown">UNKNOWN</span></td><td>Not triggerable without disabling the model</td></tr>
+<tr><td class="id">NLP-09</td><td>Named-entity extraction</td><td><span class="b b-pass">VERIFIED</span></td><td>Every person/district resolution depends on it</td></tr>
+<tr><td class="id">NLP-10</td><td>Transliteration variants</td><td><span class="b b-partial">PARTIAL</span></td><td>Depends on entity-resolution tests + live alias checks</td></tr>
+<tr><td class="id">NLP-11</td><td>Model weight streaming from File Store</td><td><span class="b b-pass">FIXED</span></td><td>BUG-017 — <code>/health</code> now reports the real, live backend</td></tr>
+</tbody>
+</table></div>
+
+<h3>6.6 RBAC / profile capability matrix</h3>
+<div class="twrap"><table>
+<thead><tr><th>Role</th><th>Rank</th><th>/cases scope</th><th>/fir cross-station</th><th>/copilot cross-station</th><th>Identity masking</th><th>Traversal depth</th><th>Live-tested</th></tr></thead>
+<tbody>
+<tr><td>IO</td><td>1</td><td>own station only</td><td>403</td><td>403</td><td>masked</td><td>2 hops</td><td><span class="b b-pass">Yes</span></td></tr>
+<tr><td>SHO</td><td>2</td><td>all stations</td><td>200</td><td>200</td><td>masked</td><td>2 hops</td><td><span class="b b-pass">Yes</span></td></tr>
+<tr><td>DSP</td><td>3</td><td>all stations</td><td>200</td><td>200</td><td>unmasked</td><td>4 hops</td><td><span class="b b-pass">Yes</span></td></tr>
+<tr><td>SP</td><td>4</td><td>all stations</td><td>200</td><td>200</td><td>unmasked</td><td>4 hops</td><td><span class="b b-partial">Prior pass only</span></td></tr>
+<tr><td>SCRB_Analyst</td><td>4</td><td>all stations</td><td>200</td><td>200</td><td>unmasked</td><td>4 hops</td><td><span class="b b-partial">Prior pass only</span></td></tr>
+<tr><td>IG</td><td>5</td><td>all stations</td><td>200</td><td>200</td><td>unmasked</td><td>4 hops</td><td><span class="b b-pass">Yes — primary test role</span></td></tr>
+</tbody>
+</table></div>
+<p class="footnote">Not yet exercised for any role: hotspot/analytics access by rank — the code applies no rank restriction to analytics endpoints. Worth confirming that is intentional, not an oversight.</p>
+
+<h3>6.7 Data integrity (6)</h3>
+<div class="twrap"><table class="filterable" data-shared="t-qa">
+<thead><tr><th class="id">ID</th><th>Check</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td class="id">DATA-01</td><td>No duplicate FIRs / accused / accounts / transactions / graph edges</td><td><span class="b b-pass">VERIFIED</span> — 23 checks in <code>test_integrity.py</code></td></tr>
+<tr><td class="id">DATA-02</td><td>Foreign-key consistency across ER + <code>vx_</code> tables</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td class="id">DATA-03</td><td>District/station identifier consistency</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td class="id">DATA-04</td><td>Generator determinism</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td class="id">DATA-05</td><td>Live <code>/cases</code> payload duplication</td><td><span class="b b-pass">VERIFIED clean</span> — 0 duplicate <code>fir_id</code></td></tr>
+<tr><td class="id">DATA-06</td><td>BriefFacts narrative repetitiveness → false similarity risk</td><td><span class="b b-pass">FIXED, live-verified</span> — BUG-023, all 20 crime types covered</td></tr>
+</tbody>
+</table></div>
+
+</section>
+
+<!-- =================================================================== -->
+<section id="e2e">
+<h2><span class="num">7.</span>End-to-End Investigations</h2>
+<p class="section-desc">Nine representative workflows, driven against the live deployment, from the acceptance passes recorded in the failure log and North Star phase docs.</p>
+
+<div class="twrap"><table>
+<thead><tr><th>Workflow</th><th>Query / action</th><th>Result</th><th>Status</th></tr></thead>
+<tbody>
+<tr><td><b>Case</b></td><td>"What is the status of FIR 100050510202600037?"</td><td>Exact FIR returned as citation [1], confidence 0.97 — no unrelated records padding the answer (post-BUG-006)</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Person</b></td><td>"Does Usha Naika have priors?"</td><td>12 correct criminal-record citations; the person resolved from the name with ambiguity surfaced ("N others share this name")</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Network</b></td><td>"Who are the associates of Usha Naika?"</td><td>Network visualization renders, 12 associates, all GRAPH_RELATIONSHIP evidence, correct PageRank sizing</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Similar-case</b></td><td><code>GET /copilot/9992</code> — similar cases panel</td><td>5 genuinely distinct Hurt cases in Mandya, each with a structured explanation (shared IPC sections, MO clause) — not a bare score (post-BUG-023)</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Geographic</b></td><td>"theft hotspots in Bengaluru Urban"</td><td>KA05, real clusters, map now carries 31 district labels + scale control</td><td><span class="b b-pass">VERIFIED (Phase 4 fix)</span></td></tr>
+<tr><td><b>Financial</b></td><td>Named person with a real money trail (Harish Savadi)</td><td>60-destination Sankey trail, 12 citations, all GRAPH_RELATIONSHIP, zero padding, vector search confirmed skipped</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Multi-turn</b></td><td>Named subject → "Does he have priors?" → "What about his money trail?"</td><td>Both pronouns correctly resolved against the session's carried-forward subject across all 3 turns</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Kannada</b></td><td>"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?" (kn)</td><td>Correct round-trip: CRIME_SEARCH intent, 5 citations, translated back to Kannada — 4.3s total after the warm-up fix</td><td><span class="b b-pass">VERIFIED</span></td></tr>
+<tr><td><b>Full Copilot briefing</b></td><td><code>GET /copilot/9992</code> as DSP, then as SHO/IO</td><td>Timeline, leads, similar cases, diary all present and internally consistent; DSP sees full names, SHO/IO see masked, IO's own out-of-station attempt correctly 403s</td><td><span class="b b-partial">PARTIAL</span> — diary is deterministic text, not LLM prose (QuickML gap)</td></tr>
+</tbody>
+</table></div>
+
+<div class="callout"><b>Negative workflow, also driven:</b> a nonexistent FIR number refuses with the correct, specific message (not "check if it exists" generically); an ambiguous person name surfaces the ambiguity rather than silently picking one; "what all could you answer" gets an honest capability paragraph with no citations; "who could be the suspect" refuses correctly, now with the right stated reason (the records don't nominate suspects) instead of the wrong one (a failed lookup).</div>
+</section>
+
+<!-- =================================================================== -->
+<section id="data">
+<h2><span class="num">8.</span>Data Foundation</h2>
+<p class="section-desc">Summary of the 19-dimension synthetic-data audit in <code>docs/DATA_GENERATION_AUDIT.md</code>, updated with what North Star Phase 2 subsequently fixed.</p>
+
+<h3>Solid — verified directly in code, not merely asserted</h3>
+<ul>
+<li><b>Schema conformity</b> — the organizers' 27-table ER reproduced verbatim, enforced by a failing test if anyone alters it.</li>
+<li><b>Referential integrity</b> — every foreign/business key resolves; the one dimension the test suite over-invests in relative to its risk.</li>
+<li><b>Recurring identities &amp; identity ambiguity</b> — the strongest-engineered part of the generator; the two real, non-obvious statistical bugs found and fixed here (EM contamination in the Fellegi-Sunter <code>u</code>-estimate, string-concatenation inflation in the name comparator) are documented with the reasoning that led to them.</li>
+<li><b>Co-offending structure</b> — crew-weighted preferential attachment, the property that makes Louvain find 12 realistically-sized communities instead of one blob holding 254 of 255 people.</li>
+<li><b>Financial ground truth</b> — kept genuinely separate from detector output: injected laundering patterns are written to a file, never to the column the detectors read.</li>
+<li><b>Graph structural integrity</b> — best-tested dimension in the generator.</li>
+<li><b>Reproducibility</b> — full generation determinism, seeded per case.</li>
+<li><b>Leakage rules</b> — both the AML-label separation and the no-protected-attribute-as-feature rule are genuinely enforced in code, independently re-verified this pass.</li>
+</ul>
+
+<h3>Fixed this pass</h3>
+<ul>
+<li><b>Narrative diversity (BUG-023)</b> — was the audit's own top-priority finding: 12 of 20 crime types produced zero descriptive narrative content; the other 8 produced exactly one fixed sentence each. This degraded two real user-facing features (FIR semantic search and the Copilot's "similar past cases"). Now all 20 crime types carry 3 MO variants plus per-case slot-filling, backfilled live without touching any other row.</li>
+<li><b>No narrative-diversity test existed</b> — the reason BUG-023 survived to manual discovery instead of CI. A regression test was added alongside the fix.</li>
+</ul>
+
+<h3>Cosmetically imperfect but fine as-is (per the audit's own verdict, unchanged)</h3>
+<ul>
+<li>Priors CSVs are self-described as "approximate pending ETL," not fully-sourced NCRB figures — already honestly disclosed in code.</li>
+<li>Geographic attractors are synthetic stand-ins for real POI data — algorithmically real clustering, substantively synthetic placement, already disclosed in <code>geo.py</code>'s own docstring.</li>
+<li>Case status has no age-coupling; its realized distribution isn't tested against input rates — low risk, nothing currently reads this joint relationship.</li>
+<li>AML injected patterns are the only "dirty" examples in the dataset — detector specificity against organic-but-innocent transaction bursts is untested. Worth knowing if a judge asks about false-positive risk.</li>
+<li>No seasonal signal in generated incident timing — Prophet's seasonality terms fit noise on this dataset. Avoid leaning on "the forecast captures a weekly pattern" in a demo.</li>
+</ul>
+
+<h3>Remaining gap — not yet addressed</h3>
+<ul>
+<li><b>Identity answer key not persisted post-generation.</b> The claimed F1 0.989 (independently corroborated at 0.998 on a 600-case sample) can currently only be recomputed against a fresh in-process <code>generate()</code> call, not against whatever dataset is actually live on Catalyst — unlike the AML labels, which already follow the correct persist-as-artifact pattern.</li>
+</ul>
+
+<blockquote class="verdict">Summary verdict, from the audit itself: "Mostly yes, with one clearly broken capability [now fixed] and a handful of honestly-disclosed but under-tested approximations." The generator's hardest problems — identity, co-offending, AML ground-truth separation, determinism — are solved to the "best solution, not fastest" standard the project sets for itself.</blockquote>
+</section>
+
+<!-- =================================================================== -->
+<section id="deploy">
+<h2><span class="num">9.</span>Deployment / CI-CD</h2>
+<p class="section-desc">The actual pipeline, traced end to end, not described from memory.</p>
+
+<div class="pipeline">
+  <div class="step">Local commit</div><div class="arrow">→</div>
+  <div class="step">git push → GitHub</div><div class="arrow">→</div>
+  <div class="step">GitHub Actions: build <code>Dockerfile.overlay</code></div><div class="arrow">→</div>
+  <div class="step">Upload image to Catalyst signed URL</div><div class="arrow">→</div>
+  <div class="step"><code>appsail/upsert</code></div><div class="arrow">→</div>
+  <div class="step">AppSail cold start (~23s, once)</div><div class="arrow">→</div>
+  <div class="step">Live API + Web Client Hosting (console)</div>
+</div>
+
+<div class="twrap"><table>
+<thead><tr><th class="id">ID</th><th>Stage</th><th>Status</th><th>Evidence</th></tr></thead>
+<tbody>
+<tr><td class="id">DEP-01</td><td>Local → git commit</td><td><span class="b b-pass">VERIFIED</span></td><td>Every fix this pass</td></tr>
+<tr><td class="id">DEP-02</td><td>git push → GitHub</td><td><span class="b b-pass">VERIFIED</span></td><td><code>gh run list</code> confirms pushes trigger the workflow</td></tr>
+<tr><td class="id">DEP-03</td><td>GitHub Actions build (<code>Dockerfile.overlay</code>)</td><td><span class="b b-pass">VERIFIED</span></td><td>Multiple full runs, ~2min each, all green</td></tr>
+<tr><td class="id">DEP-04</td><td>Image upload to Catalyst signed URL</td><td><span class="b b-pass">VERIFIED</span></td><td>Multiple full runs</td></tr>
+<tr><td class="id">DEP-05</td><td><code>appsail/upsert</code> finalization</td><td><span class="b b-pass">VERIFIED</span></td><td>Confirmed via subsequent <code>GET /appsail</code> polling, not just the 200 response</td></tr>
+<tr><td class="id">DEP-06</td><td>AppSail runtime — cold start</td><td><span class="b b-pass">VERIFIED</span></td><td>Measured twice via real forced restarts: 22.7–22.9s</td></tr>
+<tr><td class="id">DEP-07</td><td>AppSail runtime — Data Store binding</td><td><span class="b b-pass">VERIFIED</span></td><td><code>/health</code> reports real row counts every time</td></tr>
+<tr><td class="id">DEP-08</td><td>AppSail runtime — File Store (model weights)</td><td><span class="b b-pass">FIXED</span></td><td>BUG-017 — was contradicting docs, now correctly wired and reported live</td></tr>
+<tr><td class="id">DEP-09</td><td>AppSail runtime — QuickML</td><td><span class="b b-partial">PARTIAL, diagnosed</span></td><td>BUG-021 fixed (credential); BUG-022 open (gateway rejects the request, narrowed to a console-only endpoint key)</td></tr>
+<tr><td class="id">DEP-10</td><td>AppSail runtime — Cache</td><td><span class="b b-pass">VERIFIED</span></td><td><code>/health</code> reports <code>cache=catalyst</code></td></tr>
+<tr><td class="id">DEP-11</td><td>Web Client Hosting deploy</td><td><span class="b b-pass">VERIFIED</span></td><td>Artifact-verified via CDP, not just the deploy command's exit code</td></tr>
+<tr><td class="id">DEP-12</td><td>Cron — <code>veritas_refresh</code> (6h)</td><td><span class="b b-pass">FIXED — BUG-025</span></td><td>Was never once configured to succeed (wrong hostname + stale token, 0/20 success). Corrected via Admin API, re-verified by direct call</td></tr>
+<tr><td class="id">DEP-13</td><td>Cron — <code>veritas_audit_verify</code> (12h)</td><td><span class="b b-pass">FIXED — BUG-025</span></td><td>Same two defects, same fix; <code>{"intact":true}</code> confirmed via the corrected URL+token</td></tr>
+<tr><td class="id">DEP-14</td><td>Audit hash chain integrity</td><td><span class="b b-pass">VERIFIED</span></td><td>Triggered live — <code>intact:true</code> against the real log</td></tr>
+</tbody>
+</table></div>
+
+<div class="callout"><b>Current live state at report time:</b> deployment <code>52852000000316042</code>, deployed Aug 26, 2026 03:59 AM, status <code>success</code>, memory 2048MB. <code>/health</code> just now (07:52 UTC) returned <code>api:ok, datastore:catalyst, firs:10000, graph:16918n/87120e, vector_index:ok (13835 docs), cache:catalyst</code>. The LLM and model-weight fields read <i>"configured, not yet contacted" / "not yet fetched"</i> — this is the honest cold-container state this report's own health check landed on (BUG-012's fix at work: it reports what has and hasn't been contacted yet, rather than asserting a status it hasn't observed).</div>
+</section>
+
+<!-- =================================================================== -->
+<section id="risks">
+<h2><span class="num">10.</span>Remaining Risks / Blockers</h2>
+<p class="section-desc">Separated by kind, because a code defect and a platform limitation need different owners and different next steps. UNKNOWN is never folded into FAIL here.</p>
+
+<div class="risk-cols">
+  <div class="risk-col">
+    <h4>Code defects (genuinely open)</h4>
+    <ul>
+      <li><b>None at P0.</b> All 3 P0 defects found this audit are fixed and live-verified.</li>
+      <li><b>None at P1</b> that remain purely code-fixable — the one open P1-adjacent item (identity answer key not persisted) is a missing artifact-persistence step, not a bug in running code.</li>
+      <li>Financial detectors (ML-09/10) are reachable and correct in the negative case; no live positive example was found to exercise the true-positive path this session.</li>
+    </ul>
+  </div>
+  <div class="risk-col">
+    <h4>Environment limitations (not fixable from here)</h4>
+    <ul>
+      <li>No audio input device in any audit environment — voice/ASR/TTS (NLP-06/07, UI-07/12) are UNKNOWN, not BROKEN.</li>
+      <li>No browser/CDP tooling in some passes — several UI click-throughs (UI-15/16/17/18/20/21/29) are code-traced but not interactively driven.</li>
+      <li>No runtime/application log endpoint over the Admin API — BUG-024's root cause was narrowed but not conclusively isolated for want of a server-side traceback.</li>
+    </ul>
+  </div>
+  <div class="risk-col">
+    <h4>Catalyst / platform limitations</h4>
+    <ul>
+      <li><b>QuickML gateway (BUG-022):</b> rejects every request shape tried with <code>PATTERN_NOT_MATCHED</code>, narrowed to a console-only <code>X-QUICKML-ENDPOINT-KEY</code> not reachable over the Admin API this project provisions with.</li>
+      <li><b>SmartBrowz identity (BUG-018):</b> requires a genuine Catalyst User Management identity, reachable only through an interactive OAuth sign-in this environment has no browser to drive.</li>
+      <li><b>AppSail WebSocket proxying (BUG-005, historical):</b> appeared not to proxy WebSocket upgrades for custom-runtime apps at all — sidestepped by moving <code>/alerts</code> to SSE rather than resolved as a platform question.</li>
+      <li><b>Bundle-sandbox size ceiling (BUG-015):</b> <code>dowhy</code> measured at ≈405MB against a ≈420MB headroom to the empirically measured ~1.3GB ceiling — a real, measured constraint, not a guess, and deliberately not gambled against a working deployment.</li>
+    </ul>
+  </div>
+  <div class="risk-col">
+    <h4>Unverified capabilities (UNKNOWN, not FAIL)</h4>
+    <ul>
+      <li>Cron schedules' own unattended firing, hours out (DEP-12/13) — the configuration that was broken is fixed and re-verified by direct call; the schedule itself firing on its own has not yet had its next window observed.</li>
+      <li>Isolation Forest <code>/alerts</code> feed content (ML-06/13) — transport (SSE) is now fixed and authenticated; the anomaly-detection content itself was observed once post-fix but not extensively re-exercised.</li>
+      <li>Full click-through of every UI control — the console is proven capable of correct rendering (login, chat, evidence, health, map, network, sankey, trend) via CDP; extending that to every remaining button is mechanical, not yet done.</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- =================================================================== -->
+<section id="demo">
+<h2><span class="num">11.</span>Demo Readiness</h2>
+
+<div class="readiness">
+  <div class="col ready">
+    <h4>✓ READY TO DEMO</h4>
+    <ul>
+      <li>Sign-in across all 6 roles, with correct station scoping and identity masking visible role-to-role</li>
+      <li>Exact FIR lookup by number — one correct citation, no padding</li>
+      <li>Person history / priors, with name-ambiguity surfaced honestly</li>
+      <li>Person network — force-directed graph, real associates, real PageRank sizing</li>
+      <li>Similar-case discovery — now with a genuine, structured explanation per match</li>
+      <li>Financial trail on a person with real transfers — Sankey renders, legible even at high fan-out</li>
+      <li>Hotspot map — now with real district labels and a scale control</li>
+      <li>Forecast trend view — real 30-day bands</li>
+      <li>Multi-turn conversation — pronoun resolution across turns, live-verified</li>
+      <li>Kannada round-trip — 4.3s, correct in both directions</li>
+      <li>Every refusal case — nonexistent record, ambiguous/unknown person, out-of-scope question, under-specified question — each now states its actual reason</li>
+      <li>Audit chain verification — <code>intact:true</code> against the real live log</li>
+    </ul>
+  </div>
+  <div class="col caution">
+    <h4>△ PARTIAL / DEMO WITH CAUTION</h4>
+    <ul>
+      <li><b>Copilot diary paragraph</b> — grounded and correct, but deterministic text, not LLM-fluent prose. Present it as "extractive by design when the LLM is unreachable," not as the fluent synthesis architecture describes.</li>
+      <li><b>Risk score</b> — a real 1.00 for a heavy-prior person, now honestly labeled "NOT calibrated." Do not present the number alone without the label.</li>
+      <li><b>PDF export</b> — produces a correctly-named, honestly-labeled HTML file, not a PDF. Fine to show if introduced as "the offline export fallback," not as "the SmartBrowz PDF."</li>
+      <li><b>AML detectors</b> — verified reachable and correct on the negative case; do not claim a live positive-detection demo without first confirming a known-flagged account exists in the current dataset.</li>
+      <li><b>Kannada voice (ASR/TTS)</b> — code exists and is unit-tested, but was never driven with real audio in any audit pass. Do not claim it works live without testing it first, on the day, with real hardware.</li>
+    </ul>
+  </div>
+  <div class="col no">
+    <h4>✗ DO NOT CLAIM AS WORKING</h4>
+    <ul>
+      <li><b>LLM-fluent synthesis (QuickML)</b> — confirmed NOT firing in production. Every live answer is the deterministic extractive path. Do not say "the LLM writes the answer" — say "grounded, cited, and correctly extractive by design when the fluency layer is unreachable."</li>
+      <li><b>Causal analysis (DoWhy)</b> — deliberately not in the deployed image. It correctly declines with an honest reason; do not present a live causal estimate.</li>
+      <li><b>PDF export as an actual PDF</b> — it is not, currently, on this deployment.</li>
+      <li><b>"Weights left the image entirely"</b> — corrected; the image still bakes in a converted NLLB directory. Do not repeat the disproven v8 claim.</li>
+      <li><b>Live WebSocket alerts</b> — the transport changed to SSE specifically because the WebSocket path appeared unreachable through the platform gateway. Do not describe <code>/alerts</code> as a WebSocket in a technical Q&amp;A.</li>
+    </ul>
+  </div>
+</div>
+</section>
+
+<!-- =================================================================== -->
+<section id="verdict">
+<h2><span class="num">12.</span>Final Verdict</h2>
+
+<blockquote class="verdict"><b>Does Veritas satisfy the North Star?</b> Substantially yes. All six phases of the Implementation Strategy are marked "Done, live-verified" by their own acceptance criteria, and every P0 defect found across two audit passes is fixed and independently re-verified against the live, deployed system — not merely in a local test run. The platform's central claim — "every claim in the answer carries the record it came from" — is now literally true where it was previously only formally true (BUG-006).</blockquote>
+
+<h3>Fully verified</h3>
+<ul>
+<li>The evidence/trust/authorization bar (North Star §1.3) in full: supporting-only citations, query-construction-time role/station scoping, a tamper-evident and Cron-verified audit chain, no protected-attribute model features, explicit uncertainty labeling via <code>confidence_kind</code>.</li>
+<li>The core investigation loop's foundational stages: case initiation, link analysis, investigative leads, verification (CRAG accept/widen/refuse), audit/collaboration.</li>
+<li>Cross-case discovery (Phase 2) and geographic intelligence (Phase 4) — both closed from a documented, verified-broken state to fixed and live-confirmed.</li>
+<li>Multi-turn conversation, role-based masking parity across every endpoint that carries a person's identity, and refusal semantics that now name their actual reason.</li>
+</ul>
+
+<h3>Partial</h3>
+<ul>
+<li>Financial intelligence — the two-detector AML pattern is reachable and correct in its negative-finding path; the true-positive path has not been demonstrated live this session.</li>
+<li>Briefing/reporting (Phase 6) — the workflow assembles correctly, but the diary is extractive text and the export is HTML, pending a QuickML gateway key and a SmartBrowz identity requirement respectively, both outside this environment's ability to resolve further.</li>
+<li>Timeline construction and several UI interaction points — content is correct and API-verified; interactive click-through was not exhaustively driven.</li>
+</ul>
+
+<h3>Unknown</h3>
+<ul>
+<li>Voice/ASR/TTS — a hard environmental constraint (no audio input device), not a code question.</li>
+<li>Cron's own unattended schedule firing, hours out from the fix.</li>
+<li>The identity-resolution F1 claim against the actual live Catalyst dataset (the answer key isn't persisted for that comparison yet).</li>
+</ul>
+
+<h3>What genuinely prevents a full PASS</h3>
+<p>Two items, both narrowed to specific, named, external requirements rather than open-ended unknowns:</p>
+<ul>
+<li><b>QuickML's LLM Serving gateway</b> rejects every request shape tried, and the fix depends on a value (an endpoint key) obtainable only from a Zoho console UI this project's tooling cannot reach over the Admin API.</li>
+<li><b>SmartBrowz's PDF rendering</b> requires a genuine interactive Catalyst Authentication identity that a JWT-fallback session never carries, and no browser is available in this environment to complete that sign-in.</li>
+</ul>
+<p>Both are honestly reported as open rather than worked around with a fabricated success, in every surface that touches them — <code>/health</code>, the console's own file-type naming, and this report. Everything else that reached a "found and fixed" state in this effort was subsequently re-driven against the live, deployed system and confirmed there, not left resting on a passing local test.</p>
+
+</section>
+
+</main>
+
+<footer>
+Sources: <code>docs/CAPABILITY_TARGET_AND_GAPS.md</code>, <code>docs/IMPLEMENTATION_STRATEGY.md</code>, <code>docs/QA_FUNCTIONALITY_MATRIX.md</code>, <code>docs/PHASE1_TRUTH_TABLE.md</code>, <code>docs/PHASE1_FAILURE_LOG.md</code>, <code>docs/DATA_GENERATION_AUDIT.md</code>, <code>README.md</code>, <code>git log</code>, and a live re-check of <code>/health</code>, the console origin, and the AppSail Admin API at report generation time. No status in this report was inferred, guessed, or silently reconciled where the sources disagreed — discrepancies are called out inline (e.g. §9's BUG-017 correction).
+</footer>
+
+<script>
+(function(){
+  function wireFilter(input, tables){
+    var countEl = document.getElementById(input.dataset.countId);
+    function apply(){
+      var q = input.value.trim().toLowerCase();
+      var total = 0, shown = 0;
+      tables.forEach(function(t){
+        var rows = t.querySelectorAll('tbody tr');
+        rows.forEach(function(r){
+          total++;
+          var match = !q || r.textContent.toLowerCase().indexOf(q) !== -1;
+          r.style.display = match ? '' : 'none';
+          if(match) shown++;
+        });
+      });
+      if(countEl) countEl.textContent = q ? (shown + ' / ' + total + ' rows') : '';
+    }
+    input.addEventListener('input', apply);
+  }
+
+  document.querySelectorAll('.filterbar input[data-filter-target]').forEach(function(input){
+    var targetId = input.dataset.filterTarget;
+    var main = document.getElementById(targetId);
+    if(!main) return;
+    var shared = document.querySelectorAll('table[data-shared="' + targetId + '"]');
+    var tables = [main].concat(Array.prototype.slice.call(shared));
+    var cid = 'cnt-' + targetId.replace('t-','');
+    input.dataset.countId = cid;
+    wireFilter(input, tables);
+  });
+
+  var bugFilter = document.getElementById('bugfilter');
+  if(bugFilter){
+    var bugCount = document.getElementById('cnt-bugs');
+    var bugs = document.querySelectorAll('#bug-list details.bug');
+    bugFilter.addEventListener('input', function(){
+      var q = bugFilter.value.trim().toLowerCase();
+      var shown = 0;
+      bugs.forEach(function(b){
+        var match = !q || b.textContent.toLowerCase().indexOf(q) !== -1;
+        b.style.display = match ? '' : 'none';
+        if(match){ shown++; if(q) b.open = true; }
+      });
+      bugCount.textContent = q ? (shown + ' / ' + bugs.length + ' bugs') : '';
+    });
+  }
+})();
+</script>
+
+</body>
+</html>

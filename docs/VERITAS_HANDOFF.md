@@ -5,258 +5,154 @@ and `docs/PHASE1_FAILURE_LOG.md`. This file answers "where do things stand right
 what's next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-`5b33622` — "fix(rag_agent): a decided refusal still ran generic search, padding the
-Evidence rail" (main, `github.com/baveshraam/Veritas`), plus two deploy-only commits on
-top of it (`62fa880`, `d26c040` — a broken empty relay URL from a shell redirect mistake,
-immediately caught and fixed with a corrected one; no code changed in either). Prior HEAD
-this pass started from: `6e77f6c`.
+`412839b` — "chore: remove slide deck files, rename judge-facing ambiguous doc/folder
+names" (main, `github.com/baveshraam/Veritas`). Immediately below it: `35a1909`
+(deploy-relay, no code) and `37cc5c6` — the actual fix commit for this pass's three
+bugs. Prior HEAD this pass started from: `03be5ad`.
 
 ## Current live deployment
-- API: **redeployed twice this pass**. Final: AppSail app `50043864344`
-  (appComputeId `52852000000204688`/`52852000000204690`), deployment
-  `52852000000306056` (the refusal-short-circuit fix, on top of the intent-classifier +
-  BUG-026 fixes from the same pass's first deploy, `52852000000312040`). `/health` clean
-  post-deploy.
+- API: redeployed once this pass. AppSail app `50043864344` (appComputeId
+  `52852000000204688`), deployment `52852000000306055`. `/health` clean post-deploy;
+  all three fixes independently re-verified live afterward (see below).
 - Console: **unchanged this pass** — no `apps/web` file was touched. Still
   `https://veritas-60077763394.development.catalystserverless.in/app/index.html`.
 
 ## Date/time of last verification
-2026-08-26, this session ("finishing pass" — the full 19-turn golden conversation +
-North Star closure mega-prompt). Live, through the actual deployed console over CDP
-(Chrome `--headless=new --remote-debugging-port`), not curl: the full 19-turn script run
-twice (once pre-fix, which found 4 real bugs; once post-fix, all 19 turns + a Kannada
-follow-up + an IO cross-station authorization check all correct) — see
-`docs/screenshots/2026-08-26-full-investigation-walkthrough/`.
+2026-08-27, this session ("finalization pass"). Verified over direct HTTP/SSE calls to
+the live production API (`/chat`, `/auth/token`, `/health`, the Admin API for AppSail
+config and Cron), **not through the console UI** — no browser/CDP tooling (Chrome,
+puppeteer, playwright) was available in this session's environment. This is a real gap
+relative to prior passes, stated plainly rather than glossed over: everything reported
+below as "live-verified" is API/engine-level, not console-rendering-level.
 
-## Current North-Star status
-Every MUST-HAVE item in Part 4's industry-baseline table is now closed or was already
-closed: BUG-026 (Copilot leads / NEXT_STEPS now cross-reference canonical vs. as-filed
-names) fixed and live-verified this pass. `veritas_audit_verify`'s Cron reliability fix
-(BUG-027, prior pass) has not had its "next unattended fire" independently re-observed
-this pass — this requires waiting for the schedule itself, not more code, and was not
-re-checked. The two SHOULD-HAVE items (QuickML LLM fluency, real PDF via SmartBrowz) were
-both **directly re-confirmed still BLOCKED this pass** (see below) — correctly so, not
-re-guessed.
+## What this pass did, and why
+The prior handoff's own "19-turn golden conversation" already passes — re-running it
+would prove nothing new. Per this pass's own instructions ("do not spend the session
+producing another audit without implementing something"), this pass instead ran a
+**fresh adversarial conversation** against the live API — natural investigator phrasing
+("tell me more about this person", "what about the other person", "why did you show me
+those cases", "go back to the first case", a Kannada follow-up mid-session, an
+off-domain "how many gangs operate in this district?") deliberately different from the
+already-passing script, specifically to find defects the golden script's exact wording
+could not surface.
 
-## Current objective
-The mega-prompt asked for two gates: (1) the full 19-turn golden conversation driven
-through the live console via CDP, fixing any real bug found before moving on, and (2)
-returning to North Star Part 3's P0/P1 list to close every technically solvable item. Both
-gates are met: the golden conversation passes end-to-end post-fix (screenshots +
-`log.json` committed), and every open MUST-HAVE was either fixed (BUG-026) or is
-externally blocked and re-confirmed as such (QuickML, PDF, the Cron unattended-fire
-observation).
+It found three real, live, previously-unknown bugs:
 
-## Verified this pass (live, not assumed)
+1. **A Kannada query mid-session crashed the whole turn.** A tokenizer `TypeError` from
+   inside the CTranslate2 backend (`data/nlp/translate.py`) propagated past
+   `translation_agent.to_english`/`to_language`'s exception handling, which only caught
+   this module's own `TranslationUnavailable` — every OTHER exception type killed the
+   turn with "the investigation engine failed on this query." Translation is a fluency
+   layer, never load-bearing for correctness (the same rule `CLAUDE.md` already states
+   for the LLM). Both functions now catch any backend exception and degrade to English
+   with an honest note, exactly like every other translation failure already did.
+2. **A district-scoped question with no person in it was answered as a person-ambiguity
+   clarification.** "How many gangs operate in this district?" contains no PERSON
+   entity, but `intents._PRONOUNS` treated bare "this"/"that" as an unresolved-person
+   reference unconditionally — so with 2+ people named in the previous turn's citations
+   (RAG-34's own candidate list), a district question got hijacked into "which person do
+   you mean?". Root cause: "this"/"that" is ambiguous between a personal pronoun ("tell
+   me about *this person*") and an ordinary determiner ("*this district*", "*this
+   case*"). Fixed by excluding "this"/"that" from the pronoun match when immediately
+   followed by a domain noun (district, case, FIR, record, evidence, ...) — "this
+   person" still resolves as a pronoun; "this district" no longer does.
+3. **"Go back to the first case" silently ran an irrelevant search instead of
+   refusing.** No case-history stack exists (`SessionFocus` keeps only the case
+   currently in view), so this phrasing scored a bare `CRIME_SEARCH` on the word "case"
+   and ran a real semantic search over the literal text, confidently returning 5 cited
+   but unrelated records — exactly the "generic vector retrieval after an unrecognized
+   request" failure mode this project's own CRAG discipline exists to prevent. New
+   `CASE_REFERENCE_UNSUPPORTED` intent now refuses honestly instead
+   ("I do not keep an ordered history of every case opened this session...") and leaves
+   whatever case was already open untouched.
 
-**Four real conversational bugs, found by the golden conversation's FIRST run (not
-committed), fixed, redeployed, and re-verified by a SECOND full run (committed) — see
-`docs/screenshots/2026-08-26-full-investigation-walkthrough/README.md` for the full narrative**:
+All three ship with regression tests reproducing the exact live failure (7 new tests:
+2 intent-classification, 2 orchestrator-level, 3 translation-agent — **369 tests
+collected, all green**). Commit `37cc5c6`, deployed `52852000000306055`, and all three
+fixes were re-driven against the live redeployed API afterward and confirmed working
+(the Kannada case needed a second check — the first re-test hit a container that hadn't
+finished rolling over post-deploy and still reproduced the crash; a retry ~2 minutes
+later succeeded end to end, translating in and back out correctly).
 
-1. **`CASE_PEOPLE` never cleared a stale `active_person`.** The prior code only set
-   `active_person` when exactly one accused existed; with several, it did nothing —
-   which meant a person named several turns (and cases) earlier silently stayed "active."
-   Re-opening a DIFFERENT multi-accused case and then asking a pronoun follow-up ("does
-   he have priors?") answered about the stale person instead of asking which of THIS
-   case's several accused was meant — the exact scenario RAG-34's ambiguous-person
-   clarification exists for, silently bypassed. Fixed in
-   `packages/rag_agent/rag_agent/orchestrator.py` (`state.active_entities.active_person =
-   ... if len(accused) == 1 else None`, explicit clear). Live-verified at turn 19 of the
-   fixed run: the engine now correctly asks "More than one person named in this question
-   matches equally well: Usha Naika, Prashanth Krishnamurthy, Nithin Madar, Naveen
-   Nayak..." instead of silently answering about a stale subject.
-2. **`EXPLAIN_REASONING`'s regex only matched "why (are/were/did) you <verb>" or "why
-   ... those <adjective>" with nothing between "those" and the adjective.** Natural
-   investigator phrasing from this exact mega-prompt's own example turns — "why did you
-   *select* those cases," "why were those associates *surfaced*" (passive, no "you") —
-   fell through to `CAUSAL` (on the bare word "why") or a bare repeat of the prior topic
-   intent. Fixed in `packages/rag_agent/rag_agent/intents.py`: widened the verb list
-   ("select/selecting/selected/choose/...") and the passive-voice branch now allows one
-   noun between "those" and the participle. Live-verified at turns 6 and 8.
-3. **`NEXT_STEPS`'s keyword list had "investigate next" (active) but not "investigated
-   next" (passive).** "What should be investigated next?" — this mega-prompt's own
-   phrasing — matched nothing and refused ("I could not find this in the available
-   records") instead of returning leads. Fixed by adding the passive form (and "should be
-   investigated") to the keyword list. Live-verified at turn 14 — now returns real,
-   cited leads.
-4. **A refusal `node_orchestrate` already decided (`ambiguous_person`,
-   `person_not_on_file`) still let `node_retrieve` run its generic vector-search
-   fallback**, because the NEEDS_CASE/NEEDS_SUBJECT guards only skip *setting* a
-   duplicate reason (`and not state.refusal_reason`) and never return early when one is
-   already set. Every specialist branch requires a subject and was skipped correctly, but
-   the untargeted fallback at the bottom of `_run_specialists` has no such guard — it
-   searched anyway and handed the officer 5 unrelated criminal-profile citations in the
-   Evidence rail, right next to a chat message saying "I will not guess which one you
-   mean." Fixed by returning immediately from `node_retrieve` whenever
-   `state.refusal_reason` is already set on entry. Live-verified: the Evidence rail on
-   the ambiguous-pronoun refusal turn now correctly shows "Evidence for the current
-   answer appears here" (empty), not 5 stale citations.
+## Verified this pass (live, over the API — see caveat above)
+- **The three fixes above**, confirmed against the live redeployed API.
+- **`veritas_audit_verify`'s Cron job's next unattended fire — closed.** Every prior
+  pass's handoff named this as the one open item nothing but waiting could close.
+  Listed the live Cron job directly (not a manual trigger): `success_count: 1,
+  failure_count: 0` (`veritas_refresh`: `3, 0`) — a real unattended fire succeeded on
+  its own 12h schedule with nobody watching. See `docs/QA_FUNCTIONALITY_MATRIX.md`
+  DEP-13.
+- **QuickML — re-confirmed BLOCKED.** Fetched the live AppSail app config directly
+  (`GET .../appsail/52852000000204688`): `QUICKML_ENDPOINT_KEY` and `QUICKML_ENDPOINT`
+  both absent from `configuration.environment.variables`. No code change; the
+  deterministic fallback remains correct and is what answered every query this pass.
+- **PDF export — re-confirmed BLOCKED.** `POST /export/pdf` against a real session with
+  turns still returns `text/html` (SmartBrowz's known `INVALID_ID` failure, unchanged).
+  No code change; the console's "downloaded a printable HTML copy instead" notice
+  (fixed in an earlier pass) remains correct and honest.
+- **RBAC boundary.** Signed in as IO (station 101), asked for a Mandya FIR (station
+  2201) — refused with "No record with that number exists within your access scope,"
+  no leak of the record's existence.
+- **The broader investigation workflow, end to end over the API**: open case → what
+  happened → who's involved → ambiguous-person clarification → pronoun follow-up →
+  why-these → what-supports-that → similar cases → hotspot geography → next steps
+  (Copilot leads, cross-referencing canonical/as-filed names) → briefing → open a
+  second, unrelated case → attempt to return to the first by ordinal reference (now
+  refuses honestly) → the still-open case answers correctly for its own accused →
+  Kannada round-trip → RBAC refusal. Every step checked, not merely exercised.
 
-All four ship with regression tests confirmed to fail against pre-fix code first (6 new
-tests total this pass: 3 for the intent/state fixes, 1 for the refusal short-circuit, 2
-for BUG-026 below). **354 → 361 tests, all green.**
+## Not verified this pass, stated plainly
+- **No console/UI verification** — no browser tooling in this session's environment.
+  Every UI row in `docs/QA_FUNCTIONALITY_MATRIX.md` §1 verified by earlier passes' real
+  CDP sessions is unchanged and was not re-driven; none of it is re-claimed as
+  re-verified by this pass. The map, the graph pane, citation-thread drawing, the
+  Copilot overlay, EN/KN toggle, Export PDF's button state — all last verified in the
+  2026-08-26 passes, not this one.
+- No new screenshots were captured this pass (same reason). The existing screenshot
+  sets remain current for what they document; nothing in them is stale from this pass's
+  changes, since this pass touched no frontend code.
+- Voice pipeline (STT/TTS), case-status filter chips (UI-20), map pan/drag gesture,
+  AML positive-case verification, `dowhy` — all unchanged from prior passes, same
+  environmental/data constraints as documented there.
 
-**BUG-026 fixed** (`packages/rag_agent/rag_agent/copilot/brief.py`): Copilot leads and
-`NEXT_STEPS` now render `_lead_name()`, which shows `"Soom Nadkarni (filed as \"Suma
-Nadkarni\" on this FIR)"` when `vx_person.CanonicalName` differs from the case's own
-`Accused.AccusedName`, masked identically to every other name on the surface (a masked
-role sees only the placeholder, never a hint that a reconciliation happened). Live-
-verified at turns 14 and 15 of the golden conversation: `"Usha Naika (filed as \"Usha
-Neik D/o Srinivas\" on this FIR)"` renders correctly throughout.
-
-**Context isolation across a case switch, verified live**: turns 16-17 open an unrelated
-case (Mandya, Hurt); turns 18a-18b return to the original case and re-ask "who is
-involved" — the answer correctly names the original case's 4 accused, not the Mandya
-case's people. This is what turn 18 was designed to catch, and (once bug #1 above was
-fixed) it holds.
-
-**Authorization boundary, verified live through the console** (not curl): signed in as
-IO (station 101), asked for FIR 100050504202300018 (station 504) — refused with "No
-record with that number exists within your access scope," no leak of the record's
-existence. Screenshot: `t21-io-cross-station-refused.png`.
-
-**Map re-centering on CASE_LOCATIONS, verified live**: the FIRST run's screenshot of
-"where are those cases concentrated?" looked like an untargeted statewide view — turned
-out to be a screenshot-timing artifact in the CDP driver (MapLibre's `fitBounds` has a
-900ms animation; the driver's post-turn wait was only 400ms). Raised to 1500ms and
-re-run: the map correctly re-centers tightly on the real Bengaluru-area FIR points with
-recognizable streets/labels. **Not a product bug** — worth remembering for any future CDP
-harness against this console (see `[[veritas-console-verification]]`).
-
-**Kannada round-trip, verified live** mid-conversation (not a fresh session): a Kannada
-hotspot-count query after 20 English turns returns correctly-cited, RBAC-scope-aware
-results; translation grammar is imperfect in places (documented pre-existing limitation,
-NLP-05/BUG-016, not new).
-
-**QuickML re-confirmed BLOCKED, directly** (not re-guessed): fetched the live AppSail app
-config over the Admin API (`GET .../appsail/52852000000204688`) and read
-`configuration.environment.variables` directly — `QUICKML_ENDPOINT_KEY` is absent. No
-code change; the honest extractive-fallback path remains correct.
-
-**PDF export re-confirmed BLOCKED, directly**: `POST /export/pdf` against a real session
-with a turn still returns `text/html`, byte-identical failure mode to every prior pass
-(SmartBrowz's `INVALID_ID`/"No such User" — needs an interactive Catalyst Authentication
-sign-in this environment cannot drive). No code change; the console's own "downloaded a
-printable HTML copy instead" notice (fixed two passes ago) remains correct and honest.
-
-## Partial capabilities
-- **RAG-32/34's ambiguous-person clarification now has a live, non-synthetic
-  ambiguity example** (turn 19 of this pass's golden conversation) — the "genuine live
-  tie in the dataset" gap noted by several prior passes is closed for the pronoun path
-  specifically (the tied name-search path, RAG-32's original scope, still hasn't hit a
-  live `record_count` tie by chance).
-- RAG-29 (BRIEFING) is now live-verified against a MULTI-accused case (turn 15, FIR 1154,
-  4 accused) — closes the "only verified against a single-accused case" gap the QA matrix
-  flagged.
-- Everything else in the QA matrix's "PARTIAL" column is unchanged this pass — see that
-  file directly rather than this summary; the full click-through of every UI control was
-  not repeated (this pass's live-console time went to the golden conversation + the
-  fixes it found, not a fresh full UI audit).
-
-## Unknown capabilities
-- `veritas_audit_verify`'s Cron job's own *next* unattended fire, post-BUG-027, was not
-  independently re-observed this pass (it fires on a 12h schedule; re-checking it needs
-  either waiting for that window or a manual trigger with `sync=true`, neither of which
-  this pass did — not because it's hard, just out of this pass's chosen scope).
-- Voice pipeline (STT/TTS), case-status filter chips (UI-20), pan/drag map gesture
-  interaction, AML detector positive-case verification — all unchanged from prior passes,
-  same environmental/data constraints as documented there.
-
-## External/platform blockers (re-confirmed this pass, not re-guessed)
-- **QuickML** (`QUICKML_ENDPOINT_KEY` absent from the live AppSail config, checked
-  directly over the Admin API).
-- **PDF export** (SmartBrowz `INVALID_ID`, checked directly against a live session).
-- **`dowhy`** and **Stratus bucket creation** — untouched this pass, no new information;
-  still as documented in `CLAUDE.md` §2 and the v12 changelog.
-
-## New platform fact this pass surfaced
-**A CDP screenshot taken before a `fitBounds` animation completes looks like a rendering
-bug and isn't one.** MapLibre's `fitBounds({duration: 900})` needs its full 900ms before
-the viewport reflects the final zoom/center; a driver that screenshots ~400ms after a
-turn finishes streaming will catch the map mid-flight (or, worse, still at its
-pre-animation default state) and can misdiagnose a genuine data/rendering issue that
-isn't there. Wait at least 1.5s after a turn that switches to the map pane before judging
-its screenshot.
+## Repository hygiene this pass
+- Removed the two `.pptx` files and the redundant `Prototype_Deck.pdf` from the repo
+  root (submission collateral, not product) — explicit user request.
+- Renamed `docs/VERITAS_NORTH_STAR.md` → `docs/CAPABILITY_TARGET_AND_GAPS.md` and
+  `docs/screenshots/2026-08-26-golden-19turn/` →
+  `docs/screenshots/2026-08-26-full-investigation-walkthrough/`, updating every path
+  reference — a judge browsing the repo tree should not need internal jargon ("North
+  Star", "the golden 19-turn script") to understand what a file is. Content and
+  historical changelog prose are unchanged; only names and the links pointing at them.
 
 ## Open bugs (see `docs/PHASE1_FAILURE_LOG.md` for full detail)
-BUG-015 (dowhy), BUG-016 (Kannada latency), BUG-018 (PDF export — HTML fallback, honest),
-BUG-022 (QuickML key) remain open, externally blocked, re-confirmed this pass.
-BUG-026 is now **CLOSED** (fixed and live-verified this pass, see above). Four newly
-found-and-fixed bugs this pass have no BUG-NNN numbers assigned (found and closed within
-the same pass) — see the commit messages on `d3eba10` and `5b33622` for full detail if a
-number is wanted later.
-
-## Recently completed work (this pass)
-1. **The full 19-turn golden investigation, driven live through the console via CDP** —
-   the item four consecutive prior-pass handoffs named as the top outstanding action.
-   Found and fixed 4 real conversational bugs (above), redeployed, and re-ran the entire
-   script to confirm all 19 turns + a Kannada follow-up + an IO cross-station
-   authorization check are correct. Screenshots + machine-readable log committed at
-   `docs/screenshots/2026-08-26-full-investigation-walkthrough/`.
-2. **BUG-026 fixed** — Copilot leads/`NEXT_STEPS` now show the as-filed name alongside
-   the canonical one when entity resolution reconciled a romanisation variant, masked
-   identically to every other name on the surface.
-3. **QuickML and PDF export both re-confirmed BLOCKED by direct live check**, not
-   re-asserted from a prior pass's note — per this pass's own instruction not to waste
-   time re-guessing platform APIs that have already been root-caused.
-4. Two API redeploys via the relay pipeline (GitHub Actions build → Catalyst signed URL
-   → `appsail/upsert`), both polled to `deployment_status: success` and confirmed via
-   `/health` before proceeding — plus one self-inflicted broken deploy commit (an empty
-   `relay-upload.url` from a shell redirect that ran before the async fetch resolved),
-   caught by the workflow failing and fixed with a corrected commit within minutes.
+BUG-015 (dowhy), BUG-016 (Kannada latency), BUG-018 (PDF export — HTML fallback,
+honest), BUG-022 (QuickML key) remain open, externally blocked, re-confirmed this pass.
+This pass's three fixes are not yet assigned BUG-NNN numbers (found and closed within
+the same pass, same pattern several prior passes have used) — see commit `37cc5c6` for
+full detail if numbers are wanted later.
 
 ## Important architecture facts a new session must not re-derive
-See `CLAUDE.md` in full, and every fact listed in the last four passes' handoffs (ER has
-no person §0; sqlite mirror + ~23s cold-container cost; ZCQL has no bind params and no
-cross-table JOINs live; the map's `maxZoom: 9` / single-district-scoping design; the
-`fitBounds` animation timing note above — new this pass). One more, from this pass:
-**intent classification is a single label per turn** — a compound query like "Go back to
-FIR X. Who is involved?" scores both FIR_LOOKUP and CASE_PEOPLE, and the tie-break (favor
-the intent declared earlier in `INTENTS`) picks FIR_LOOKUP, silently dropping the second
-half of the question. This is a real architectural limit of the deterministic keyword
-classifier, not a bug to chase — an officer conversation naturally comes as separate
-turns anyway, and the golden-conversation script was corrected to phrase turn 18 as two
-turns (`t18a`/`t18b`) rather than one compound sentence, which is also the more realistic
-phrasing.
-
-## Known regressions / traps that must not return
-- Every prior-pass trap (see `CLAUDE.md`) is still current.
-- **New this pass**: the four bugs above, each now covered by a regression test — if any
-  of them regress, `pytest` catches it before a live pass has to rediscover it the hard
-  way again.
-- **New this pass**: do not judge a map-pane screenshot taken less than ~1.5s after a
-  turn finishes streaming (see "New platform fact" above).
+See `CLAUDE.md` in full, and every fact listed in prior passes' handoffs (ER has no
+person §0; sqlite mirror + ~23s cold-container cost; ZCQL has no bind params and no
+cross-table JOINs live; `fitBounds` animation timing for CDP screenshots; intent
+classification is a single label per turn). New this pass: **a redeploy does not
+instantly retire every running container instance** — the first live re-check of the
+Kannada fix, run ~1-2 minutes after `deployment_status: success`, still reproduced the
+pre-fix crash; a second check shortly after succeeded. Give a redeploy a couple of
+minutes before treating a still-failing spot-check as evidence the fix didn't take.
 
 ## Data-generation constraints
 Unchanged — do not regenerate the live 10k-case dataset casually. Nothing this pass
 touched the generator.
 
-## Acceptance criteria for the current objective
-Met: the golden conversation passes end-to-end live through the console; the map updates
-correctly in context; every technically-solvable North Star P0/P1 gap is closed
-(BUG-026) or genuinely, directly re-confirmed blocked (QuickML, PDF); the API deployment
-is stable post-redeploy (`/health` clean); screenshots are committed and were visually
-judged before writing this file, not merely captured.
-
-## Last verification evidence
-`docs/screenshots/2026-08-26-full-investigation-walkthrough/` — 25 screenshots (19 golden turns + sign-in
-+ a citation-click attempt + Kannada + the IO authorization check) + `log.json` (every
-turn's query/answer/citation-count/refusal-flag/active-pane, machine-readable) + a
-README narrating what each screenshot proves and the four bugs found along the way.
-
 ## Next recommended action
-1. **Independently observe `veritas_audit_verify`'s next unattended Cron fire** — the
-   fix (BUG-027) is deployed and unit-tested, but its own "does the schedule actually
-   succeed with nobody watching" claim wasn't re-checked this pass. `GET
-   /jobs/audit-verify` (no `sync=true`) should show `success_count` incrementing on its
-   own next time someone lists the live Cron job.
-2. If a QuickML endpoint key or a working Catalyst OAuth sign-in is ever obtained outside
-   this tooling, BUG-022 and BUG-018 both close for real — both remain credential-blocked,
-   not code-blocked, confirmed directly this pass.
-3. RAG-32's ORIGINAL scope (a genuine tied `record_count` from a plain name SEARCH, not
-   a pronoun) still hasn't been hit live by chance — low priority, the mechanism is
-   already unit-tested and now has a live pronoun-side proof (this pass's turn 19).
-4. Consider assigning BUG-NNN numbers to this pass's four fixes if `PHASE1_FAILURE_LOG.md`
-   is the canonical place future audits expect to find them — this pass fixed them
-   in-line from the golden-conversation script's own findings rather than logging them
-   there first, which is faster but leaves that log's numbering one pass behind.
+1. Get real browser/CDP tooling into whatever environment runs the next session, or
+   have a human drive one console pass — this pass's biggest honest gap is that nothing
+   about the console UI itself was re-checked, only the API/engine underneath it.
+2. If a QuickML endpoint key or a working Catalyst OAuth sign-in is ever obtained, BUG-022
+   and BUG-018 both close for real — both remain credential-blocked, not code-blocked.
+3. Consider whether a genuine "return to a specific earlier case" capability (an actual
+   small case-history stack, not just an honest refusal) is worth building — the refusal
+   this pass shipped is the correct STOP-GAP for "don't fabricate a case switch," but a
+   real capability would be strictly better if an investigator regularly needs it.

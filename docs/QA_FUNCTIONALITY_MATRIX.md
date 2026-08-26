@@ -195,7 +195,7 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
 | DEP-12 | Cron — `veritas_refresh` (6h) | **VERIFIED, unattended fire confirmed (North Star hardening pass)** | BUG-025's config fix (wrong hostname + stale token) is now proven, not just plausible: listed the live Cron job directly this pass and found `success_count: 1, failure_count: 0` (was 0/20) — a real unattended fire succeeded on schedule after the fix, with no manual trigger involved |
-| DEP-13 | Cron — `veritas_audit_verify` (12h) | **Was still BROKEN unattended after BUG-025; root-caused and fixed this pass** | Listing the live job showed `success_count: 0, failure_count: 21` — one MORE failure than BUG-025 recorded, meaning the URL/token fix alone did not make the schedule succeed. Root cause: unlike `/jobs/refresh`, `/jobs/audit-verify` ran `verify_chain()` (a `ds.query()`) synchronously in the request — exactly the call that pays BUG-001's ~23s cold-container mirror-hydration cost, inside a request Cron abandons long before that. Fixed by applying the identical background-thread pattern `/jobs/refresh` already uses (commit `d5f0798`, deployed `52852000000316042`); a `sync=true` param preserves the original inline `{"intact":...}` response for a human running the check by hand. Live-verified post-deploy: default call returns `{"status":"started"}` in 0.2s, `?sync=true` still returns the real result. **The schedule's own next unattended fire (up to 12h out) is what would confirm success_count finally increments** — the defect that was actually causing every failure is now fixed and unit-tested (5 new tests), not merely reconfigured |
+| DEP-13 | Cron — `veritas_audit_verify` (12h) | **VERIFIED, unattended fire confirmed (finalization pass, 2026-08-27)** | BUG-027's background-thread fix (commit `d5f0798`) is now proven, not just unit-tested: listed the live Cron job directly this pass (not a manual trigger) and found `success_count: 1, failure_count: 0` — the schedule's own next unattended fire (12h window) succeeded with nobody watching, closing the one item every prior pass's handoff had left open. `veritas_refresh` shows `success_count: 3, failure_count: 0` in the same listing. |
 | DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 
 ## 8. Data integrity (carried forward from Phase 1, re-confirmed this session)
@@ -319,9 +319,39 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
   Copilot verification (UI-28) directly observed 5 distinct, non-templated MO-similarity
   explanations for the same crime type, which is positive evidence BUG-023's fix holds,
   though not a full re-audit of DATA-06 itself.
-- `veritas_audit_verify`'s Cron job's own NEXT unattended fire, post-BUG-027 — the fix is
-  deployed and unit-tested; independently observing it succeed on its own 12h schedule
-  (rather than via a manual `sync=true` call) was not done this pass.
+- ~~`veritas_audit_verify`'s Cron job's own NEXT unattended fire, post-BUG-027~~ —
+  **closed 2026-08-27 (finalization pass)**: listed the live job directly, `success_count:
+  1, failure_count: 0` — a real unattended fire succeeded on its own 12h schedule with no
+  manual trigger. See DEP-13.
+
+**2026-08-27 finalization pass** — a fresh adversarial stress pass over `/chat` (curl/SSE
+against the live production API; natural investigator phrasing deliberately different
+from the already-passing 19-turn golden script, per this pass's own instruction not to
+just re-run what already worked) found and fixed three real live defects, each with a
+regression test (369 tests, all green) and confirmed fixed against the redeployed live
+API afterward:
+1. A Kannada query crashed the whole turn (a tokenizer `TypeError` from the CTranslate2
+   backend escaped the translation layer's narrow exception handling). Now degrades to
+   English with an honest note, like every other translation failure.
+2. A district-scoped question with no person in it ("How many gangs operate in this
+   district?") was hijacked into an ambiguous-PERSON clarification whenever the previous
+   turn had named 2+ people — bare "this"/"that" was being treated as an unresolved
+   person pronoun even when used as an ordinary determiner ("this district", "this
+   case"). Now only counts as a person reference when not immediately followed by a
+   domain noun.
+3. "Go back to the first case" (no case-history stack exists) fell to a generic semantic
+   search on the word "case" and returned confidently-cited but unrelated records. Now
+   refuses honestly (new `CASE_REFERENCE_UNSUPPORTED` intent) and leaves the currently
+   open case untouched.
+
+Also this pass, live-verified directly (not re-guessed): RBAC boundary (IO refused a
+cross-station FIR, no leak); QuickML still BLOCKED (`QUICKML_ENDPOINT_KEY` absent from
+live AppSail config); PDF export still BLOCKED (`/export/pdf` still returns
+`text/html`, the honest fallback). **No browser/CDP tooling was available in this
+session's environment** (no Chrome, no puppeteer/playwright installed) — every check
+this pass ran over the live HTTP/SSE API directly, not through the console UI. The UI
+rows verified by earlier passes' CDP sessions (§1) are unchanged and were not
+re-driven; they are not re-claimed as re-verified this pass.
 
 These are named here so the next pass has a concrete, prioritized list rather than a
 vague "test everything" — continuing this audit means working down this list, not

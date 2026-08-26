@@ -477,3 +477,77 @@ more code — out of this pass's chosen scope). The tied-name-search variant of 
 conversation itself exercised was not repeated — the prior passes' CDP verification of
 most of the QA matrix's UI rows stands, unrepeated where this pass's fixes didn't touch
 them.
+
+---
+
+## 2026-08-27 — Finalization pass: an adversarial stress test found three real bugs,
+Cron's unattended-fire question finally closed, repo hygiene
+
+No browser/CDP tooling was available in this session's environment (no Chrome,
+puppeteer, or playwright installed) — everything this pass verified live went over
+direct HTTP/SSE calls to the production API, not through the console UI. Stated
+plainly here and in the handoff rather than glossed over.
+
+**Ran a fresh adversarial conversation against the live API** — deliberately different
+phrasing from the already-passing 19-turn golden script ("tell me more about this
+person", "what about the other person", "go back to the first case", a Kannada query
+mid-session, "how many gangs operate in this district?"), per this pass's own
+instruction not to spend the session re-proving what already worked. Found three real
+bugs, all in `packages/rag_agent/rag_agent/`:
+
+1. A Kannada query crashed the whole turn — a tokenizer `TypeError` from the
+   CTranslate2 backend escaped `translation_agent.to_english`/`to_language`'s narrow
+   `except TranslationUnavailable`. Both functions now catch any backend exception and
+   degrade to English with an honest note (`agents/translation_agent.py`).
+2. "How many gangs operate in this district?" (no person named) was answered as an
+   ambiguous-PERSON clarification — `intents._PRONOUNS` treated bare "this"/"that" as
+   an unresolved person reference unconditionally, so any subject-less question
+   containing a determiner phrase ("this district") got routed into person-pronoun
+   resolution whenever 2+ people were named in the previous turn. Fixed by excluding
+   "this"/"that" immediately followed by a domain noun (`intents.py`).
+3. "Go back to the first case" (no case-history stack exists) fell to a bare
+   `CRIME_SEARCH` keyword score and ran a real semantic search, confidently returning 5
+   unrelated cited records. New `CASE_REFERENCE_UNSUPPORTED` intent refuses honestly
+   instead and leaves the currently open case untouched (`intents.py`,
+   `orchestrator.py`, `evidence/evaluator.py`).
+
+7 new regression tests (2 intent, 2 orchestrator, 3 translation-agent), each targeting
+the exact live-reproduced failure. **361 → 369 tests, all green.**
+
+**Deployed** via the relay pipeline (commit `37cc5c6` → fresh signed URL →
+`relay-deploy.yml` builds `Dockerfile.overlay` on the runner → local `appsail/upsert`,
+deployment `52852000000306055`, polled to `deployment_status: success`) and
+**re-verified all three fixes live** afterward. One real platform fact surfaced: the
+first Kannada re-check, run ~1-2 minutes after the deployment reported success, still
+reproduced the pre-fix crash — a redeploy does not instantly retire every running
+container instance. A retry shortly after succeeded end to end. Recorded in the
+handoff so the next pass doesn't misdiagnose a too-early spot-check as a failed fix.
+
+**Closed the one item every prior pass's handoff had left open**: listed the live
+`veritas_audit_verify` Cron job directly (not a manual trigger) and found
+`success_count: 1, failure_count: 0` — its BUG-027 background-thread fix has now had a
+real unattended success on its own 12h schedule. `veritas_refresh` shows `3, 0` in the
+same listing.
+
+**Re-confirmed, directly, unchanged**: QuickML (`QUICKML_ENDPOINT_KEY` absent from the
+live AppSail config), PDF export (`/export/pdf` still `text/html`), RBAC (an IO
+correctly refused a cross-station FIR with no leak).
+
+**Repository hygiene** (explicit user request): removed the two `.pptx` files and the
+redundant `Prototype_Deck.pdf` from the repo root; renamed
+`docs/VERITAS_NORTH_STAR.md` → `docs/CAPABILITY_TARGET_AND_GAPS.md` and
+`docs/screenshots/2026-08-26-golden-19turn/` →
+`.../2026-08-26-full-investigation-walkthrough/`, updating every path reference —
+internal-jargon-free names for a judge browsing the repo tree, content unchanged.
+
+**Test suite**: 369 collected, all green.
+
+**Docs updated**: `docs/VERITAS_HANDOFF.md` (rewritten for this pass), this file,
+`docs/QA_FUNCTIONALITY_MATRIX.md` (DEP-13, new bullet section), `docs/VERITAS_STATUS.html`
+(stale-as-of banner extended), `SUBMISSION.md` (deck reference removed).
+
+**Not done this pass, named rather than silently skipped**: no console/UI
+re-verification and no new screenshots (no browser tooling available — see above); the
+tied-name-search variant of RAG-32; voice pipeline, case-status filter chips, map
+pan/drag, AML positive-case verification, `dowhy` — all unchanged from prior passes,
+same constraints as documented there.
