@@ -15,6 +15,7 @@ with no real-time source there is nothing for one to ingest.
 """
 import argparse
 import json
+import os
 import random
 from pathlib import Path
 
@@ -28,6 +29,16 @@ from .load import load_dataset
 # *detector output*, and a generator that writes its own answer key into the table the
 # models read would make every AML metric meaningless.
 AML_LABELS = Path(".veritas/aml_labels.json")
+
+# Identity ground truth: AccusedMasterID -> TruePerson.uid. Same reasoning as AML_LABELS
+# — a file, not a column, and never loaded back into the record layer. Before this, the
+# claimed entity-resolution F1 was only recomputable in-process against a fresh
+# generate() call; this lets it be recomputed against whatever is actually live on
+# Catalyst by re-fetching vx_accused_identity and comparing against this file. Env-var
+# overridable for the same reason VERITAS_AML_LABELS is (gnn.py) — tests point it at a
+# tmp path instead of touching the real .veritas/ directory.
+IDENTITY_ANSWER_KEY = Path(os.getenv("VERITAS_IDENTITY_ANSWER_KEY",
+                                      ".veritas/identity_answer_key.json"))
 
 
 def main() -> None:
@@ -51,13 +62,18 @@ def main() -> None:
     counts = load_dataset(ds)
     print(f"records: {sum(counts.values())} rows across {len(counts)} tables")
 
+    # Answer key, before resolution runs, so it reflects generation truth regardless of
+    # what resolve_entities() below does with it.
+    IDENTITY_ANSWER_KEY.parent.mkdir(parents=True, exist_ok=True)
+    IDENTITY_ANSWER_KEY.write_text(json.dumps(ds.accused_truth), encoding="utf-8")
+
     # Identity, before anything that needs a person.
     from ml_models.entity_resolution import resolve_entities
     matches = resolve_entities()
     people = store.query('SELECT "PersonUID", "IsHabitualOffender" FROM "vx_person"')
     links = sum(1 for m in matches if m.decision == "link")
     print(f"identities: {len(people)} people from {len(ds.accused_truth)} accused rows "
-          f"({links} links)")
+          f"({links} links, answer key -> {IDENTITY_ANSWER_KEY})")
 
     # Financial layer — accounts belong to people, so it could not have run any earlier.
     case_ids = [c["CaseMasterID"] for c in ds.tables["CaseMaster"]]
