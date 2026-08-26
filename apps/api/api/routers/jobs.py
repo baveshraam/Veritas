@@ -155,19 +155,69 @@ async def regenerate_narratives(x_veritas_job_token: str | None = Header(default
     return {"status": "started"}
 
 
+_audit_lock = threading.Lock()
+_audit_running = False
+
+
+def _run_audit_verify() -> None:
+    global _audit_running
+    from data.audit import verify_chain
+
+    try:
+        intact, first_bad = verify_chain()
+        if not intact:
+            log.error("AUDIT CHAIN BROKEN at AuditID %s", first_bad)
+        else:
+            log.info("audit chain verified intact")
+    except Exception:
+        log.exception("scheduled audit verify failed")
+    finally:
+        with _audit_lock:
+            _audit_running = False
+
+
 @router.get("/jobs/audit-verify")
-async def audit_verify(x_veritas_job_token: str | None = Header(default=None)):
+async def audit_verify(x_veritas_job_token: str | None = Header(default=None),
+                        sync: bool = False):
     """Re-derive the whole audit hash chain and report whether it is intact.
 
     This is the thing that replaces Postgres's `RULE ... DO INSTEAD NOTHING`. Data Store has
     no rules and no triggers, so the log cannot be made physically immutable — instead every
     row hashes the one before it, and this is the check that says nobody has edited or
     removed one. Scheduled, so tampering is noticed rather than merely detectable.
+
+    BUG-025 follow-up: Cron kept failing every scheduled fire even after its URL/token were
+    corrected. Root cause — `verify_chain()`'s first `ds.query()` is exactly the call that pays
+    the ~23s mirror-hydration cost on a cold container (BUG-001), synchronously, inside a
+    request Cron abandons well before that. `/jobs/refresh` avoids this by never touching the
+    data layer before responding; this endpoint now does the same, running the real check on a
+    background thread and logging the result so a broken chain is still noticed. `sync=true`
+    keeps the original blocking behaviour for a human running this by hand (a warm container
+    answers in milliseconds) — the one caller that actually wants the real answer inline.
     """
     _authorise(x_veritas_job_token)
-    from data.audit import verify_chain
 
-    intact, first_bad = verify_chain()
-    if not intact:
-        log.error("AUDIT CHAIN BROKEN at AuditID %s", first_bad)
-    return {"intact": intact, "first_bad_audit_id": first_bad}
+    if sync:
+        from data.audit import verify_chain
+        intact, first_bad = verify_chain()
+        if not intact:
+            log.error("AUDIT CHAIN BROKEN at AuditID %s", first_bad)
+        return {"intact": intact, "first_bad_audit_id": first_bad}
+
+    global _audit_running
+    with _audit_lock:
+        if _audit_running:
+            return {"status": "already_running"}
+        _audit_running = True
+
+    from data import ds
+
+    app = ds.catalyst_app() if ds.backend() == "catalyst" else None
+
+    def _work() -> None:
+        if app is not None:
+            ds._sdk_app = app          # noqa: SLF001 — same pattern as /jobs/refresh
+        _run_audit_verify()
+
+    threading.Thread(target=_work, name="jobs-audit-verify", daemon=True).start()
+    return {"status": "started"}

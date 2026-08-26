@@ -367,6 +367,109 @@ def test_refresh_still_requires_the_job_token(client, officers, monkeypatch):
                        headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401
 
 
+# --- BUG-025 follow-up: /jobs/audit-verify must not block Cron on a cold container -
+#
+# Live evidence: after BUG-025's URL/token fix landed, veritas_refresh's Cron entry
+# recorded a real unattended success (success_count 0 -> 1), but veritas_audit_verify
+# kept failing every scheduled fire (failure_count kept climbing past the 20 already
+# logged). The difference: audit_verify's old body called verify_chain() -> ds.query()
+# synchronously, which is exactly the call that pays the ~23s mirror-hydration cost on
+# a cold container (BUG-001) -- inside a request Cron gives up on well before that.
+# /jobs/refresh never touches the data layer before responding, which is why it alone
+# survived a cold fire.
+
+def test_audit_verify_returns_immediately_instead_of_blocking_on_the_recompute(
+        client, officers, monkeypatch):
+    import time
+
+    from api.routers import jobs as jobs_router
+
+    started = {"verify": False}
+    gate = __import__("threading").Event()
+
+    def slow_verify_chain():
+        gate.wait(timeout=2)   # stands in for the cold-container mirror hydration cost
+        started["verify"] = True
+        return True, None
+
+    monkeypatch.setattr("data.audit.verify_chain", slow_verify_chain)
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_audit_running", False)
+
+    t0 = time.monotonic()
+    r = client.get("/jobs/audit-verify", headers={"X-Veritas-Job-Token": "test-token"})
+    elapsed = time.monotonic() - t0
+
+    assert r.status_code == 200
+    assert r.json() == {"status": "started"}
+    assert elapsed < 1.0, f"the request blocked for {elapsed:.2f}s waiting on the job"
+    assert started == {"verify": False}, \
+        "the response returned before the job had even started, which is correct -- " \
+        "but the job itself must still run: released below"
+
+    gate.set()
+    for _ in range(50):
+        if started["verify"]:
+            break
+        time.sleep(0.05)
+    assert started == {"verify": True}, "the background thread never completed the job"
+
+
+def test_audit_verify_sync_param_still_answers_inline(client, officers, monkeypatch):
+    from api.routers import jobs as jobs_router
+
+    monkeypatch.setattr("data.audit.verify_chain", lambda: (True, None))
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_audit_running", False)
+
+    r = client.get("/jobs/audit-verify?sync=true",
+                   headers={"X-Veritas-Job-Token": "test-token"})
+    assert r.status_code == 200
+    assert r.json() == {"intact": True, "first_bad_audit_id": None}
+
+
+def test_audit_verify_sync_param_reports_a_broken_chain_inline(client, officers, monkeypatch):
+    from api.routers import jobs as jobs_router
+
+    monkeypatch.setattr("data.audit.verify_chain", lambda: (False, 7))
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_audit_running", False)
+
+    r = client.get("/jobs/audit-verify?sync=true",
+                   headers={"X-Veritas-Job-Token": "test-token"})
+    assert r.status_code == 200
+    assert r.json() == {"intact": False, "first_bad_audit_id": 7}
+
+
+def test_audit_verify_refuses_to_overlap_a_run_already_in_flight(client, officers, monkeypatch):
+    import threading
+
+    from api.routers import jobs as jobs_router
+
+    gate = threading.Event()
+    monkeypatch.setattr("data.audit.verify_chain", lambda: gate.wait(timeout=2) and (True, None))
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_audit_running", False)
+
+    try:
+        first = client.get("/jobs/audit-verify", headers={"X-Veritas-Job-Token": "test-token"})
+        second = client.get("/jobs/audit-verify", headers={"X-Veritas-Job-Token": "test-token"})
+        assert first.json() == {"status": "started"}
+        assert second.json() == {"status": "already_running"}
+    finally:
+        gate.set()
+
+
+def test_audit_verify_still_requires_the_job_token(client, officers, monkeypatch):
+    from api.routers import jobs as jobs_router
+    monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
+    monkeypatch.setattr(jobs_router, "_audit_running", False)
+
+    assert client.get("/jobs/audit-verify").status_code == 401
+    assert client.get("/jobs/audit-verify",
+                      headers={"X-Veritas-Job-Token": "wrong"}).status_code == 401
+
+
 # --- BUG-023 live fix: /jobs/regenerate_narratives --------------------------------
 #
 # The Data Store SDK only authenticates from real per-request Catalyst headers, so
