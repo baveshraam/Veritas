@@ -9,7 +9,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 315 green (`pytest --collect-only -q` for the current
+- **Tests**: `python -m pytest` — 317 green (`pytest --collect-only -q` for the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -825,9 +825,25 @@ volume justifies the training cost.
     fallback confirmed absent too — "no Chromium-family browser found on this host",
     stated explicitly for the first time rather than left implicit), Aequitas
     (still out-of-band by design), `dowhy` (still a measured, deliberate exclusion).
+  - **"Does X have priors?" — the flagship reason identity resolution exists at all
+    (§0) — had been silently answering with "crime type not recorded, status not
+    recorded" for every case, in production, since this code path shipped.** Found live
+    while testing multi-turn pronoun resolution with a fresh pronoun ("her," not "he").
+    `sql_agent.person_record()` ran `_case()` over `queries.cases_for_person()`'s rows,
+    which carry only raw `CrimeMinorHeadID`/`CaseStatusID` — that query's own join
+    (`vx_accused_identity`→`Accused`→`CaseMaster`→`Unit`) already spends 3 of ZCQL's
+    4-JOIN cap, with no room left for the `District`/`CrimeSubHead`/`CaseStatusMaster`
+    joins `_case()` reads names from. No prior test caught this because every
+    `PERSON_HISTORY` test asserted intent *routing*, never answer *content*. Fixed by
+    chaining a second, separately-budgeted query (`cases_by_ids`, reusing the
+    already-correct `_CASE_SELECT` from `fir_by_id`/`fir_by_number`) instead of asking
+    one query to exceed the cap. 2 regression tests, confirmed to fail against the
+    pre-fix code first. Deployed and live-verified: the same "Does Usha Naika have
+    priors?" query now returns full crime type, district, status and narrative for all
+    12 of her cases. Logged as BUG-028 (P0).
   - **The "189 green" test count in this document's own header had been stale for a
     long time** — the real count, gotten via `pytest --collect-only -q` rather than
-    trusted from a changelog entry, is 315. Corrected at the top of this document.
+    trusted from a changelog entry, is 317. Corrected at the top of this document.
   - Created `docs/VERITAS_HANDOFF.md` and `docs/WORK_LOG.md` (neither existed before this
     pass) so a future session has an operational pointer instead of needing to
     reconstruct state from this changelog in full.

@@ -5,15 +5,15 @@ and `docs/PHASE1_FAILURE_LOG.md`. This file answers "where do things stand right
 what's next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-`21b2bd9` — "fix(web): Export PDF tells the officer when it silently degraded to HTML"
+`23fffc1` — "deploy: relay BUG-028 fix (PERSON_HISTORY crime type/status)"
 (main, pushed to `github.com/baveshraam/Veritas`)
 
 ## Current live deployment
-- API: `52852000000316042` (AppSail app `50043864344`), deployed 2026-08-26, via the
-  North Star hardening pass's audit-verify fix (`d5f0798`) — this is one commit ahead of
-  what `docs/VERITAS_STATUS.html` was generated against (`5022c46`/`52852000000316042` —
-  same deployment id shown there is now stale; the console-only frontend fix above did
-  not require a new AppSail deployment, only a `catalyst deploy --only client`).
+- API: AppSail app `50043864344` (appComputeId `52852000000204688`), redeployed
+  2026-08-26 carrying commit `152c313` (BUG-028 fix) — the most recent of three API
+  deploys this pass (audit-verify fix, then this). `docs/VERITAS_STATUS.html`'s cited
+  deployment id (`52852000000316042`, against commit `5022c46`) is now stale; that file
+  is flagged as such at its own top rather than rewritten in full.
 - Console: `https://veritas-60077763394.development.catalystserverless.in/app/index.html`
   — redeployed this pass, bundle-grepped live for the new export-honesty string
   (`page-69a5dfde3ec8de99.js` contains "PDF renderer unavailable on this deployment").
@@ -95,18 +95,22 @@ BUG-026 (Copilot leads name mismatch, new this pass, not fixed by design/scope c
 Everything else tracked is FIXED and live-verified.
 
 ## Recently completed work (this pass)
-1. **BUG-027** — `/jobs/audit-verify` no longer blocks Cron on a cold container
+1. **BUG-028 (P0, the most consequential fix this pass)** — "Does X have priors?" had
+   been silently answering "crime type not recorded" for every case, in production, for
+   the flagship identity-resolution capability CLAUDE.md §0 names. Fixed and live-verified
+   (`152c313`, deployed `52852000000204688`).
+2. **BUG-027** — `/jobs/audit-verify` no longer blocks Cron on a cold container
    (`d5f0798`, deployed `52852000000316042`).
-2. **Identity answer-key persistence** — `run.py` + new `score_identity.py`
+3. **Identity answer-key persistence** — `run.py` + new `score_identity.py`
    (`1fb0bdc`), closing `DATA_GENERATION_AUDIT.md` §19's minor gap.
-3. **Export-PDF UI honesty** — the console now tells the officer when "Export PDF"
+4. **Export-PDF UI honesty** — the console now tells the officer when "Export PDF"
    silently degraded to HTML (`21b2bd9`, console redeployed).
-4. **BUG-026 found and documented** — a real identity-display gap in the Copilot leads
+5. **BUG-026 found and documented** — a real identity-display gap in the Copilot leads
    section, via live CDP verification (not fixed — a scope decision, see the bug entry).
-5. Substantially expanded live UI verification (10+ previously PARTIAL/UNKNOWN rows
+6. Substantially expanded live UI verification (10+ previously PARTIAL/UNKNOWN rows
    moved to VERIFIED) via a real headless-Chrome/CDP session — see
    `docs/QA_FUNCTIONALITY_MATRIX.md`.
-6. `/alerts` (SSE) and its Isolation Forest backend re-confirmed live and reachable —
+7. `/alerts` (SSE) and its Isolation Forest backend re-confirmed live and reachable —
    the v12 changelog's claim was previously untested this deeply; now it is.
 
 ## Important architecture facts a new session must not re-derive
@@ -120,6 +124,14 @@ value-related tables live; the deployed image is code + CPU wheels only, weights
 from File Store at cold start.
 
 ## Known regressions / traps that must not return
+- **Don't feed a query built for one join budget into a row-shape parser built for
+  another** (BUG-028) — `_case()` expects `_CASE_SELECT`'s fully-joined columns
+  (`CrimeHeadName`/`CaseStatusName`/`DistrictName`/`UnitName`/`BriefFacts`); any query
+  reaching `CaseMaster` through 3+ of its own joins (e.g. via `vx_accused_identity`) has
+  no join budget left to also resolve those names and must fetch ids first, then a
+  second `_CASE_SELECT ... WHERE CaseMasterID IN (...)` call, never one query trying to
+  do both. If a new caller feeds `_case()` rows from a query you didn't write yourself,
+  check what columns that query actually selects before trusting the output.
 - Don't gate a background warm-up thread behind an unrelated env var (BUG-001's original
   cause) — verify with a fresh `VERITAS_RESTART_NONCE` bump if touching startup code.
 - Don't let a new evaluator/floor change silently drop an authoritative low-confidence

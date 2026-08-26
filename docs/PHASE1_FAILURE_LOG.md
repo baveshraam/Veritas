@@ -1807,6 +1807,74 @@ fully close this loop either.
 
 ---
 
+## BUG-028 — "Does X have priors?" rendered "crime type not recorded" for every case
+
+Severity: **P0**
+Component: `packages/rag_agent/rag_agent/agents/sql_agent.py`
+Status: **FIXED, deployed, live-verified (North Star hardening pass, 2026-08-26)**
+
+### How this was found
+Live-testing multi-turn pronoun resolution (RAG-17/18) with a new pronoun ("her", not
+the "he"/"his" pairs prior sessions had tried) — the first turn asked "Does Usha Naika
+have priors?" and its answer looked wrong on inspection, not merely absent.
+
+### Symptoms
+```
+POST /chat {"query": "Does Usha Naika have priors?"}
+```
+returned, for every one of her 12 cases: *"FIR ... (PS 505) — crime type not recorded,
+filed 13 Sep 2023, status not recorded."* — no district, no narrative either. `GET
+/cases?q=100050505202300018` confirms the same FIR genuinely has `crime_type: "Rash
+Driving"`, `case_status: "Acquitted"`, a real district and a real narrative. The data
+was never missing; the code path serving this one answer just never fetched it.
+
+### Root cause
+`sql_agent.person_record()` ran `_case()` (which reads `r["CrimeHeadName"]`,
+`r["CaseStatusName"]`, `r["DistrictName"]`, `r["UnitName"]`, `r["BriefFacts"]`) directly
+over the rows from `data.queries.cases_for_person()` — a query built for `_CASE_COLS`,
+which selects only `CrimeMinorHeadID`/`CaseStatusID` (raw foreign keys, no names) and no
+district/narrative columns at all. `cases_for_person()`'s own join
+(`vx_accused_identity` → `Accused` → `CaseMaster` → `Unit`) already spends 3 of ZCQL's
+documented 4-JOIN cap, leaving no room for the `District`/`CrimeSubHead`/
+`CaseStatusMaster` joins `_case()` actually needs — those three joins are exactly what
+`sql_agent._CASE_SELECT` (used correctly by `fir_by_id`/`fir_by_number`) already spends
+its own separate 4-join budget on. Every `PERSON_HISTORY` and `RISK` answer in
+production was built from the ID-only shape, silently, since this code path shipped —
+CLAUDE.md §0 names "does he have priors" as the flagship reason identity resolution
+exists at all, and it had never actually been showing what the crime was.
+
+### Why no prior test caught this
+Every existing test for `PERSON_HISTORY` (`test_engine.py`) asserted intent
+*classification* (`classify("Does he have priors?") == "PERSON_HISTORY"`), never the
+*content* of the evidence the intent produces. Live QA passes asked the question, saw
+an answer with the right number of citations, and moved on without reading the prose
+closely enough to notice "not recorded" appearing 12 times in a row.
+
+### Fix
+New `sql_agent.cases_by_ids(fir_ids)`: fetches case ids from the existing (unchanged)
+identity-linked query, then runs a *second* query — `_CASE_SELECT WHERE CaseMasterID IN
+:ids` — reusing the same fully-joined, already-correct select `fir_by_id`/`fir_by_number`
+use, within its own separate 4-join budget. `person_record()` now chains the two instead
+of asking one query to do more joins than ZCQL allows.
+
+### Regression test
+`packages/rag_agent/tests/test_sql_agent.py` — two new tests, confirmed to fail against
+the pre-fix code first (`assert None == 'Theft'`) before confirming the fix passes:
+`test_person_record_carries_crime_type_and_status_not_just_ids`,
+`test_person_record_matches_a_direct_fully_joined_lookup` (cross-checks against
+`fir_by_id`'s own output for the same case).
+
+### Verification
+`python -m pytest` — 317 collected, all green. **Live-verified post-deploy** (commit
+`152c313`, deployed `52852000000204688`): *"Does Usha Naika have priors?"* now returns
+*"FIR 100050505202300018 (Bengaluru Urban, PS 505) — Rash Driving, filed 13 Sep 2023,
+status Acquitted. On 13 Sep 2023, a case of rash driving was registered in Bengaluru
+Urban district. Overspeeding vehicle losing control on a residential road..."* — crime
+type, district, status and narrative all present, for a query this exact deployment had
+been answering incorrectly in production.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1838,8 +1906,9 @@ fully close this loop either.
 | BUG-025 both Catalyst Cron jobs had never once succeeded | **P1** | **FIXED, verified live** — wrong hostname (org id instead of app id) plus a stale job token, stacked; both corrected over the Admin API and re-verified by calling each endpoint exactly as the corrected Cron config now would |
 | BUG-026 Copilot leads render canonical name with no link to the as-filed name | P2 | **OPEN** — found live this pass (North Star hardening pass) via CDP; entity resolution is working correctly, the UI just doesn't cross-reference the two names it already has in scope. Documented in `docs/QA_FUNCTIONALITY_MATRIX.md`, not fixed |
 | BUG-027 `/jobs/audit-verify` still failed every unattended Cron fire after BUG-025 | **P1** | **FIXED, deployed, live-verified** (North Star hardening pass) — same synchronous-cold-start class as BUG-024, applied to the one job endpoint BUG-024's fix never touched; `sync=true` preserves the manual-check behaviour |
+| BUG-028 "does X have priors" rendered "crime type not recorded" for every case | **P0** | **FIXED, deployed, live-verified** (North Star hardening pass) — the flagship identity-resolution capability (`CLAUDE.md` §0) was silently degraded in production; root cause was ZCQL's 4-JOIN cap colliding with `_case()`'s column expectations, fixed by chaining two in-budget queries instead of one over-budget one |
 
-**3 P0, 16 P1, 7 P2, 1 P3 across 27 tracked defects — see each row's Status for the
+**4 P0, 17 P1, 7 P2, 1 P3 across 28 tracked defects — see each row's Status for the
 current, precise state; this line intentionally does not collapse them into a single
 aggregate count, which drifted out of sync with the table itself across sessions.**
 

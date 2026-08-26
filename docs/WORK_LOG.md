@@ -19,6 +19,21 @@ docs at face value (found one place they'd already drifted — see BUG-027 below
   (0→1); `veritas_audit_verify` did not (0/20→0/21) — the URL/token fix alone hadn't
   actually fixed the schedule for that one job.
 
+**Fixed (commit `152c313`, deployed `52852000000204688`) — the most consequential finding
+this pass:**
+- **BUG-028 (P0)** — "Does X have priors?" had been silently answering "crime type not
+  recorded, status not recorded" for every case, in production, for the flagship
+  capability `CLAUDE.md` §0 names as the reason identity resolution exists at all. Found
+  while live-testing multi-turn pronoun resolution with a fresh pronoun ("her"). Root
+  cause: `person_record()`'s query already spent 3 of ZCQL's 4-JOIN cap reaching a case
+  id via the identity table, leaving no budget for the joins that resolve crime-type/
+  status/district names — every answer silently degraded to case numbers and dates.
+  Fixed by chaining a second, separately-budgeted, already-correct query
+  (`sql_agent.cases_by_ids`) instead of asking one query to exceed the cap. 2 new tests,
+  confirmed to fail against the pre-fix code first. Live-verified: the same query now
+  returns full case detail (crime type, district, status, narrative) for all 12 of the
+  test subject's cases.
+
 **Fixed (commit `d5f0798`, deployed `52852000000316042`):**
 - `/jobs/audit-verify` was running `verify_chain()` synchronously — the exact call that
   pays BUG-001's ~23s cold-container mirror-hydration cost inside a request Cron
@@ -82,10 +97,11 @@ an unexposed cross-reference. Left open as a scoped, documented finding (see
   environment this project has run in; the rest are named in the QA matrix for the next
   pass rather than rushed here.
 
-**Test suite**: 315 collected, all green throughout (8 new this pass: 5 audit-verify +
-3 score-identity; the 251/196/189-style counts in older docs were already stale before
-this pass — `pytest --collect-only -q` is the way to get the real current number, not a
-changelog entry). `npx tsc --noEmit` clean after the frontend changes.
+**Test suite**: 317 collected, all green throughout (10 new this pass: 5 audit-verify +
+3 score-identity + 2 sql_agent/BUG-028; the 251/196/189-style counts in older docs were
+already stale before this pass — `pytest --collect-only -q` is the way to get the real
+current number, not a changelog entry). `npx tsc --noEmit` clean after the frontend
+changes.
 
 **Docs updated**: `docs/QA_FUNCTIONALITY_MATRIX.md` (many rows), `docs/PHASE1_FAILURE_LOG.md`
 (BUG-026, BUG-027, summary counts), `docs/VERITAS_HANDOFF.md` (created), this file

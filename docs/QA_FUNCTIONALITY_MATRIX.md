@@ -79,7 +79,7 @@ that stated, not `VERIFIED`.
 |----|--------|--------|------------------------------|--------|
 | RAG-01 | `FIR_LOOKUP` (exact) | `orchestrator.py` | Yes, repeatedly | VERIFIED |
 | RAG-02 | `FIR_LOOKUP` (nonexistent) | same | Yes | VERIFIED |
-| RAG-03 | `PERSON_HISTORY` | same | Yes ("does X have priors") | VERIFIED |
+| RAG-03 | `PERSON_HISTORY` | same | Yes ("does X have priors") | **VERIFIED (content, not just routing) — North Star hardening pass** | Prior "VERIFIED" only checked that an answer with citations came back. This pass found live that every case's crime type/status/district/narrative rendered as "not recorded" (BUG-028, P0) — real data existed, `person_record()` just never fetched it (a ZCQL 4-JOIN-cap collision). Fixed, deployed, and re-verified: the same query now returns full case detail |
 | RAG-04 | `PERSON_NETWORK` | same | Yes | VERIFIED |
 | RAG-05 | `ALIAS_CHECK` | same | Yes | VERIFIED |
 | RAG-06 | `FINANCIAL` (empty trail) | same | Yes | VERIFIED |
@@ -93,8 +93,8 @@ that stated, not `VERIFIED`.
 | RAG-14 | `CRIME_SEARCH` | same | Yes, live this pass | VERIFIED — "How many theft cases in Mandya district?" → "73 case(s) Theft in Mandya", authoritative, vector search skipped (BUG-008 fixed) |
 | RAG-15 | `CAPABILITY` | same | Yes | VERIFIED |
 | RAG-16 | `NOT_INFERABLE` | same | Yes | VERIFIED |
-| RAG-17 | Pronoun/reference resolution ("does **he** have priors") | `intents.has_unresolved_reference` | Yes | VERIFIED — live 3-turn session: named subject, then "Does he have priors?", then "What about his money trail?", both pronouns correctly resolved against the session's carried-forward subject |
-| RAG-18 | Multi-turn session continuity | `vx_session`/`vx_conversation_turn` | Yes | VERIFIED — same 3-turn session as RAG-17; subject persisted correctly across all three turns |
+| RAG-17 | Pronoun/reference resolution ("does **he** have priors") | `intents.has_unresolved_reference` | Yes | VERIFIED — live 3-turn session: named subject, then "Does he have priors?", then "What about his money trail?", both pronouns correctly resolved against the session's carried-forward subject. Re-confirmed this pass with **"her"** specifically (a different pronoun than any prior session tried): turn 1 named Usha Naika, turn 2 "What about her money trail?" correctly resolved to her and returned the correct FINANCIAL negative-finding answer, not a misfire |
+| RAG-18 | Multi-turn session continuity | `vx_session`/`vx_conversation_turn` | Yes | VERIFIED — same 3-turn session as RAG-17; subject persisted correctly across all three turns. This is also the session that surfaced BUG-028 (above) — worth noting that deeper conversational testing, not routing checks alone, is what actually finds content-level defects |
 | RAG-19 | HippoRAG retrieval | `retrieval/hipporag.py` | Indirectly (trace shows it firing) | PARTIAL |
 | RAG-20 | Think-on-Graph deep-dive | `retrieval/tog.py` | Indirectly (trace shows it firing on relational intents) | PARTIAL |
 | RAG-21 | LLM-fluent synthesis | `llm.py`/`synthesis_agent.py` | Yes — confirmed NOT firing (extractive fallback used throughout) | BROKEN — see BUG-021/022 |
