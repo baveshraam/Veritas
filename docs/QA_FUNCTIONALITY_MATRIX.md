@@ -30,31 +30,31 @@ that stated, not `VERIFIED`.
 | UI-03 | Login gate — `?as=ROLE` shortcut | `LoginGate.tsx` | Auto-signs in from URL param | VERIFIED | Used for every screenshot in this pass |
 | UI-04 | Login gate — roster failure / slow state | `LoginGate.tsx` | 8s→"slow", real failure→"failed", offers unverified fallback | VERIFIED | CDP: forced real network failure, screenshotted both states |
 | UI-05 | Login gate — unverified/demo entry clears token | `LoginGate.tsx:enterUnverified` | `setToken(null)` before entering | VERIFIED | CDP: localStorage before/after |
-| UI-06 | Command bar — EN/KN toggle | `CommandBar.tsx` | Sets `language` state | PARTIAL | Toggle click not driven this pass; API-level Kannada is VERIFIED |
-| UI-07 | Command bar — voice on/off toggle | `CommandBar.tsx` | Sets `voiceOut` | UNKNOWN | Not exercised |
-| UI-08 | Command bar — Export PDF button | `CommandBar.tsx` → `exportPdf()` | Downloads session as file | PARTIAL | Gating confirmed live: correctly `disabled` with 0 chat turns (`canExport={turns.length > 0}`). API confirms `text/html` fallback (BUG-018); the actual download click with turns present not driven |
+| UI-06 | Command bar — EN/KN toggle | `CommandBar.tsx` | Sets `language` state | **VERIFIED** (North Star hardening pass, 2026-08-26) | CDP: clicked live, `ಕನ್ನಡ` tab visibly activates (amber highlight moves off `EN`); the toggle governs the language of the *next answer*, not console chrome i18n — by design, not a gap |
+| UI-07 | Command bar — voice on/off toggle | `CommandBar.tsx` | Sets `voiceOut` | UNKNOWN | Still not exercised — no audio pipeline to observe from a toggle click alone; genuinely gated on NLP-06/07 |
+| UI-08 | Command bar — Export PDF button | `CommandBar.tsx` → `exportPdf()` | Downloads session as file | **VERIFIED both states** (North Star hardening pass) | CDP: `disabled=true` at 0 turns confirmed as before; after a real turn, `disabled=false` confirmed live and the click fires a real `/export/pdf` request (network-captured). **Found and fixed a real gap the same pass**: the response was HTTP 200 with an HTML body (BUG-018's fallback) and the console silently downloaded it with zero in-app indication "PDF" hadn't happened — `exportPdf()` now reports whether the blob was a real PDF, and the console shows "PDF renderer unavailable on this deployment — downloaded a printable HTML copy instead." Deployed and bundle-grepped live (`page-69a5dfde3ec8de99.js` contains the string) |
 | UI-09 | Command bar — Switch (sign out) | `CommandBar.tsx` | `setToken(null)`, returns to LoginGate | VERIFIED | Live via a real manual sign-in (no `?as=` shortcut): click Switch -> token cleared, back at login gate. **Note**: testing this through the `?as=ROLE` URL shortcut instead looks like a failure (token restored, still signed in) -- that is the shortcut correctly re-authenticating on every LoginGate mount, by design, not a bug. Caught and ruled out before being misreported |
 | UI-10 | Command bar — health readout | `CommandBar.tsx` | Shows FIR/node/index counts, live-status dot | VERIFIED | Screenshot matches `/health` exactly |
 | UI-11 | Chat pane — send text query | `ChatPane.tsx:send` | Types, submits, streams SSE | VERIFIED | CDP: real query, real streamed answer, real citation |
 | UI-12 | Chat pane — push-to-talk mic | `ChatPane.tsx:toggleMic` | Records audio, waveform | UNKNOWN | No audio input device in this environment |
-| UI-13 | Chat pane — citation chip click | `ChatPane.tsx:withCitations` | Scrolls/highlights evidence rail item | PARTIAL, code-traced | `app/page.tsx:revealEvidence` confirmed wired end to end: chip → `onCite` → `setActiveEvidence` + `scrollIntoView` on the matching `ev-${id}` element. Not interactively driven — no browser/CDP tooling available this session |
-| UI-14 | Evidence rail — item expand | `EvidenceRail.tsx` | Shows full content + source query | VERIFIED | Visible in chat screenshot (1 cited, expanded) |
-| UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | PARTIAL | Not clicked directly; UI-22 confirms the Copilot overlay itself opens and renders correctly via the case-card route |
-| UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | PARTIAL, code-traced | Driven by the same `activeEvidence` state `revealEvidence` sets (`app/page.tsx`) — wiring confirmed correct by reading the call chain, not verified visually (no browser/CDP tooling this session) |
-| UI-17 | Reasoning trace panel (expand/collapse) | `ReasoningTrace.tsx` | Plain-language agent trace, off by default | PARTIAL | Present in screenshot ("reasoning trace · 5 steps"), not expanded/inspected |
-| UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | PARTIAL | Typed into live; result not screenshotted before session ended |
+| UI-13 | Chat pane — citation chip click | `ChatPane.tsx:withCitations` | Scrolls/highlights evidence rail item | **VERIFIED** (North Star hardening pass) | CDP: clicked the `[1]` chip live — evidence card highlighted/expanded and the evidence-thread line (UI-16) drew to it. Chrome relaunched with `--headless=new --remote-debugging-port`, driven over Node 22's global WebSocket per `[[veritas-console-verification]]` |
+| UI-14 | Evidence rail — item expand | `EvidenceRail.tsx` | Shows full content + source query | VERIFIED | Visible in chat screenshot (1 cited, expanded); re-confirmed this pass, now also showing the `SELECT ... FROM fir WHERE fir_number = :n` source query line |
+| UI-15 | Evidence rail — "Ask about this case" (Copilot open) | `EvidenceRail.tsx` | Opens Copilot overlay for a FIR | **VERIFIED** (North Star hardening pass) | CDP: clicked "Open Investigation Copilot" directly from a citation card — overlay opened with real timeline/leads/similar-cases/diary content for FIR 9992 |
+| UI-16 | Evidence thread — citation-to-card line draw | `EvidenceThread.tsx` | SVG line from chip to card | **VERIFIED** (North Star hardening pass) | CDP screenshot shows a real diagonal line from the `[1]` citation chip to the evidence card — the signature visual feature genuinely renders, not merely wired |
+| UI-17 | Reasoning trace panel (expand/collapse) | `ReasoningTrace.tsx` | Plain-language agent trace, off by default | **VERIFIED** (North Star hardening pass) | CDP: clicked the disclosure arrow — expanded to show all 5 real trace steps with per-step durations (Orchestrator 4ms, SQL Agent 1ms, Vector Search Agent 1ms — skipped, Evidence Evaluator 0ms, Evidence Synthesis 18ms) |
+| UI-18 | Case explorer — search box | `CaseExplorer.tsx` | Filters `/cases` by text | **VERIFIED** (North Star hardening pass) | CDP: typed "Hurt" — every visible card became Hurt, and the footer read "Showing 60 of 1557 matching cases," exactly matching the Hurt filter-chip count (1557) shown on the same screen |
 | UI-19 | Case explorer — crime-type filter chips | `CaseExplorer.tsx` | Toggles facet filter | VERIFIED | Live: clicked "Theft", chip highlighted, district count correctly narrowed 24->19, every visible card is Theft |
-| UI-20 | Case explorer — case-status filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven |
-| UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | UNKNOWN | Not driven |
-| UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it |
-| UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | PARTIAL | Case index confirmed rendering; switch to viz not driven |
+| UI-20 | Case explorer — case-status filter chips | `CaseExplorer.tsx` | Toggles facet filter | UNKNOWN | Not driven this pass either — status chips (Under Investigation/Convicted/etc.) were visible with correct live counts but not clicked |
+| UI-21 | Case explorer — "Ask about this case" per card | `CaseExplorer.tsx` | Sends a templated chat query | **VERIFIED** (North Star hardening pass) | CDP: clicked on a real case card — sent "What is the status of FIR 100222201202600022?" and received the correct grounded, cited answer |
+| UI-22 | Case explorer — "Copilot brief" per card | `CaseExplorer.tsx` | Opens Copilot overlay | VERIFIED | Live: clicked, overlay opened and rendered the officer's own header state correctly around it; re-confirmed this pass |
+| UI-23 | Context view — pane switcher (index/viz) | `ContextView.tsx` | Toggles case index vs map/graph/sankey/trend | PARTIAL | Case index confirmed rendering; switch to viz not driven this pass either |
 | UI-24 | Map view | `viz/MapView.tsx` | Self-drawn canvas, hotspot density, case points | **FIXED** (North Star Phase 4) | All 31 real district centres (dot + DOM-marker label, not a symbol-layer text-field — avoids needing a third-party glyph service) plus a native `ScaleControl`. Console bundle grepped live for the fix (`Bengaluru Urban`, `ScaleControl`, `district-dot` all present in the served chunk); a live hotspot query confirmed the map data flow (`polygons`/`fir_points`) unaffected. **Not done**: true district boundary polygons — no shapefile is bundled and none is fetched at runtime, so centroid+label is what the data honestly supports, not fabricated precision. No browser/CDP tooling available this session to visually screenshot the render — verified by bundle content and data flow, not a rendered screenshot |
 | UI-25 | Network view | `viz/NetworkView.tsx` | Force-directed graph | VERIFIED | Screenshotted live: 12 labeled nodes, correct sizing/coloring, legible |
 | UI-26 | Sankey view | `viz/SankeyView.tsx` | Money-flow diagram | **FIXED** (North Star Phase 5) | Above 25 nodes, only the 20 highest-value nodes keep a label (every node stays hoverable via the existing tooltip, so no information is lost). Deployed bundle byte-verified identical (sha256) to the local build carrying the fix. Live data flow re-confirmed (Harish Savadi, 60-destination trail) |
 | UI-27 | Trend view | `viz/TrendView.tsx` | Forecast bands (ECharts) | VERIFIED | Screenshotted live: proper band chart, axis labels, real dates |
-| UI-28 | Copilot overlay — timeline/leads/diary/similar cases | `Copilot.tsx` | Renders `/copilot/{id}` | PARTIAL | API-level content verified extensively; overlay UI not opened via click |
-| UI-29 | Copilot — "Copy" diary button | `Copilot.tsx` | Clipboard copy | UNKNOWN | Not driven |
-| UI-30 | Alert toasts | `AlertToasts.tsx` | WebSocket-driven anomaly toasts | BROKEN (blocked) | `/alerts` itself unreachable live — see BUG-005 |
+| UI-28 | Copilot overlay — timeline/leads/diary/similar cases | `Copilot.tsx` | Renders `/copilot/{id}` | **VERIFIED** (North Star hardening pass) | CDP: overlay opened live for FIR 9992 with real content in all four sections — timeline (1 event), 5 MO-similar cases each with a distinct `text similarity` % and a real structured explanation (crime type/IPC sections/district/MO — confirms BUG-023's narrative fix holds up under interactive use, not just API sampling), 5 capped leads naming real graph signals (PageRank 0.0011, community 6, associate counts), and the draft case-diary paragraph |
+| UI-29 | Copilot — "Copy" diary button | `Copilot.tsx` | Clipboard copy | **VERIFIED** (North Star hardening pass) | CDP: monkey-patched `navigator.clipboard.writeText`, clicked Copy, and the real draft-diary text landed in the captured clipboard call verbatim |
+| UI-30 | Alert toasts | `AlertToasts.tsx` | SSE-driven anomaly toasts (transport changed from WebSocket, v12) | **VERIFIED (backend), PARTIAL (visual)** | `GET /alerts` re-confirmed live this pass: unauthenticated → 401, authenticated → real streaming payloads with genuine explanatory factors (`district_code`, `metric`, `observed` vs `expected`, `severity`) — an auditable anomaly, not an opaque "AI says suspicious" badge, satisfying the North Star's explainability bar for this surface. `AlertToasts.tsx` correctly reconnects on drop and renders `observed`/`expected` inline. Not re-screenshotted in the toast-visible state this pass (alerts arrive on an interval; the component itself and the feed behind it are both now independently confirmed correct) |
 
 ## 2. API routes
 
@@ -68,7 +68,7 @@ that stated, not `VERIFIED`.
 | API-06 | `GET /person/{id}` | `records.py` | VERIFIED | Live, masking confirmed |
 | API-07 | `GET /copilot/{id}` | `copilot.py` | VERIFIED | Live, scoping + masking confirmed |
 | API-08 | `POST /export/pdf` | `export.py` | PARTIAL, root-caused | Live-verified this pass: 2 real bugs found+fixed (wrong SDK method name, unbound SDK context — failure mode changed twice in the intended direction); still returns `text/html` due to a remaining `INVALID_ID`/"No such User" Catalyst identity question, only testable via a real Catalyst Auth sign-in this session's tooling cannot drive. Console still honest — never claims a PDF it didn't produce (BUG-018) |
-| API-09 | `WS /alerts` | `alerts.py` | BROKEN (live) | See BUG-005 |
+| API-09 | `GET /alerts` (SSE, transport changed from WebSocket in v12) | `alerts.py` | **VERIFIED (live, North Star hardening pass)** | Re-confirmed live: unauthenticated → 401 `{"detail":...}`; authenticated → real SSE stream, 4 distinct district alerts received in 8s with genuine `observed`/`expected`/`severity` fields, not placeholder data |
 | API-10 | `POST /jobs/refresh` | `jobs.py` | **VERIFIED (fixed)** | BUG-024 fixed: moved to a background thread. Redeployed (`52852000000310022`) — see the failure log for the live re-verification |
 | API-11 | `GET /jobs/audit-verify` | `jobs.py` | VERIFIED | Triggered live with the real deployed job token: `{"intact":true,"first_bad_audit_id":null}` — the audit hash chain is genuinely intact |
 | API-12 | `GET /health` | `main.py` | VERIFIED | Extensively, both deploys |
@@ -105,19 +105,19 @@ that stated, not `VERIFIED`.
 
 | ID | Capability | Module | Live-verified | Status |
 |----|-----------|--------|----------------|--------|
-| ML-01 | Fellegi-Sunter entity resolution | `entity_resolution/fellegi_sunter.py` | Indirectly — `vx_person`/`vx_accused_identity` are its output, confirmed populated and referentially consistent (`test_integrity.py`) | PARTIAL — the F1=0.989 claim itself was not re-measured this session |
+| ML-01 | Fellegi-Sunter entity resolution | `entity_resolution/fellegi_sunter.py` | Indirectly — `vx_person`/`vx_accused_identity` are its output, confirmed populated and referentially consistent (`test_integrity.py`) | PARTIAL — the F1=0.989 claim itself was not re-measured against the live dataset this session (still not recomputable there: the live 10k-case dataset predates this pass's fix, §19 gap below). **Fixed the recomputability gap itself**: `run.py` now persists `IDENTITY_ANSWER_KEY` the same way `AML_LABELS` already survives to disk (`docs/DATA_GENERATION_AUDIT.md` §19), and `data/generator/score_identity.py` recomputes precision/recall/F1 from it against whatever `vx_accused_identity` is currently bound — out-of-band, matching the `fairness_run_audit.py` precedent, not wired to any route. Deliberately not exercised against the live Catalyst dataset: the answer key file only exists from this point forward for a *future* generation run, and regenerating the currently-seeded 10k-case live dataset just to produce it would violate this project's own "don't regenerate casually" rule for a P2/nice-to-have gap |
 | ML-02 | KDE + DBSCAN hotspots | `spatial/hotspots.py` | Yes (prior pass): named-district query returns real clusters + real incident points | VERIFIED (API level); map rendering UNKNOWN |
 | ML-03 | Prophet + MinT forecast | `forecasting/forecast.py` | Yes (prior pass): 30-day series, plausible values | VERIFIED (API level); chart rendering UNKNOWN |
 | ML-04 | XGBoost + SHAP risk scoring | `risk/scoring.py` | Yes, live this pass | PARTIAL, honestly — live returns 1.00 for a heavy-prior person, correctly labeled "NOT calibrated" because the live dataset's calibration split lacks class balance to fit isotonic regression; the fallback fires exactly as designed (BUG-014 fixed at the reporting level) |
 | ML-05 | LightGBM recidivism | `risk/scoring.py` (via `predict_recidivism`) | Yes: fires alongside risk | PARTIAL — value not checked against the answer key |
-| ML-06 | Isolation Forest district-spike alerts | `risk/anomalies.py` | **No** — only reachable through `/alerts`, which is live-blocked | UNKNOWN |
+| ML-06 | Isolation Forest district-spike alerts | `risk/anomalies.py` | **Yes (North Star hardening pass)** — `/alerts` is reachable and streaming (see API-09) | **VERIFIED** — 4 real alerts observed live in one 8s window, e.g. `KA05 monthly_fir_count 105.0 vs expected 73.5, high` |
 | ML-07 | Louvain community detection | (via `data/gds.py`, not ml_models directly) | Yes: person 803 → community 28, plural communities confirmed in prior pass | VERIFIED |
 | ML-08 | PageRank / betweenness (graph centrality) | `data/gds.py` | Yes, live this pass (North Star Phase 3) | VERIFIED — network view renders real PageRank-derived node sizing/color, live-verified via "Who are the associates of Usha Naika?"; field renamed `risk_score`→`pagerank` end to end (payload + TS type) since it was never a risk score, matching the BUG-011 confidence-kind discipline |
 | ML-09 | Rule-based AML structuring detector | `financial/structuring.py` | Yes, live this pass (North Star Phase 5) | VERIFIED reachable, PARTIAL on a positive case — root-cause fix: the detector was checking `money_trail`'s incidental `from_account` (for a multi-hop transfer, an intermediate account nobody owns; structurally never the receiving side structuring targets), never the person's own account. Now checks every account via new `graph_agent.owned_accounts()`. Live-verified against 10 real people with real trails/accounts: detector genuinely runs (trace: "AML Detectors (structuring + GNN)"), correctly returns 0 flags on accounts with no sub-threshold deposit burst. No live positive example found this session (would need the original `.veritas/aml_labels.json`, not available outside the original seeding run) |
 | ML-10 | GNN suspicious-subgraph AML | `financial/gnn.py` | Reachability fixed alongside ML-09 | PARTIAL — same reachability fix applies; `torch` is still absent from the deployed image (confirmed still true, hard AppSail bundle-sandbox size constraint, empirically measured in v7: 9.31GB and 4.66GB images both failed). `GNNUnavailable` degrades gracefully (verified in code: `serving.flag_transactions` catches it explicitly). A from-scratch numpy backprop reimplementation was considered and deliberately not attempted — a subtly-wrong hand-rolled gradient computation for a financial-crime detector is a worse failure mode than an honest unavailability, and the rule-based detector (now actually reachable) is the system's own documented primary/auditable detector regardless |
 | ML-11 | DoWhy causal effects | `causal/effects.py` | Yes, this pass: confirmed declining with a precise reason (`dowhy` not installed in the deployed image) | BROKEN live (by design/image-size trade-off), correctly reported as such |
 | ML-12 | Aequitas fairness audit | `fairness/audit.py` | Resolved by reading `serving.py`'s own module docstring | N/A (live product) | Explicitly designed as out-of-band: `serving.py` documents its callers as "fairness/run_audit.py: run_fairness_audit (out-of-band, pre-demo)" — a standalone CLI script (`packages/ml_models/fairness_run_audit.py`), never wired to any API route or UI control. Not a gap — by design |
-| ML-13 | Isolation-Forest-driven `/alerts` feed | `serving.py:check_anomalies` | **No** | UNKNOWN, blocked by BUG-005 |
+| ML-13 | Isolation-Forest-driven `/alerts` feed | `serving.py:check_anomalies` | **Yes (North Star hardening pass)** | **VERIFIED** — see ML-06/API-09; BUG-005's blocker (WebSocket transport) was already superseded by the v12 SSE migration, re-confirmed live this pass |
 
 ## 5. NLP / Voice / Kannada
 
@@ -168,8 +168,8 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 | DEP-09 | AppSail runtime — QuickML | BROKEN, diagnosed | BUG-021 (fixed) / BUG-022 (open) |
 | DEP-10 | AppSail runtime — Cache | VERIFIED | `/health` reports `cache=catalyst` |
 | DEP-11 | Web Client Hosting deploy (`catalyst deploy --only client`) | VERIFIED | This session, first time — artifact-verified via CDP, not just exit code |
-| DEP-12 | Cron — `veritas_refresh` (6h) | **VERIFIED (BUG-025)** | Was never actually configured to succeed: wrong hostname (org id instead of app id) + a stale job token, `success_count: 0` / `failure_count: 20` since creation, disabled. Both defects found by listing the live Cron config directly, fixed via the Admin API, re-enabled, and confirmed by calling the corrected endpoint — `{"status":"started"}`. The schedule's own next unattended fire (up to 6h out) is what would confirm end-to-end; the configuration that was actually broken is fixed and verified |
-| DEP-13 | Cron — `veritas_audit_verify` (12h) | **VERIFIED (BUG-025)** | Same two defects, same fix, same verification: `{"intact":true,"first_bad_audit_id":null}` via the corrected URL+token. Had been silently non-functional since Jul 13, 2026 — the tamper-evidence claim's own enforcement mechanism had run zero times in production |
+| DEP-12 | Cron — `veritas_refresh` (6h) | **VERIFIED, unattended fire confirmed (North Star hardening pass)** | BUG-025's config fix (wrong hostname + stale token) is now proven, not just plausible: listed the live Cron job directly this pass and found `success_count: 1, failure_count: 0` (was 0/20) — a real unattended fire succeeded on schedule after the fix, with no manual trigger involved |
+| DEP-13 | Cron — `veritas_audit_verify` (12h) | **Was still BROKEN unattended after BUG-025; root-caused and fixed this pass** | Listing the live job showed `success_count: 0, failure_count: 21` — one MORE failure than BUG-025 recorded, meaning the URL/token fix alone did not make the schedule succeed. Root cause: unlike `/jobs/refresh`, `/jobs/audit-verify` ran `verify_chain()` (a `ds.query()`) synchronously in the request — exactly the call that pays BUG-001's ~23s cold-container mirror-hydration cost, inside a request Cron abandons long before that. Fixed by applying the identical background-thread pattern `/jobs/refresh` already uses (commit `d5f0798`, deployed `52852000000316042`); a `sync=true` param preserves the original inline `{"intact":...}` response for a human running the check by hand. Live-verified post-deploy: default call returns `{"status":"started"}` in 0.2s, `?sync=true` still returns the real result. **The schedule's own next unattended fire (up to 12h out) is what would confirm success_count finally increments** — the defect that was actually causing every failure is now fixed and unit-tested (5 new tests), not merely reconfigured |
 | DEP-14 | Audit hash chain integrity | VERIFIED | Triggered `/jobs/audit-verify` live — `intact: true` against the real, live audit log, not a test fixture |
 
 ## 8. Data integrity (carried forward from Phase 1, re-confirmed this session)
@@ -185,28 +185,82 @@ intentional, not an oversight, since §9 of the request asks for it explicitly).
 
 ---
 
+## BUG-026 — Copilot leads render a person's canonical name, not the as-filed name, with no visible link between them
+
+Severity: P2 (UX/trust, not a correctness or masking defect)
+Component: `packages/rag_agent/copilot/brief.py:_leads`
+Status: **OPEN — found live this pass, documented, not fixed**
+
+### Symptoms
+Found live via CDP while verifying UI-28 (Copilot overlay): FIR 9992's own accused list
+(`/fir/9992`) names the second accused **"Suma Nadkarni D/o Eshwar"** — the record as
+filed. The same case's Copilot brief leads section reads *"**Soom Nadkarni** has 163
+direct co-accused associate(s)..."* — a different spelling, for the same `PersonUID`
+(877), with nothing in the UI indicating these are the same person.
+
+### Root cause
+This is entity resolution working *correctly*, not a data-integrity bug — confirmed by
+checking `/person/877` directly: `name_en: "Soom Nadkarni"` matches `vx_person.CanonicalName`
+exactly. `Accused.AccusedName` ("Suma Nadkarni") is the case-specific as-filed record,
+which per `CLAUDE.md` §3's own documented generator behavior is expected to carry a
+romanisation variant on ~35% of rows; Fellegi-Sunter correctly resolved it to the
+person's canonical identity. `_leads()` renders `vx_person.CanonicalName` (line 209);
+the case's own accused list renders `Accused.AccusedName` — both correct for what they
+are, but nothing cross-references them for the officer reading both in the same brief.
+
+### Why this matters
+North Star §1.1 stage 3 (entity discovery) names exactly this requirement: "every
+reconstructed person carries an inspectable match confidence, not just a merged name."
+An officer reading the case's accused list and then the Copilot's leads section, in the
+same investigation, has no way to tell "Suma Nadkarni" and "Soom Nadkarni" are the same
+defendant without independently querying `/person/877` — which most officers would not
+think to do, since nothing on screen suggests a name mismatch exists at all. This is
+also §11's "aliases should be visible where appropriate" requirement, unmet on this one
+surface (the `ALIAS_CHECK` intent, RAG-05, already does this correctly elsewhere in the
+product).
+
+### Recommended fix (not implemented — a scope decision, not a difficulty one)
+`_leads()` already has both values (`a["CanonicalName"]` and `a["AccusedName"]`) in
+scope. When they differ, render both: `"Soom Nadkarni (filed as \"Suma Nadkarni\" on
+this FIR) has 163 direct co-accused..."` — small, uses data already fetched, no new
+query. Left open rather than fixed in this pass to keep the pass's live-system changes
+scoped to defects with a clear, singular fix; this one touches the same trust-critical
+surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
+
+---
+
 ## What this matrix does NOT yet cover (honest, not silent)
 
-- Full click-through of every UI control listed UNKNOWN in §1 — the console has been
-  proven capable of correct rendering (login, chat, evidence, health) via CDP; extending
-  that same harness to every button is mechanical but not yet done.
+- Full click-through of every UI control listed UNKNOWN in §1 — narrowed significantly
+  this pass (UI-06/13/15/16/17/18/21/22/28/29 moved PARTIAL/UNKNOWN → VERIFIED via a
+  real CDP session). Still not driven: UI-07 (voice toggle — hardware-gated), UI-20
+  (case-status filter chips), UI-23 (viz pane switcher).
 - Map rendering as an actual geographic tool (pan/zoom/cluster/drill-down) — API-level
-  hotspot data is verified; MapLibre rendering itself is not.
+  hotspot data is verified; MapLibre rendering itself is not driven this pass either.
 - Voice pipeline end to end — no audio input device in this environment. This is a hard
   environmental constraint, not a skipped step.
 - A real FINANCIAL trail (RAG-07) — every person queried this session either had no
   linked account or the query wasn't pointed at one; the empty-trail path is thoroughly
   verified, the populated path is not.
+- **AML detectors against a real injected pattern (ML-09/10)** — a local
+  `.veritas/aml_labels.json` exists from a prior generation run, but its TxnIDs
+  (max 2354) could not be confidently matched against the live 10k-case dataset's own
+  transaction numbering without a live database introspection path this session did not
+  have (an admin ZCQL query attempt returned `INVALID_URL_PATTERN` against the one
+  endpoint shape tried — not chased further, matching this project's own rule against
+  guessing repeatedly at a live API). Still UNKNOWN for the positive-detection path;
+  the reachability/negative-case path remains VERIFIED per the prior pass.
 - Multi-turn conversational context (RAG-17/18) — every live test used an isolated
   session; pronoun resolution across turns is unit-tested only.
 - Whether Aequitas fairness auditing (ML-12) is reachable from the live product at all,
-  or exists purely as an offline analysis script.
-- Cron jobs' unattended schedule firing (DEP-12/13) over real wall-clock time — their
-  configuration was found broken (wrong hostname + stale token, BUG-025), fixed, and
-  each endpoint re-verified by direct call; only the schedule actually firing
-  unattended, hours out, remains genuinely unobserved.
+  or exists purely as an offline analysis script — unchanged this pass, still by-design
+  out-of-band per `serving.py`'s own docstring.
 - `BriefFacts` repetitiveness and its downstream effect on similarity/embeddings
-  (DATA-06) — flagged by the user's own brief as a known concern, not yet traced.
+  (DATA-06) — flagged by the user's own brief as a known concern; this pass's live
+  Copilot verification (UI-28) directly observed 5 distinct, non-templated MO-similarity
+  explanations for the same crime type, which is positive evidence BUG-023's fix holds,
+  though not a full re-audit of DATA-06 itself.
+- **BUG-026** (above) — a new finding this pass, not yet fixed.
 
 These are named here so the next pass has a concrete, prioritized list rather than a
 vague "test everything" — continuing this audit means working down this list, not

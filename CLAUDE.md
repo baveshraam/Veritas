@@ -9,7 +9,9 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 189 green, no database or Docker required
+- **Tests**: `python -m pytest` — 315 green (`pytest --collect-only -q` for the current
+  count; this line has drifted stale before and is not to be trusted over that), no
+  database or Docker required
 
 **Ground rule for this document**: choices are justified by "is this the best solution to the
 actual problem", never by "what was fast to build". Where something is simple, that is
@@ -768,3 +770,64 @@ volume justifies the training cost.
     `refresh`: started). `veritas_audit_verify` is the tamper-evidence claim's own enforcement
     — "a tamper check nobody runs is not a tamper check" — and had been running zero times in
     production.
+- **v13 (North Star hardening pass) — a 23-section re-audit, and the one place v12's own
+  "fixed" claim hadn't actually held.**
+  - **`veritas_audit_verify`'s Cron job was still failing every unattended fire after
+    v12's fix.** Listing the live job directly (rather than trusting the prior pass's own
+    "FIXED, verified live") showed `success_count: 0, failure_count: 21` — one MORE
+    failure than v12 had already logged — while `veritas_refresh`'s sibling job had a
+    real unattended success (`0→1`). Root cause: `/jobs/audit-verify` ran
+    `verify_chain()` — a `ds.query()` — synchronously, which is exactly the call that
+    pays the ~23s cold-container mirror-hydration cost (BUG-001), inside a request Cron
+    abandons long before that; `/jobs/refresh` never touches the data layer before
+    responding, which is why it alone survived a cold fire. Fixed with the identical
+    background-thread pattern `/jobs/refresh` already uses, plus a `sync=true` escape
+    hatch that keeps the original inline `{"intact": ...}` response for a human running
+    the check by hand — the mode every prior live-verification pass in this document
+    used, which is exactly why this had stayed invisible: manual curls always hit an
+    already-warm container. 5 new tests. Deployed (`52852000000316042`) and
+    live-verified: default call returns in 0.2s against a freshly-deployed container;
+    `sync=true` still returns the real result. Logged as BUG-027.
+  - **A real headless-Chrome/CDP session** (the console-verification technique from
+    2026-07-26, not used with actual browser tooling in several intervening sessions)
+    moved 10 UI rows from PARTIAL/UNKNOWN to VERIFIED: the EN/KN toggle, citation-chip
+    click, the evidence-thread line draw, reasoning-trace expand, the full Copilot
+    overlay (timeline/leads/similar-cases/diary), Copy-to-clipboard, case-explorer
+    search, "Ask about this case" per card, and Export PDF's *enabled* state (previously
+    only its disabled state had been driven).
+  - **Found live, during that same session: Copilot leads name a person by
+    `vx_person.CanonicalName` ("Soom Nadkarni") while the same case's own accused list
+    shows the as-filed `Accused.AccusedName` ("Suma Nadkarni") for the identical
+    `PersonUID`, with nothing on screen linking the two.** Confirmed via `/fir/9992` and
+    `/person/877` that this is entity resolution working *correctly* — a genuine
+    romanisation-variant case, exactly what §3's 35%-drift feature exists to produce —
+    the UI simply never cross-references the two names it already has in scope. Logged
+    as BUG-026, documented, deliberately left open (small, well-scoped, but out of this
+    pass's "one clear fix per change" discipline for a live-system edit).
+  - **Export PDF stopped lying by omission.** `exportPdf()` returned `void`, so a 200
+    response carrying BUG-018's HTML fallback downloaded silently with zero indication
+    that "Export PDF" hadn't produced a PDF. It now reports whether the blob was a real
+    PDF; the console shows *"PDF renderer unavailable on this deployment — downloaded a
+    printable HTML copy instead"* when it wasn't. Verified live by grepping the deployed
+    bundle for the string.
+  - **The identity-resolution answer key is now persisted**, closing
+    `docs/DATA_GENERATION_AUDIT.md` §19's minor gap the same way the AML labels already
+    close its equivalent: `run.py` writes `IDENTITY_ANSWER_KEY` to `.veritas/`, and new
+    `data/generator/score_identity.py` recomputes precision/recall/F1 against whatever
+    `vx_accused_identity` is currently bound — out-of-band, like `fairness_run_audit.py`,
+    not wired to any route. Deliberately **not** exercised against the live 10k-case
+    dataset, which predates this fix — regenerating it just to backfill a P2
+    auditability gap would be exactly the casual regeneration this project's rules
+    exclude.
+  - **Re-confirmed, unchanged, correctly still blocked**: QuickML
+    (`QUICKML_ENDPOINT_KEY` checked directly against the live AppSail config — still
+    unset), PDF export (SmartBrowz still `INVALID_ID`; the in-container local-renderer
+    fallback confirmed absent too — "no Chromium-family browser found on this host",
+    stated explicitly for the first time rather than left implicit), Aequitas
+    (still out-of-band by design), `dowhy` (still a measured, deliberate exclusion).
+  - **The "189 green" test count in this document's own header had been stale for a
+    long time** — the real count, gotten via `pytest --collect-only -q` rather than
+    trusted from a changelog entry, is 315. Corrected at the top of this document.
+  - Created `docs/VERITAS_HANDOFF.md` and `docs/WORK_LOG.md` (neither existed before this
+    pass) so a future session has an operational pointer instead of needing to
+    reconstruct state from this changelog in full.

@@ -1747,6 +1747,66 @@ instead of leaving it there.
 
 ---
 
+## BUG-027 — `/jobs/audit-verify` still failed every unattended Cron fire after BUG-025
+
+Severity: **P1**
+Component: apps/api/routers/jobs.py
+Status: **FIXED, deployed, live-verified (North Star hardening pass, 2026-08-26)**
+
+### How this was found
+BUG-025's own writeup left one thing genuinely unobserved: "the schedule itself actually
+firing unattended... remains what the next audit-verify/refresh success_count increment
+would confirm." This pass listed the live Cron jobs directly rather than assuming the
+prior fix had resolved the underlying problem.
+
+### Symptoms
+```
+veritas_refresh:      success_count=1, failure_count=0   (was 0/0 pre-BUG-025)
+veritas_audit_verify: success_count=0, failure_count=21  (was 0/20 pre-BUG-025)
+```
+`veritas_refresh`'s Cron entry recorded a real unattended success. `veritas_audit_verify`
+recorded one MORE failure than BUG-025 had already logged — the URL/token fix did not
+make this specific job succeed on schedule, even though both jobs share the identical
+corrected URL host and job token.
+
+### Root cause
+`/jobs/audit-verify`'s handler ran `verify_chain()` — a `ds.query()` — synchronously,
+before responding. `ds.query()`'s first call in a fresh container is exactly the call
+that pays BUG-001's ~23s mirror-hydration cost, inside a request Cron abandons long
+before that. `/jobs/refresh` never touches the data layer before responding (it only
+calls `ds.catalyst_app()`, which does not query anything), which is why it alone
+survived a cold fire. Manually curling `/jobs/audit-verify` with the exact same
+URL+token the Cron job uses always looked fine (200, `{"intact":true,...}`, ~0.2s) —
+because manual testing always happens against an already-warm container from prior
+health/chat checks in the same session, which is exactly the blind spot that let this
+survive BUG-025's own live verification.
+
+### Fix
+Same background-thread pattern `/jobs/refresh` already uses (BUG-024): the request
+returns `{"status": "started"}` immediately and the real check runs on a daemon thread,
+logging `AUDIT CHAIN BROKEN at AuditID %s` on failure. A `sync=true` query param keeps
+the original blocking, inline `{"intact": ..., "first_bad_audit_id": ...}` response for
+a human running the check by hand (a warm container answers in milliseconds) — the one
+caller that actually benefits from the real answer synchronously, and the mode every
+prior live-verification pass in this document used.
+
+### Regression test
+Five new tests in `apps/api/tests/test_api.py`: returns immediately and the background
+thread still completes; `sync=true` returns the real intact/broken result inline;
+refuses to overlap a run already in flight; still requires the job token.
+
+### Verification
+`python -m pytest` — all green (256 total). **Live-verified post-deploy**
+(commit `d5f0798`, deployed `52852000000316042`, Aug 26 2026): default call →
+`{"status":"started"}` in 0.209s against a freshly-deployed (cold) container;
+`?sync=true` → `{"intact":true,"first_bad_audit_id":null}`. **Not yet confirmed**: the
+schedule's own next unattended fire (up to 12h out) incrementing `success_count` —
+the defect that was actually causing every prior failure is fixed and unit-tested, but
+only a real scheduled fire proves it end to end, exactly as BUG-025 itself could not
+fully close this loop either.
+
+---
+
 ## Summary
 
 | ID | Severity | Status |
@@ -1776,8 +1836,10 @@ instead of leaving it there.
 | BUG-023 every narrative for a crime type is one template | **P1** | **FIXED, verified live** (North Star Phase 2) — 20/20 crime types covered, per-case slot-filling, live backfill via `/jobs/regenerate_narratives`; cross-case similarity now explains itself instead of a bare score |
 | BUG-024 `/jobs/refresh` 500s against the live dataset | **P1** | **FIXED, deployed, live-verified** — moved to a background thread; watched the real job run to genuine completion (5-6 min) and confirmed no corruption |
 | BUG-025 both Catalyst Cron jobs had never once succeeded | **P1** | **FIXED, verified live** — wrong hostname (org id instead of app id) plus a stale job token, stacked; both corrected over the Admin API and re-verified by calling each endpoint exactly as the corrected Cron config now would |
+| BUG-026 Copilot leads render canonical name with no link to the as-filed name | P2 | **OPEN** — found live this pass (North Star hardening pass) via CDP; entity resolution is working correctly, the UI just doesn't cross-reference the two names it already has in scope. Documented in `docs/QA_FUNCTIONALITY_MATRIX.md`, not fixed |
+| BUG-027 `/jobs/audit-verify` still failed every unattended Cron fire after BUG-025 | **P1** | **FIXED, deployed, live-verified** (North Star hardening pass) — same synchronous-cold-start class as BUG-024, applied to the one job endpoint BUG-024's fix never touched; `sync=true` preserves the manual-check behaviour |
 
-**3 P0, 15 P1, 6 P2, 1 P3 across 25 tracked defects — see each row's Status for the
+**3 P0, 16 P1, 7 P2, 1 P3 across 27 tracked defects — see each row's Status for the
 current, precise state; this line intentionally does not collapse them into a single
 aggregate count, which drifted out of sync with the table itself across sessions.**
 

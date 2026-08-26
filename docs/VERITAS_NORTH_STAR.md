@@ -583,3 +583,34 @@ items in Part 3 are gaps between what the system already correctly claims to be 
 cited, human-in-the-loop, structurally aligned with real investigative and AML practice — and
 what a judge or an officer would actually observe testing it today. Closing them is a matter of
 finishing the standard already set, not inventing a new one.
+
+---
+
+## Part 4 — Industry-baseline snapshot (North Star hardening pass, 2026-08-26)
+
+Part 1's research (i2 Analyst's Notebook, Palantir Gotham, ViCAP, ACAMS/FinCEN, CJIS, the
+predictive-policing bias literature) is not re-derived here — this section applies it, updated
+against what this pass actually live-verified, rather than what was claimed. Six of Part 3's P0/P1
+items (`BUG-023` narrative diversity, `BUG-008` counting, `BUG-011` similarity-as-confidence,
+`UI-24` map reference, financial-detector reachability, the LLM-fluency gap) were already closed
+by prior passes per `docs/IMPLEMENTATION_STRATEGY.md`; this table reflects the state as of this
+pass, not Part 3's original snapshot.
+
+| Capability | Industry expectation | Veritas today | Gap | Impact | Needed for baseline? |
+|---|---|---|---|---|---|
+| Entity resolution with inspectable confidence | i2/Gotham: heavy investment in dedup, auditable match decisions (§1.1 stage 3) | `vx_accused_identity.MatchConfidence` exists and is queryable; `ALIAS_CHECK` intent surfaces it in conversation | **Copilot's own leads text doesn't cross-reference a resolved name against the case's as-filed name** (BUG-026, found live this pass) — the underlying data is right, one surface doesn't show its work | Medium — an officer reading two names for "the same person" in one brief, unexplained, reads as a data error even when it isn't | **MUST HAVE** — small, well-scoped fix; this is precisely the trust surface §1.1 stage 3 names |
+| Link/graph analysis as ranking signal, not decoration | Most COTS tools treat the graph as a visualization surface for analyst judgment; Veritas runs PageRank/Louvain as retrieval/ranking inputs (§1.1 stage 4) | Live-verified again this pass: Copilot leads cite real PageRank values and community ids inline ("PageRank 0.0011 — likely an organiser, not a runner") | None material | — | Already a genuine differentiator, confirmed live, not just claimed |
+| Anomaly/alert feed with explainable factors | ACAMS: a human always decides escalate/dismiss, but the alert itself must carry the factors, not just a score | Live-verified this pass: `/alerts` streams `district_code`/`metric`/`observed`/`expected`/`severity` per alert, and the toast component renders all of it | None material | — | Already met — this pass closed the "was this ever actually reachable live" question the prior docs had left open |
+| Briefing/reporting export | POST/IRS-style fixed-template reports; prosecutor-facing artifacts need structural consistency (§1.1 stage 12) | HTML fallback is a genuine, well-formed, citation-carrying record (verified by reading the actual response body this pass); real PDF is blocked on an interactive-OAuth requirement neither this nor prior sessions can drive | The console now says so instead of silently substituting formats (fixed this pass) — the *format* gap remains, the *honesty* gap doesn't | Low-medium — a printable HTML record is a workable artifact; a judge testing PDF export specifically will still find it unavailable | **SHOULD HAVE** (the real PDF), but correctly classified BLOCKED, not something more code can fix from here |
+| LLM-fluent synthesis | Most COTS platforms sit an LLM over retrieved evidence for fluency; Veritas's own architecture claims this (QuickML/GLM-4.7-Flash) | Confirmed still unreachable this pass (`QUICKML_ENDPOINT_KEY` unset, checked directly) — every answer is the deterministic extractive path, correctly reported as such | Fluency only, not truthfulness (§1.2's own framing) — every live answer remains grounded and cited | Low for trust, medium for "feels like a chatbot" polish | **SHOULD HAVE**, BLOCKED on a credential this environment cannot obtain |
+| Scheduled integrity verification actually firing unattended | CJIS: mandatory logging + periodic independent audit, not merely present in code | `veritas_refresh` now has a confirmed real unattended success; `veritas_audit_verify` did not until this pass's fix (BUG-027) — its *next* unattended fire is still unobserved | Was silently non-functional in exactly the way v12's own "FIXED, verified live" claim said it wasn't — found only by re-checking rather than trusting the changelog | High — this is the tamper-evidence claim's own enforcement mechanism | **MUST HAVE**, now fixed; genuinely closed only once the next scheduled fire is observed to succeed |
+| Fairness/bias auditing | NIST AI RMF, EU AI Act Art. 5(1)(d): geographic + demographic subgroup audits for predictive-policing-adjacent tools | Aequitas exists, runs against real Census-linked geography, but is a standalone CLI script (`fairness_run_audit.py`), not wired to any route or scheduled | By design, not a defect — `serving.py`'s own docstring documents this as "out-of-band, pre-demo" | Low for live operation, real for governance-panel credibility if asked "does this run in production" | **SHOULD HAVE** wired to a periodic job eventually; **DO NOT BUILD** as a live-blocking gate on every answer (that would slow every turn for a check that belongs at the model-refresh cadence, not the query cadence) |
+| Real-time ingestion (CCTNS/Kafka) | Modern platforms increasingly integrate live feeds | Described only (`CLAUDE.md` Appendix A) | N/A at this dataset scale | None at competition scale | **DO NOT BUILD** — explicitly out of scope, correctly so |
+| A from-scratch India-specific CJIS-equivalent certification | N/A — no such standard was located for Indian state police in this research | Not attempted; the structural analogy (§1.1 stage 13) is stated, not a compliance claim | N/A | None | **DO NOT BUILD** |
+
+### This pass's verdict
+No MUST HAVE item requires new architecture. BUG-026 (identity display) and the confirmed-fixed
+BUG-027 (Cron reliability) are the two items this pass's own live evidence adds to the baseline
+picture; both are small, and one is already closed. The two SHOULD HAVE items (real PDF, LLM
+fluency) are both credential-blocked, not code-blocked — the honest, correct state for both is
+BLOCKED with a truthful fallback, which is what's shipped.
