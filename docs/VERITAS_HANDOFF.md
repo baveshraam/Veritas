@@ -72,8 +72,9 @@ this matrix does NOT yet cover" section before deciding what to do next.
   (`INVALID_URL_PATTERN`) without a documented endpoint shape to retry against.
 - Voice pipeline (ASR/TTS) — no audio hardware in any session that has worked on this
   repo. Environmental constraint, not a code gap.
-- Map (MapLibre) as a rendered geographic tool, and the viz pane switcher (`UI-23`) —
-  API-level data is verified; the actual render was not screenshotted this pass.
+- Map pan/drag interaction specifically (the render itself, the pane switcher, and
+  hotspot clustering are now all screenshotted and VERIFIED this pass — see
+  `docs/QA_FUNCTIONALITY_MATRIX.md` UI-23/UI-24).
 - Cron's *next* unattended fire for `veritas_audit_verify` (up to 12h out) — the fix is
   deployed and unit-tested, but only a real scheduled fire proves success_count moves.
 
