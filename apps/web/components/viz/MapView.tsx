@@ -148,11 +148,14 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
         });
         m.addLayer({
           id: "hot-fill", type: "fill", source: "hotspots",
-          paint: { "fill-color": ["get", "color"], "fill-opacity": 0.26 },
+          // 0.26 read as near-invisible against the near-black basemap once individual
+          // case dots (drawn on top, see below) sat inside the same polygon — the
+          // aggregate region and the exact points inside it became indistinguishable.
+          paint: { "fill-color": ["get", "color"], "fill-opacity": 0.4 },
         });
         m.addLayer({
           id: "hot-line", type: "line", source: "hotspots",
-          paint: { "line-color": ["get", "color"], "line-width": 1.6, "line-opacity": 0.85 },
+          paint: { "line-color": ["get", "color"], "line-width": 2, "line-opacity": 0.95 },
         });
       }
 
@@ -189,14 +192,34 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
           (acc, c) => acc.extend(c as [number, number]),
           new maplibregl.LngLatBounds(all[0] as any, all[0] as any),
         );
-        m.fitBounds(b, { padding: 70, duration: 900, maxZoom: 11 });
+        // Capped well short of MapLibre's old 11: a tight cluster (a handful of FIRs
+        // in one taluk) used to fit-zoom in so far that every neighbouring district
+        // dot and label fell outside the viewport, leaving a single label floating in
+        // an unlabeled dark field with no sense of where in Karnataka it was. 9 keeps
+        // a ~150-250km window around any result — several neighbouring districts stay
+        // in frame no matter how tight the underlying points are.
+        m.fitBounds(b, { padding: 70, duration: 900, maxZoom: 9 });
       }
     };
 
     m.isStyleLoaded() ? draw() : m.once("load", draw);
   }, [data]);
 
-  return <div ref={ref} style={{ height: "100%", width: "100%", borderRadius: 14 }} />;
+  return (
+    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+      <div ref={ref} style={{ height: "100%", width: "100%", borderRadius: 14 }} />
+      <div className="map-legend">
+        <div className="map-legend-row">
+          <span className="map-legend-dot" />
+          <span>Individual case (FIR location)</span>
+        </div>
+        <div className="map-legend-row">
+          <span className="map-legend-ramp" />
+          <span>Hotspot density — low to high</span>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /** GeoJSON polygons must be explicitly closed; a convex hull ring is not. */
