@@ -152,7 +152,23 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
             focus.active_person = state.active_entities.active_person
             resolved_note = "resolved pronoun against the session's active person"
         else:
-            resolved_note = "pronoun used with no active person in session"
+            # CASE_PEOPLE deliberately leaves active_person unset when a case has
+            # several accused (naming one would be the same unlicensed guess the
+            # ambiguous-name check above refuses to make) — but it DOES name every
+            # candidate in that turn's own citations. A pronoun follow-up ("does he
+            # have priors?") used to fall straight to "no_subject" and throw those
+            # names away, forcing the officer to retype one from scratch even though
+            # the system had just listed them. This reuses the same ask-don't-guess
+            # clarification path the tied-name search above already uses, sourced
+            # from the previous turn instead of a fresh search.
+            candidates = _recent_person_candidates(state.session_id)
+            if len(candidates) >= 2:
+                state.refusal_reason = "ambiguous_person"
+                state.ambiguous_candidates = candidates[:4]
+                resolved_note = (f"pronoun could mean any of {len(candidates)} people "
+                                  "named last turn; asking rather than guessing")
+            else:
+                resolved_note = "pronoun used with no active person in session"
 
     state.active_entities = focus
     state.decomposed_subqueries = [query]
@@ -634,6 +650,27 @@ def _last_turn(session_id: str):
     return history[-1] if history else None
 
 
+def _recent_person_candidates(session_id: str) -> list[str]:
+    """Distinct person names the previous turn's own citations named — e.g. CASE_PEOPLE
+    listing several accused without auto-resolving one to active_person. Lets a pronoun
+    follow-up ask which one instead of refusing with no names to offer. Coupled to the
+    exact CASE_PEOPLE content template ("{name} is accused on this case...", `accused:`
+    evidence_id prefix) the same way `_fir_ids_from_turn` is coupled to the `fir:` one."""
+    prior = _last_turn(session_id)
+    if not prior:
+        return []
+    names, seen = [], set()
+    for c in prior.citations:
+        eid = c.get("evidence_id") or ""
+        if not eid.startswith("accused:"):
+            continue
+        name = (c.get("label") or "").split(" is accused on this case")[0].strip()
+        if name and name not in seen:
+            seen.add(name)
+            names.append(name)
+    return names
+
+
 def _fir_ids_from_turn(prior) -> list[str]:
     """The CaseMasterIDs cited by a stored turn — every citation whose evidence_id
     follows the `fir:{id}` convention every FIR-producing branch in this module
@@ -653,14 +690,14 @@ def _handle_case_locations(state: InvestigationState, t0: float) -> None:
     prior = _last_turn(state.session_id)
     fir_ids = _fir_ids_from_turn(prior) if prior else []
     if not fir_ids:
-        state.refusal_reason = "nothing_prior"
+        state.refusal_reason = "nothing_prior_locations"
         _trace(state, "Orchestrator", "No previous case list to locate geographically", t0)
         return
 
     role, ps = state.officer_role, _officer_ps(state.officer_id)
     rows = sql_agent.filter_viewable(sql_agent.cases_by_ids(fir_ids), role, ps)
     if not rows:
-        state.refusal_reason = "nothing_prior"
+        state.refusal_reason = "nothing_prior_locations"
         _trace(state, "Orchestrator",
                "The previously cited cases are no longer within policy scope", t0)
         return

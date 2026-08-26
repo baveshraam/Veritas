@@ -194,6 +194,16 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "There is nothing earlier in this session to explain — this is the first "
         "answer, so there is no prior evidence or reasoning to point to yet."
     ),
+    # Distinct from "nothing_prior" above: CASE_LOCATIONS can fail on turn 7 just as
+    # easily as turn 1 (the immediately preceding turn simply didn't cite any FIRs —
+    # a refusal, a meta-answer, a capability question). Reusing "this is the first
+    # answer" there was a false statement about the session on every turn but the
+    # actual first one.
+    "nothing_prior_locations": (
+        "The previous answer named no cases to map — ask a question that returns "
+        "case records first (an FIR lookup, a crime search, similar cases), then ask "
+        "where they're concentrated."
+    ),
     "ambiguous_person": (
         "More than one person in the records matches that name equally well, and I "
         "will not guess which one you mean — please say more (a case, a district, or "

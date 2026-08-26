@@ -1375,7 +1375,7 @@ def test_case_locations_refuses_when_nothing_prior_named_a_case():
     finally:
         orch._last_turn = saved
 
-    assert state.refusal_reason == "nothing_prior"
+    assert state.refusal_reason == "nothing_prior_locations"
 
 
 # --- Ambiguous names: ask, don't guess ----------------------------------------
@@ -1440,6 +1440,61 @@ def test_the_ambiguous_person_answer_names_the_candidates():
 
     assert "Ramesh Gowda" in state.final_answer and "Ramesh Kumar" in state.final_answer
     assert state.citations == []
+
+
+def test_a_bare_pronoun_after_case_people_asks_which_of_the_named_candidates():
+    """CASE_PEOPLE lists every accused on a case but deliberately leaves active_person
+    unset when there's more than one (naming one would be a guess). A pronoun follow-up
+    ("does he have priors?") used to fall to a bare "no_subject" refusal that discarded
+    the names the previous turn had just listed. Found live 2026-08-26: asking Usha
+    Naika/Soom Nadkarni's case "Does he have priors?" refused with no names at all, even
+    though both were on screen one turn earlier. It must now ask which of THOSE people,
+    using the same ask-don't-guess path a tied name search already uses."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does he have priors?")
+
+    prior = _prior_turn(citations=[
+        {"index": 1, "evidence_id": "accused:41",
+         "label": "Usha Naika is accused on this case (network community 6)."},
+        {"index": 2, "evidence_id": "accused:877",
+         "label": "Soom Nadkarni is accused on this case (network community 6)."},
+    ])
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: prior
+    try:
+        orch.node_orchestrate(state)
+    finally:
+        orch._last_turn = saved
+
+    assert state.active_entities.active_person is None
+    assert state.refusal_reason == "ambiguous_person"
+    assert set(state.ambiguous_candidates) == {"Usha Naika", "Soom Nadkarni"}
+
+
+def test_a_bare_pronoun_with_no_recent_case_people_still_refuses_plainly():
+    """The fix must not manufacture candidates that were never named — a prior turn
+    with no `accused:` citations (e.g. a FIR lookup) falls back to the original,
+    honest "no active person" note exactly as before."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Does he have priors?")
+
+    prior = _prior_turn(citations=[{"index": 1, "evidence_id": "fir:9", "label": "FIR 9 ..."}])
+    saved = orch._last_turn
+    orch._last_turn = lambda sid: prior
+    try:
+        orch.node_orchestrate(state)
+    finally:
+        orch._last_turn = saved
+
+    assert state.active_entities.active_person is None
+    assert state.refusal_reason == ""
+    assert state.ambiguous_candidates == []
 
 
 # --- Focus persists what retrieval resolves, not only what orchestrate resolved ----
