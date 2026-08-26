@@ -204,7 +204,7 @@ updated), `docs/screenshots/2026-08-26-conversational-architecture/` (new).
 
 **Not done, by the mega-prompt's own stop condition**: no differentiator features, no
 North-Star P0/P1 gap-closing beyond what this pass's own live verification happened to
-surface. `docs/VERITAS_NORTH_STAR.md`'s prioritized gap list is untouched.
+surface. `docs/CAPABILITY_TARGET_AND_GAPS.md`'s prioritized gap list is untouched.
 
 ---
 
@@ -308,7 +308,7 @@ console rendering itself beyond the two map screenshots. A full UI judge-review
 click-through (every panel, every failure state, every export path) was not repeated
 in full this pass — the prior North Star hardening pass's own CDP verification of most
 UI rows stands, re-confirmed only where this pass's fixes actually touched them (the
-map). `docs/VERITAS_NORTH_STAR.md`'s Part 3 P0/P1 list remains untouched — narrative
+map). `docs/CAPABILITY_TARGET_AND_GAPS.md`'s Part 3 P0/P1 list remains untouched — narrative
 diversity and the LLM-fluency gap (still QuickML-blocked) are still the largest named
 items there.
 
@@ -465,7 +465,7 @@ root-caused. No code change for either; both fallbacks remain honest and correct
 **Test suite**: 354 → 361, all green.
 
 **Docs updated**: `docs/VERITAS_HANDOFF.md` (rewritten for this pass), this file,
-`docs/screenshots/2026-08-26-golden-19turn/` (new — 25 screenshots + `log.json` +
+`docs/screenshots/2026-08-26-full-investigation-walkthrough/` (new — 25 screenshots + `log.json` +
 README), `docs/QA_FUNCTIONALITY_MATRIX.md`, `docs/VERITAS_STATUS.html`.
 
 **Not done this pass**: independently observing `veritas_audit_verify`'s Cron job's next

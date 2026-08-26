@@ -26,7 +26,7 @@ North Star closure mega-prompt). Live, through the actual deployed console over 
 (Chrome `--headless=new --remote-debugging-port`), not curl: the full 19-turn script run
 twice (once pre-fix, which found 4 real bugs; once post-fix, all 19 turns + a Kannada
 follow-up + an IO cross-station authorization check all correct) — see
-`docs/screenshots/2026-08-26-golden-19turn/`.
+`docs/screenshots/2026-08-26-full-investigation-walkthrough/`.
 
 ## Current North-Star status
 Every MUST-HAVE item in Part 4's industry-baseline table is now closed or was already
@@ -51,7 +51,7 @@ observation).
 
 **Four real conversational bugs, found by the golden conversation's FIRST run (not
 committed), fixed, redeployed, and re-verified by a SECOND full run (committed) — see
-`docs/screenshots/2026-08-26-golden-19turn/README.md` for the full narrative**:
+`docs/screenshots/2026-08-26-full-investigation-walkthrough/README.md` for the full narrative**:
 
 1. **`CASE_PEOPLE` never cleared a stale `active_person`.** The prior code only set
    `active_person` when exactly one accused existed; with several, it did nothing —
@@ -192,7 +192,7 @@ number is wanted later.
    Found and fixed 4 real conversational bugs (above), redeployed, and re-ran the entire
    script to confirm all 19 turns + a Kannada follow-up + an IO cross-station
    authorization check are correct. Screenshots + machine-readable log committed at
-   `docs/screenshots/2026-08-26-golden-19turn/`.
+   `docs/screenshots/2026-08-26-full-investigation-walkthrough/`.
 2. **BUG-026 fixed** — Copilot leads/`NEXT_STEPS` now show the as-filed name alongside
    the canonical one when entity resolution reconciled a romanisation variant, masked
    identically to every other name on the surface.
@@ -239,7 +239,7 @@ is stable post-redeploy (`/health` clean); screenshots are committed and were vi
 judged before writing this file, not merely captured.
 
 ## Last verification evidence
-`docs/screenshots/2026-08-26-golden-19turn/` — 25 screenshots (19 golden turns + sign-in
+`docs/screenshots/2026-08-26-full-investigation-walkthrough/` — 25 screenshots (19 golden turns + sign-in
 + a citation-click attempt + Kannada + the IO authorization check) + `log.json` (every
 turn's query/answer/citation-count/refusal-flag/active-pane, machine-readable) + a
 README narrating what each screenshot proves and the four bugs found along the way.

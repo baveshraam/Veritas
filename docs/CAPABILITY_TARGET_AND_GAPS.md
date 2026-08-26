@@ -1,4 +1,4 @@
-# Veritas — Product & System North Star
+# Veritas — Capability Target & Gap Analysis
 
 **Purpose.** This document defines what Veritas should ultimately be — the target state of an
 industry-grade conversational investigation platform — and then systematically compares the

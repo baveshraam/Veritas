@@ -1,7 +1,7 @@
 # Veritas — Implementation Strategy: North Star → Live System
 
 **Purpose.** A minimum sequence of vertical investigation slices that takes the current system
-to `docs/VERITAS_NORTH_STAR.md` without accumulating more disconnected feature work. No code
+to `docs/CAPABILITY_TARGET_AND_GAPS.md` without accumulating more disconnected feature work. No code
 changes are prescribed here; no new feature ideas are introduced beyond what the North Star
 already scoped. This is the sequencing decision, not the implementation.
 
@@ -33,7 +33,7 @@ The reasoning, grounded in what the data-generation audit actually found:
 - The one capability that is genuinely, structurally blocked by the narrative collapse is
   cross-case similarity (`fir_narrative` search and the Copilot's "similar past cases") — the
   North Star names this the largest substantive gap for exactly this reason
-  (`docs/VERITAS_NORTH_STAR.md` Part 2, stage 9). Building a UI, a conversational answer path, or
+  (`docs/CAPABILITY_TARGET_AND_GAPS.md` Part 2, stage 9). Building a UI, a conversational answer path, or
   an acceptance test around that capability before the underlying signal exists would mean
   shipping a vertical slice whose own DATA step fails — precisely the "API/UI works
   independently but the capability isn't real" failure mode this strategy exists to prevent.

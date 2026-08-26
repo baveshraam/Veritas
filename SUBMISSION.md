@@ -1,7 +1,8 @@
 # Submission — KSP Datathon 2026, Challenge 01
 
-Everything the form asks for, ready to paste. Deck: `Veritas_KSP_Datathon_2026_Prototype_Deck.pptx`
-(PDF export beside it, 440 KB, under the 5 MB limit).
+Everything the form asks for, ready to paste. The slide deck itself is not kept in this
+repository (submission collateral, not part of the product) — build/re-export it separately
+before uploading to the form.
 
 ## 1. Challenge
 Intelligent Conversational AI for KSP Crime Database

@@ -221,7 +221,7 @@ new `_lead_name(officer_role, canonical, as_filed)` helper, which renders `"Cano
 (never either raw name) for a masked role. Live-verified against Usha Naika's own FIR
 100050504202300018 in the golden-conversation pass's `NEXT_STEPS`/`BRIEFING` turns —
 `"Usha Naika (filed as \"Usha Neik D/o Srinivas\" on this FIR)"` renders correctly
-throughout (`docs/screenshots/2026-08-26-golden-19turn/t14-next-steps.png`,
+throughout (`docs/screenshots/2026-08-26-full-investigation-walkthrough/t14-next-steps.png`,
 `t15-briefing.png`). 2 new unit tests (the reconciliation, and the masking guard).
 
 ### Symptoms
@@ -272,7 +272,7 @@ surface as BUG-004/BUG-011 and deserves its own regression test when picked up.
   from ever firing; `EXPLAIN_REASONING`'s regex missing natural verb phrasing; `NEXT_STEPS`
   missing a passive-voice keyword; a decided refusal still running generic search and
   padding the Evidence rail — see RAG-35, `docs/VERITAS_HANDOFF.md`, and
-  `docs/screenshots/2026-08-26-golden-19turn/`). All 19 turns plus a Kannada follow-up
+  `docs/screenshots/2026-08-26-full-investigation-walkthrough/`). All 19 turns plus a Kannada follow-up
   and an IO cross-station authorization check are now confirmed correct in a second,
   post-fix live run. QuickML and PDF export were both re-checked directly against the
   live AppSail configuration and a real `/export/pdf` call (not re-guessed) — both still
