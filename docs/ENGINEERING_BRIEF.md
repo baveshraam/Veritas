@@ -555,6 +555,20 @@ Not keyword tests. Representative of what an officer would actually say, and wha
     stemming was considered and rejected this pass (would spuriously score
     `PERSON_HISTORY` on "high priority case"); no deterministic fix exists that
     isn't the keyword-patch this document argues against.
+  - **A second, reverse-direction district bug found live during this pass's own
+    verification, and fixed the same way.** The kn→en fix above only protects a
+    district name in the officer's *query*. The synthesized *answer* — always
+    canonical English, e.g. "Mandya" — is separately translated en→kn for the
+    reply, and NLLB rendered its own transliteration ("ಮಂಡಯಾ") instead of the
+    canonical spelling ("ಮಂಡ್ಯ") an officer's own query would use. Facts were
+    correct (73 real Mandya cases, the right FIR); only the district's spelling in
+    the Kannada prose was off. New `data.districts.english_to_kannada_district`
+    (the reverse map) feeds the same `_protect_spans` mechanism for `src=="en"`,
+    word-boundary matched against canonical district names. Caught by actually
+    running the adversarial battery live (§14/§16 below) rather than only unit
+    tests — a reminder that "verified" for a translation fix means driving the
+    real model in both directions it's actually used, not just the one the
+    original bug report described.
   - **§4.2 (dual-text entity extraction) — largely subsumed by the §10 fix,
     not separately built.** The plan called for downstream code to also read the
     raw pre-translation Kannada text so closed-format entities (district/FIR/IPC/
@@ -577,12 +591,12 @@ Not keyword tests. Representative of what an officer would actually say, and wha
     live behavior" a checkable, automated gate — re-runs the exact baseline defect
     reproduction plus the full adversarial battery against a live base URL and
     exits non-zero on any regression, rather than a manually-repeated curl.
-  - **Test suite**: 487 collected (32 new — 20 in `test_reference_resolution.py`
-    covering §5.2/§5.3/multi-step, 3 in `test_nlp.py` covering the district fix,
-    plus a moved-function test update), 483 passed, 2 skipped (pre-existing), 2
-    pre-existing failures confirmed unrelated (identical on `main` before this
-    pass — `apps/api/tests/test_acceptance.py`'s two acceptance tests, not
-    investigated further as out of this milestone's scope).
+  - **Test suite**: 488 collected (33 new — 20 in `test_reference_resolution.py`
+    covering §5.2/§5.3/multi-step, 4 in `test_nlp.py` covering both directions of
+    the district fix, plus a moved-function test update), 484 passed, 2 skipped
+    (pre-existing), 2 pre-existing failures confirmed unrelated (identical on
+    `main` before this pass — `apps/api/tests/test_acceptance.py`'s two acceptance
+    tests, not investigated further as out of this milestone's scope).
 - **2026-08-28 — semantic interpreter milestone.** §5.1 (Understanding bottleneck)
   now addressed: replaced 30-flat-intent classifier with structured `SemanticRequest`
   decomposition. New `rag_agent/semantic_interpreter.py` module (`interpret()` +

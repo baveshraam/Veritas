@@ -93,13 +93,16 @@ def _protect_spans(text: str, src: str = "en") -> tuple[str, dict[str, str]]:
     through untouched, and return the mapping needed to restore them.
 
     For FIR numbers/IPC codes/plates the restore value is the ORIGINAL text —
-    verbatim fidelity is the whole point. For a Kannada district name (src=="kn"
-    only) it is instead the CORRECT ENGLISH NAME from a closed, 31-entry gazetteer
-    (data.districts.kannada_name_map) — a lookup substitution, not a translation.
-    This is what makes the "ಮಂಡ್ಯ (Mandya) -> Mandi" class of mistranslation
-    structurally impossible rather than merely usually-correct: the model is never
-    asked to translate the district name at all. See ENGINEERING_BRIEF.md §10 for
-    why this bug has no fix at the model-output level.
+    verbatim fidelity is the whole point. For a district name it is instead a
+    lookup substitution, not a translation, in whichever direction is being
+    translated: src=="kn" restores the CORRECT ENGLISH NAME
+    (data.districts.kannada_name_map, closing "ಮಂಡ್ಯ (Mandya) -> Mandi" — see
+    ENGINEERING_BRIEF.md §10); src=="en" restores the CANONICAL KANNADA SPELLING
+    (data.districts.english_to_kannada_district, closing the reverse-direction
+    sibling found live this pass: a synthesized answer's "Mandya" translating to
+    NLLB's own "ಮಂಡಯಾ" instead of the canonical "ಮಂಡ್ಯ" an officer's own query
+    would use). Either way the model is never asked to translate the district name
+    at all.
     """
     mapping: dict[str, str] = {}
 
@@ -127,6 +130,23 @@ def _protect_spans(text: str, src: str = "en") -> tuple[str, dict[str, str]]:
             # LOCATION gazetteer match already follows.
             pattern = "|".join(re.escape(k) for k in sorted(kn_map, key=len, reverse=True))
             text = re.sub(pattern, lambda m: _placeholder(kn_map[m.group(0)]), text)
+    elif src == "en":
+        # The reverse-direction sibling, found live this pass: a SYNTHESIZED
+        # ANSWER (always in canonical English district names, e.g. "Mandya") gets
+        # translated en->kn for the reply, and NLLB renders its own transliteration
+        # ("ಮಂಡಯಾ") rather than the canonical spelling ("ಮಂಡ್ಯ") the officer's own
+        # query would use — correct facts, non-canonical spelling. Same lookup-
+        # substitution technique, opposite direction.
+        from data.districts import english_to_kannada_district
+        en_map = english_to_kannada_district()
+        if en_map:
+            # No case-insensitive matching: synthesis always inserts the canonical,
+            # exact-case district name verbatim (it comes straight from the seed
+            # data's own column), so exact-case matching is both sufficient and
+            # avoids a case-folded match no longer being a valid dict key.
+            pattern = "|".join(rf"\b{re.escape(k)}\b"
+                               for k in sorted(en_map, key=len, reverse=True))
+            text = re.sub(pattern, lambda m: _placeholder(en_map[m.group(0)]), text)
 
     return text, mapping
 

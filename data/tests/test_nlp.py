@@ -220,12 +220,41 @@ def test_kannada_district_names_are_substituted_not_translated(monkeypatch):
     assert 'Mandya' in out
 
 
-def test_district_substitution_only_applies_when_translating_from_kannada():
-    """src='en' (or any non-kn source) must not run the district gazetteer pass —
-    there is nothing to protect an English district name FROM."""
-    protected, mapping = _protect_spans('Mandya district, en route', src='en')
+def test_district_substitution_applies_in_both_translation_directions():
+    """src='kn' protects a Kannada district spelling; src='en' protects the
+    canonical English name (the reverse-direction fix, added this pass after being
+    found live) — both districts protected, neither left to the model. A source
+    that is neither (the default, 'en', used elsewhere for non-language text) with
+    no known district present protects nothing, same as before this pass."""
+    _, kn_mapping = _protect_spans('ಮಂಡ್ಯ ಜಿಲ್ಲೆ', src='kn')
+    assert kn_mapping == {'90001': 'Mandya'}
+
+    _, en_mapping = _protect_spans('Mandya district', src='en')
+    assert en_mapping == {'90001': 'ಮಂಡ್ಯ'}
+
+    protected, mapping = _protect_spans('no district named here', src='en')
     assert mapping == {}
-    assert protected == 'Mandya district, en route'
+    assert protected == 'no district named here'
+
+
+def test_english_district_name_restores_the_canonical_kannada_spelling(monkeypatch):
+    """The reverse-direction sibling of the kn->en district fix, found live testing
+    this pass: a synthesized answer's "Mandya" translated en->kn came back as
+    NLLB's own "ಮಂಡಯಾ" rather than the canonical "ಮಂಡ್ಯ". Same lookup-substitution
+    technique, opposite direction -- the hostile backend proves the English name
+    never reaches the model at all."""
+    import importlib
+    translate_mod = importlib.import_module('data.nlp.translate')
+
+    class _HostileBackend:
+        def translate(self, text, src_flores, tgt_flores):
+            return text.replace('Mandya', 'garbled') if 'Mandya' in text else text
+
+    monkeypatch.setattr(translate_mod, '_load', lambda: _HostileBackend())
+    out = translate('73 cases in Mandya are recorded.', 'en', 'kn')
+
+    assert 'Mandya' not in out and 'garbled' not in out
+    assert 'ಮಂಡ್ಯ' in out
 
 
 def test_district_and_identifier_protection_compose_without_collision():

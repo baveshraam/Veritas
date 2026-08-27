@@ -39,6 +39,17 @@ def all_districts() -> tuple[District, ...]:
 
 
 @lru_cache(maxsize=1)
+def english_to_kannada_district() -> dict[str, str]:
+    """Canonical English district name -> primary Kannada spelling — the reverse of
+    kannada_name_map(). Used to protect a district name when a SYNTHESIZED ANSWER is
+    translated en->kn for the reply: without this, NLLB translates the English name
+    "Mandya" into its own transliteration ("ಮಂಡಯಾ") rather than the canonical
+    spelling ("ಮಂಡ್ಯ") the officer's own query would have used — found live testing
+    this pass, the reverse-direction sibling of the kn->en bug §10 already covers."""
+    return {d.name: d.kannada_names[0] for d in all_districts() if d.kannada_names}
+
+
+@lru_cache(maxsize=1)
 def kannada_name_map() -> dict[str, str]:
     """Kannada-script district spelling -> canonical English name.
 

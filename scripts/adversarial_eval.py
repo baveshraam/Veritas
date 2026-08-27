@@ -34,6 +34,15 @@ from typing import Callable, Optional
 sys.path.insert(0, "data")
 sys.path.insert(0, "packages/rag_agent")
 
+# Kannada answers/queries are genuinely part of this battery, not an edge case --
+# a console codepage (cp1252 on Windows) crashing on legitimate Kannada content in
+# a printed assertion message is a bug in this script, not a reason to avoid the
+# content. Force UTF-8 with a safe fallback rather than losing the whole run to an
+# UnicodeEncodeError on the one line that happens to print Kannada.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 @dataclass
 class TurnResult:
@@ -164,7 +173,14 @@ SCENARIOS = [
     Scenario(
         name="Kannada district name survives translation correctly (structural fix)",
         turns=["ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?"],
-        checks=[lambda r: (_has_citations(r), _contains("mandya")(r))],
+        # The answer replies in the query's own language (Kannada), so the district
+        # renders as "ಮಂಡ್ಯ", not the English "Mandya" -- checking for the ENGLISH
+        # word here would be testing the wrong thing. The behavioral proof this
+        # scenario exists for is "resolved to a real district and answered, rather
+        # than the pre-fix 'Mandi'-shaped refusal" -- citations + no refusal is the
+        # correct, language-agnostic assertion; the Kannada spelling in the answer
+        # is checked too, as the strongest available evidence it's the RIGHT district.
+        checks=[lambda r: (_has_citations(r), _not_refused(r), _contains("ಮಂಡ್ಯ")(r))],
     ),
     Scenario(
         name="capability question is answered about the tool, not searched as records",
