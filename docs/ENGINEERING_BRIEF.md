@@ -10,10 +10,11 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `86f1665`, live-deployed at AppSail
-deployment `52852000000366005`. Test count, file:line references and the mixed-script
-translation findings in §10 were confirmed directly against the running code on
-2026-08-27, not copied from an earlier document.
+Last verified against the repository at commit `610f0f7`, live-deployed at AppSail
+deployment `52852000000361014`. Test count, file:line references and the QuickML/
+mixed-script translation findings in §10/§12 were confirmed directly against the
+running code and the real installed SDK on 2026-08-27, not copied from an earlier
+document.
 
 ---
 
@@ -601,6 +602,25 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   - **Test suite**: 492 collected (5 new — the NOT_INFERABLE/vocabulary/bare-
     constraint-change/explicit-name-default regressions), 490 passed, 2
     pre-existing failures unrelated (unchanged from prior passes).
+  - **Deployed and live-verified.** Baseline before any change: git `bbb8785`,
+    deployment `52852000000366005`. Relayed (commit `610f0f7` → `.github/relay-
+    upload.url` → `relay-deploy.yml` → local `appsail/upsert`) to deployment
+    `52852000000361014` — confirmed changed, not merely "pipeline green."
+    `scripts/verify_live_deployment.py` (the automated gate, not a manual
+    curl): `/health` now honestly reports
+    `"deterministic (QuickML not configured — no published endpoint key)"`
+    instead of a stale "configured" string; the baseline defect reproduction
+    passes; **all 36/36 adversarial scenarios pass live**, including all 4
+    multilingual ones with the real deployed NLLB backend (not mocked).
+    Latency, measured per turn, not asserted: p50 1.03s, p95 12.74s, max
+    13.87s — the slow tail is entirely the Kannada turns' real translation
+    cost (§10/§12 already named this as CPU-bound generation time, not a
+    regression). **Console re-verified via real CDP** (apps/web untouched this
+    pass, so this confirms the backend changes didn't break the UI): "Who are
+    the associates of Usha Naika?" → "Does she go by any other name?" —
+    correctly resolved the pronoun, routed through the newly-fixed `ALIAS_CHECK`
+    vocabulary, and rendered a real linked-identity citation (confidence 1.00)
+    with the network view and evidence rail synchronized, exactly as designed.
 - **2026-08-27 — compositional semantic layer milestone.** The next slice of the §5.1
   migration, per its own "future phases" note: §5.2 (generic reference resolution),
   §5.3 (result-set awareness), a new bounded deterministic multi-step composition
