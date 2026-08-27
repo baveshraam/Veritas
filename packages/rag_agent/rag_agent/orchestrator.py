@@ -19,6 +19,7 @@ from policy import mask_person_name
 
 from . import board as board_agent
 from . import intents
+from . import semantic_interpreter
 from . import timeline as timeline_agent
 from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
@@ -118,87 +119,61 @@ def node_translate_in(state: InvestigationState) -> InvestigationState:
 
 
 def node_orchestrate(state: InvestigationState) -> InvestigationState:
+    """Interpret the officer's query as a structured semantic request.
+
+    Routes through the new semantic_interpreter (which tries LLM path, falls back to
+    deterministic intents.classify()), then unpacks the result into InvestigationState
+    fields so no downstream nodes need to change.
+    """
     t0 = time.perf_counter()
     query = state.original_query or ""
 
-    focus, entities = intents.resolve_focus(query, state.active_entities)
-    state.intent = intents.classify(query)
+    # Get the prior turn if it exists (for context on follow-ups like "the second one")
+    prior_turn = _last_turn(state.session_id) if state.session_id else None
 
-    named = intents.named_person(entities)
-    resolved_note = ""
-    if named:
-        hits = sql_agent.person_by_name(named)
-        if hits and len(hits) > 1 and hits[0].get("record_count", 0) == hits[1].get("record_count", 0):
-            # Genuinely ambiguous: the top two matches are tied on the only signal
-            # used to rank them (record_count), so there is no principled leader to
-            # pick. Guessing would hand the officer someone else's record with
-            # nothing to indicate a substitution happened — the same failure mode
-            # the "no record for this name" branch below already refuses to risk.
-            # Asking is the honest answer; the candidates are named so it costs the
-            # officer one turn, not a search.
-            focus.active_person = None
-            state.refusal_reason = "ambiguous_person"
-            state.ambiguous_candidates = [h["name_en"] for h in hits[:4]]
-            resolved_note = f"'{named}' matches {len(hits)} people with no clear leader"
-        elif hits:
-            # hits are ranked by record count; ambiguity is surfaced, not hidden —
-            # several people really do share a name in this database.
-            focus.active_person = str(hits[0]["person_id"])
-            resolved_note = (f"resolved '{named}' to {hits[0]['name_en']} "
-                             f"({hits[0].get('record_count', 0)} record(s))")
-            if len(hits) > 1:
-                resolved_note += f"; {len(hits) - 1} other person(s) share this name"
-        else:
-            # The turn names someone we hold no record for. The focus MUST be cleared,
-            # never inherited: leaving the previous turn's subject in place makes the
-            # engine answer about a different person entirely, and the officer is given
-            # someone else's record with nothing to indicate a substitution happened.
-            # Clearing it means retrieval finds nothing and the evaluator refuses —
-            # which is the correct answer to "tell me about a person we have no file on".
-            focus.active_person = None
-            state.refusal_reason = "person_not_on_file"
-            resolved_note = f"no person matching '{named}' exists in the records"
-    elif intents.has_unresolved_reference(query, entities):
-        if state.active_entities.active_person:
-            focus.active_person = state.active_entities.active_person
-            resolved_note = "resolved pronoun against the session's active person"
-        else:
-            # CASE_PEOPLE deliberately leaves active_person unset when a case has
-            # several accused (naming one would be the same unlicensed guess the
-            # ambiguous-name check above refuses to make) — but it DOES name every
-            # candidate in that turn's own citations. A pronoun follow-up ("does he
-            # have priors?") used to fall straight to "no_subject" and throw those
-            # names away, forcing the officer to retype one from scratch even though
-            # the system had just listed them. This reuses the same ask-don't-guess
-            # clarification path the tied-name search above already uses, sourced
-            # from the previous turn instead of a fresh search.
-            candidates = _recent_person_candidates(state.session_id)
-            # TIMELINE_CONNECTION's own pronoun ("both of them", "these two") names
-            # MULTIPLE people by design — 2 recent candidates is exactly its intended
-            # input, not the singular ambiguity this branch otherwise refuses on.
-            # Found live: "Show me events involving both of them" right after a
-            # 2-accused CASE_PEOPLE turn fell to this generic refusal before
-            # _handle_timeline_connection (which resolves the identical 2 candidates
-            # itself) ever ran.
-            if len(candidates) >= 2 and state.intent != "TIMELINE_CONNECTION":
-                state.refusal_reason = "ambiguous_person"
-                state.ambiguous_candidates = candidates[:4]
-                resolved_note = (f"pronoun could mean any of {len(candidates)} people "
-                                  "named last turn; asking rather than guessing")
-            else:
-                resolved_note = "pronoun used with no active person in session"
+    # New semantic interpreter produces structured request
+    sem_req = semantic_interpreter.interpret(
+        query=query,
+        language=state.language,
+        focus=state.active_entities,
+        prior_turn=prior_turn,
+    )
 
-    state.active_entities = focus
+    # Map to current state contract (no downstream changes needed)
+    state.intent = sem_req.operation
     state.decomposed_subqueries = [query]
+
+    # Resolve subject if present
+    resolved_note = ""
+    if sem_req.subject_id:
+        if sem_req.subject_type == "person":
+            state.active_entities.active_person = sem_req.subject_id
+            resolved_note = f"resolved '{sem_req.subject_text}' (pronoun)" if sem_req.reference_kind == "pronoun" else f"resolved '{sem_req.subject_text}'"
+        elif sem_req.subject_type == "case":
+            state.active_entities.active_fir = sem_req.subject_id
+        elif sem_req.subject_type == "location":
+            state.active_entities.active_location = sem_req.subject_text
+    elif sem_req.subject_text and sem_req.subject_type == "person":
+        # Subject was named but not found
+        state.active_entities.active_person = None
+        resolved_note = f"no person matching '{sem_req.subject_text}' exists in the records"
+
+    # Propagate any ambiguity/refusal from the interpreter
+    if sem_req.ambiguous_candidates:
+        state.refusal_reason = "ambiguous_person"
+        state.ambiguous_candidates = sem_req.ambiguous_candidates
+        resolved_note = f"'{sem_req.subject_text}' matches {len(sem_req.ambiguous_candidates)} people; asking rather than guessing"
+    elif sem_req.refusal_reason:
+        state.refusal_reason = sem_req.refusal_reason
 
     detail = f"Intent: {state.intent}"
     if resolved_note:
         detail += f"; {resolved_note}"
-    _trace(state, "Orchestrator", detail, t0)
+    _trace(state, "Orchestrator (semantic)", detail, t0, confidence=sem_req.confidence)
 
-    # persist the focus so the *next* turn can resolve against it
+    # Persist focus so the *next* turn can resolve against it
     try:
-        upsert_session_focus(state.session_id, state.officer_id, focus)
+        upsert_session_focus(state.session_id, state.officer_id, state.active_entities)
     except Exception:
         pass      # a session-store hiccup must not lose the answer we can still give
     return state
