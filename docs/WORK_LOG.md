@@ -551,3 +551,85 @@ re-verification and no new screenshots (no browser tooling available — see abo
 tied-name-search variant of RAG-32; voice pipeline, case-status filter chips, map
 pan/drag, AML positive-case verification, `dowhy` — all unchanged from prior passes,
 same constraints as documented there.
+
+---
+
+## 2026-08-27 (later, same day) — Final live judge pass: real browser tooling this time,
+five defects found by actually looking at the screen
+
+Unlike the immediately prior pass, real browser/CDP tooling was available and used:
+headless Chrome (`--headless=new --remote-debugging-port=9222`), driven over Node 22's
+global WebSocket, per `[[veritas-console-verification]]`. Every finding below was found
+by driving the real console and inspecting real screenshots — not the API alone.
+
+**Drove a ~25-turn live investigation through the actual UI** (open FIR → what happened
+→ who's involved → priors → why-those-cases → associates → what-supports → similar
+cases → geography → financial trail → what's-unusual → evidence-for → next-steps →
+briefing → switch case → follow-up → attempted positional return → explicit return →
+context-isolation check → ambiguous-pronoun clarification → five improvised natural
+follow-ups → Kannada), screenshotting key steps, then judged every screenshot the way a
+competition judge would. Found and fixed **five real, live defects**:
+
+1. **P0 — a refusal still shipped the evidence it had just rejected.**
+   `node_synthesize`'s general refusal branch (`requires_escalation`) cleared
+   `state.citations` but not `state.evidence_items`, unlike every other refusal branch
+   in the same function. Clean single-turn repro: *"Tell me about the flying saucer
+   incident on the moon"* → honest refusal in chat, **and** the Evidence rail
+   simultaneously showed "8 cited," listing 8 unrelated Raichur robbery FIRs at ~40%
+   similarity. Same failure class as BUG-006/RAG-35, a third recurrence. Fixed by
+   clearing both fields together, matching the other three branches.
+2. **`CASE_REFERENCE_UNSUPPORTED` missed any phrasing without a leading ordinal.**
+   "Go back to the case we started with" (no "first/previous/original") skipped the
+   refusal and fell to a real semantic search that passed CRAG, returning 5
+   confidently-cited, completely unrelated records — worse than a refusal, since
+   nothing signalled the mismatch. Regex broadened to cover trailing back-references
+   and bare demonstratives ("that case"), not just a leading ordinal.
+3. **Associate evidence text said `gang: Community 6`**, contradicting CLAUDE.md §4's
+   explicit "labelled honestly as what it is — never 'gang'" rule that
+   `copilot/brief.py` already follows. Reworded to "network community 6."
+4. **A genuine namesake collision read as a duplicate.** "Who are her associates?"
+   listed "Suma Nadkarni" twice, verbatim. Raw evidence `source_id`s confirmed two
+   different real `PersonUID`s (7334, 8395) sharing a `CanonicalName` — not a
+   duplicate-row bug. `_network_evidence` now disambiguates with `(person <id>)` only
+   when a real collision exists in that specific result list.
+5. **Two UI defects found from screenshots**: `NetworkView.tsx`'s 40%-of-max label
+   threshold (tuned for large graphs) left 3 of 4 nodes unlabelled on a small,
+   high-variance 4-accused graph — fixed with a node-count-aware threshold. The live
+   `.toast-stack` (anomaly alerts) was pinned to the same bottom-right corner as the
+   Evidence rail's citation cards, sometimes covering several of them — moved to anchor
+   under the topbar instead, reducing (not fully eliminating) the overlap.
+
+5 new regression tests against the affected code directly. **369 → 374 tests, all
+green.** Commits `15ff976` (fixes 1–3), `23291eb` (fix 4), `7d4e581` (fix 5).
+
+**Deployed twice** via the relay pipeline (API: `0988f04`→`52852000000321046`,
+`f310c4a`→`52852000000318080`; console: `catalyst deploy --only client`, after
+discovering the CLI shim isn't on this shell's `PATH` — see handoff). **Every fix
+re-verified live afterward**, through the real console: a clean single-turn repro for
+fix 1 (evidence rail now empty on refusal), the exact reproducing phrasing for fixes 2–4,
+fresh screenshots for fix 5 (all 4 network nodes labelled; toast-stack rect confirmed
+anchored under the header).
+
+**Also judged, found no defect**: the real MapLibre/OpenFreeMap basemap (real streets,
+labels, legend, scale, attribution — genuinely judge-ready), the financial Sankey view,
+the reasoning-trace panel, the Copilot overlay's timeline/leads/similar-cases, the
+EN/KN toggle, and the Kannada round-trip (3 citations, correct both directions).
+
+**Re-confirmed unchanged (not re-exercised, no code in these areas touched)**: RBAC,
+QuickML (still `QUICKML_ENDPOINT_KEY`-blocked), PDF export (still the honest HTML
+fallback), Cron (both jobs' prior unattended-success evidence stands).
+
+**Test suite**: 374 collected, all green.
+
+**Docs updated**: `docs/VERITAS_HANDOFF.md` (rewritten for this pass), this file,
+`docs/QA_FUNCTIONALITY_MATRIX.md`, `docs/VERITAS_STATUS.html` (stale-as-of banner
+extended).
+
+**Not done this pass, named rather than silently skipped**: the toast/evidence-rail
+overlap is reduced, not eliminated — a structurally different placement (dedicated
+alert surface) would close it fully; judged as scope creep for a decision-support
+side-channel in a pass that was finding and fixing core-trust defects. RBAC was not
+re-driven live through the console this specific pass (API-level check from the prior
+pass stands, unchanged code path). Voice pipeline, case-status filter chips, map
+pan/drag, AML positive-case verification, `dowhy`, BUG-026 (Copilot canonical/as-filed
+name) — all unchanged from prior passes, same constraints as documented there.
