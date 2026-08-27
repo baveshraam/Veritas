@@ -10,10 +10,9 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `fdadf30` plus the uncommitted change
-described in §16. Test count, file:line references and the mixed-script translation
-findings in §10 were confirmed directly against the running code on 2026-08-27, not
-copied from an earlier document.
+Last verified against the repository at commit `f21e24c`. Test count, file:line
+references and the mixed-script translation findings in §10 were confirmed directly
+against the running code on 2026-08-27, not copied from an earlier document.
 
 ---
 
