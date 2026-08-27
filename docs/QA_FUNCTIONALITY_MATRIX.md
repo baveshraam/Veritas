@@ -377,11 +377,19 @@ re-verified live against the redeployed system afterward:
 5. See UI-25 above (network-node labelling) and the toast/evidence-rail overlap note
    below.
 
-**A residual, smaller version of the toast/Evidence-rail overlap remains** — moving
+**A residual, smaller version of the toast/Evidence-rail overlap remained** — moving
 `.toast-stack` from the viewport's bottom-right corner to under the topbar closed the
 worst case (several citation cards obscured) but with 3 alerts active simultaneously it
-can still cover the panel's header/first card. Not chased further this pass; named as a
-candidate for a future pass rather than left silently unaddressed.
+could still cover the panel's header/first card.
+
+**CLOSED 2026-08-27 (Catalyst-blocker resolution + industry-gap pass)**: the overlap is
+now structurally impossible, not just reduced. `AlertToasts` moved out of the fixed
+overlay entirely and into the Evidence rail pane's own flexbox column, rendered between
+`.pane-head` and `.pane-body`. Since `.pane-body` is `flex: 1 1 auto; overflow-y: auto`
+and the toast stack is a normal-flow `flex: 0 0 auto` sibling above it, a toast can only
+ever push the citation list down, never sit on top of it. Confirmed live via CDP: a real
+anomaly toast (`KA22 monthly_fir_count 13.0 vs expected 7.0`) rendered as a direct child
+of `.pane.glass.rail`, `position: static`, between the header and the card list.
 
 Also this pass, judged and found no defect: the real MapLibre/OpenFreeMap basemap, the
 financial Sankey view, the reasoning-trace panel, the Copilot overlay, the EN/KN toggle,

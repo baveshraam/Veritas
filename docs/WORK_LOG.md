@@ -554,6 +554,123 @@ same constraints as documented there.
 
 ---
 
+## 2026-08-27 (later still) — Catalyst-blocker resolution + industry-gap analysis
+
+Prompt asked for a fresh, first-principles re-investigation of QuickML and PDF export
+via the authenticated Catalyst CLI (not trusted from prior passes' notes), then either
+the toast overlap or BUG-026 as fallback small fixes, then a live-research industry
+gap analysis against Palantir Gotham/i2 Analyst's Notebook/Maltego.
+
+**QuickML — re-investigated from the authenticated Catalyst environment directly,
+confirmed BLOCKED for a concrete, newly-verified reason:**
+- `catalyst project:list`/`catalyst help` (CLI v1.26.2, authenticated against the
+  `Veritas` project) — no QuickML-related command exists anywhere in the CLI's
+  command surface (only `ds:import/export`, `appsail:*`, `functions:*`, `client:*`,
+  `slate:*`, `apig:*`).
+- Minted an admin token (`scripts/catalyst-token.js`) and probed the Admin API
+  directly for a QuickML discovery surface: `GET .../quickml/model`,
+  `.../quickml/models`, `.../ml/model`, `.../quickml` — all `404
+  INVALID_URL_PATTERN`. `GET .../connections` (Catalyst's OAuth-secret-manager
+  feature, checked per this pass's own instruction to inspect Connections/secrets)
+  returned `{"status":"success","data":[]}` — genuinely empty, nothing stored there
+  either.
+- Fetched the live AppSail app's configuration directly
+  (`GET .../appsail/{appComputeId}`) and, separately, triggered a real `/chat` call
+  and re-read `/health` immediately after: `QUICKML_ENDPOINT` **is** set on the live
+  container (to the same unverified-provenance guessed URL documented in
+  `PHASE1_FAILURE_LOG.md`'s BUG-022, `.../quickml/v1/project/{id}/glm/chat`) and the
+  live call fails with the identical `PATTERN_NOT_MATCHED`/"zoho-inputstream" error
+  every prior pass already recorded; `QUICKML_ENDPOINT_KEY` remains unset.
+- Fetched the current Zoho documentation for LLM Serving directly
+  (`docs.catalyst.zoho.com/en/quickml/help/generative-ai/llm-serving/`): the invoke
+  URL and any required key are obtained **only** from the console's interactive
+  "Model Details → API Details" popup — the docs page itself states this and
+  documents no Admin API alternative.
+- **Conclusion, established rather than re-guessed**: there is no CLI command, Admin
+  API route, or Connections/secrets mechanism anywhere in this authenticated
+  Catalyst environment that can discover, verify, or configure a working QuickML
+  endpoint/key. This is a genuine platform gap (console-UI-only), not a credential
+  this session simply failed to find. Per this pass's own instruction, stopped
+  investigating here rather than continuing to guess request shapes against a live,
+  billed endpoint. **Status unchanged: BLOCKED.**
+
+**PDF export — re-confirmed BLOCKED, and the "real Catalyst user identity" question
+specifically closed out:**
+- Live `/export/pdf` call against a real session: `x-veritas-pdf-smartbrowz-reason:
+  CatalystAPIError: {'code': 'INVALID_ID', 'message': 'No such User with the given id
+  exists'}`, `x-veritas-pdf-local-reason: no Chromium-family browser found on this
+  host` — byte-for-byte identical to every prior pass.
+- New this pass: checked whether the officers have real Catalyst identities at all
+  (`GET .../project-user` over the Admin API) — they do: 6 real, `ACTIVE` Catalyst
+  App User accounts (Catalyst Authentication, `packages/policy`'s role source). But
+  `apps/api/api/auth/jwt_auth.py`/`catalyst_auth.py` show the console's actual sign-in
+  flow is a custom `POST /auth/token` REST call, never Catalyst's own hosted
+  login/session flow — so no request ever carries a genuine Catalyst session cookie,
+  which is what SmartBrowz's identity resolution needs regardless of the
+  `_switch_user("admin")` workaround already in place. Minting a session for one of
+  these real users server-side, without the officer completing Catalyst's own
+  interactive sign-in, would be authentication bypass — explicitly out of scope per
+  this pass's own instruction ("do not bypass authentication"). **Status unchanged:
+  BLOCKED, root cause now stated precisely rather than left as "an identity
+  question."**
+
+**Fixed (commit `1aecd82`, console redeployed) — the toast/Evidence-rail overlap,
+closed for real this time:**
+`AlertToasts` moved out of `position: fixed` (which necessarily draws on top of
+whatever is beneath it, wherever it's anchored) and into the Evidence rail pane's own
+flexbox flow, between `.pane-head` and the scrollable `.pane-body`
+(`apps/web/app/page.tsx`, `apps/web/app/globals.css`). A toast now displaces the
+citation list downward structurally; it cannot occlude a card. `npx tsc --noEmit`
+clean; live-verified via a headless-Chrome CDP session against the deployed console —
+a real anomaly toast (`KA22 monthly_fir_count 13.0 vs expected 7.0`) confirmed as a
+`position: static` child of `.pane.glass.rail`, positioned above `.pane-body`.
+
+**BUG-026 — found to already be fixed, not re-fixed.** Read `copilot/brief.py`
+directly before doing any work: `_lead_name()` already reconciles
+`CanonicalName`/`AccusedName` (`"Soom Nadkarni (filed as \"Suma Nadkarni D/o Eshwar\"
+on this FIR)"`), landed in the 2026-08-26 finishing pass per `WORK_LOG.md`'s own
+entry for that day. Live-confirmed on FIR 9992 via `/copilot/9992` — the reconciled
+string renders exactly as documented. The only real defect was documentation drift:
+`docs/VERITAS_HANDOFF.md`'s "open bugs" list still called it open while
+`docs/QA_FUNCTIONALITY_MATRIX.md`'s own detailed BUG-026 section already said FIXED —
+corrected in this pass's doc updates rather than left contradicting itself.
+
+**Industry gap analysis** — live web research (Palantir Gotham, IBM i2 Analyst's
+Notebook, Maltego, DFIR chain-of-custody practice) cross-referenced against Veritas's
+actual current capability. Full write-up: `docs/INDUSTRY_GAP_ANALYSIS.md`. Headline
+finding: the single largest gap is that Veritas has no investigation memory that
+survives past one chat session — every mature platform researched treats a
+persistent, editable case artifact as the core object an analyst works with, and
+Veritas currently re-derives everything from zero the next time anyone opens a case.
+Recommended, smallest-first: (1) a persistent per-case board for pinning evidence/
+leads with officer notes, (2) lead disposition (pursued/dismissed) built on the same
+schema, (3) a cross-entity timeline correlation view — the one concrete i2 capability
+Veritas structurally lacks. None of the three were built this pass (analysis and the
+two named small fixes only, per the prompt's own scoping).
+
+**Test suite**: 373 collected (derived directly via `pytest --collect-only -q`'s
+per-file breakdown, summed — not trusted from a prior changelog line, matching this
+project's own established discipline for this number), all green. No backend code
+changed this pass, so this is a re-measurement, not a change.
+
+**Deploys**: console only (`scripts/deploy-console.sh`, commit `1aecd82`) — nothing in
+`apps/api` or the packages changed, so no API redeploy was needed. QuickML/PDF
+investigation touched no code; nothing to deploy for either.
+
+**Docs updated**: `docs/INDUSTRY_GAP_ANALYSIS.md` (new), `docs/VERITAS_HANDOFF.md`
+(rewritten for this pass), this file, `docs/QA_FUNCTIONALITY_MATRIX.md` (toast
+overlap closed, BUG-026 doc-drift corrected), `docs/VERITAS_STATUS.html` (stale-as-of
+banner extended).
+
+**Not done this pass, named rather than silently skipped**: none of the three
+industry-gap recommendations were implemented (analysis only, as scoped); `dowhy`
+was explicitly out of scope per this pass's own instruction not to prioritize it
+without a clean way to fit the deployment constraints (unchanged, still declined on
+image-size grounds — see CLAUDE.md v12); voice pipeline, case-status filter chips,
+map pan/drag, AML positive-case verification — all unchanged from prior passes.
+
+---
+
 ## 2026-08-27 (later, same day) — Final live judge pass: real browser tooling this time,
 five defects found by actually looking at the screen
 

@@ -5,184 +5,146 @@ and `docs/PHASE1_FAILURE_LOG.md`. This file answers "where do things stand right
 what's next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-`7d4e581` — "fix(web): unlabeled network nodes and evidence-rail toast overlap" (main,
-`github.com/baveshraam/Veritas`). Below it: `f310c4a` (deploy-relay, no code), `23291eb`
-(namesake-disambiguation fix), `0988f04` (deploy-relay, no code), `15ff976` (the three
-core fixes this pass found). Prior HEAD this pass started from: `9ce69a6`.
+`1aecd82` — "fix(web): toast stack no longer overlays the Evidence rail" (main,
+`github.com/baveshraam/Veritas`). Below it: `7759ec4` (final live judge pass docs),
+`7d4e581` (unlabeled network nodes + the first toast fix attempt), `23291eb`
+(namesake-disambiguation fix). No backend/API code changed this pass — the API
+deployment (`52852000000318080`) is unchanged from the prior pass.
 
 ## Current live deployment
-- **API**: redeployed twice this pass. AppSail app `50043864344` (appComputeId
-  `52852000000204688`); final deployment `52852000000318080`. `/health` clean post-deploy
-  both times; every fix independently re-verified live afterward through the real
-  console, not just the API (see below).
-- **Console**: redeployed once this pass (`catalyst deploy --only client`, via the
-  documented signed-URL/npm-global-bin workaround — the `catalyst` CLI shim wasn't on
-  this shell's `PATH`; it lives at `~/AppData/Roaming/npm/catalyst` on this machine).
-  Both `assetPrefix`/localhost guards in `scripts/deploy-console.sh` passed. Live at
+- **API**: unchanged this pass, still `52852000000318080` (AppSail app `50043864344`,
+  appComputeId `52852000000204688`). Nothing in `apps/api` or the packages changed.
+- **Console**: redeployed this pass (`scripts/deploy-console.sh`, commit `1aecd82`) for
+  the toast/Evidence-rail structural fix. Live at
   `https://veritas-60077763394.development.catalystserverless.in/app/index.html`.
 
 ## Date/time of last verification
-2026-08-27, this session ("final live judge pass"). **Unlike the immediately prior
-pass, real browser/CDP tooling was available and used throughout** — headless Chrome
-(`--headless=new --remote-debugging-port=9222`) driven over Node 22's global WebSocket,
-per `[[veritas-console-verification]]`. Every finding below was found live, through the
-actual rendered console, not inferred from API responses alone; every fix was
-re-verified the same way after deploying it.
+2026-08-27, this session ("Catalyst blocker resolution + industry gap analysis" pass).
+Headless Chrome + CDP was available and used to verify the toast fix live (a real
+in-flight anomaly toast confirmed structurally unable to overlap the Evidence rail).
+QuickML/PDF were investigated via the authenticated Catalyst CLI and Admin API
+directly, not re-guessed from prior notes.
 
 ## What this pass did, and why
-The prompt asked for the FINAL live judge/acceptance pass: drive a full investigation
-through the real UI, improvise natural investigator phrasing beyond any scripted golden
-conversation, and judge every screen the way a competition judge — who knows nothing
-about the code — would. This is exactly the kind of pass that has found real bugs before
-(the 2026-08-26 CDP sessions, the adversarial-phrasing passes), and it did again.
+The prompt asked for a from-scratch re-investigation of QuickML and PDF export via
+the authenticated Catalyst CLI/Admin API — explicitly not to trust the prior "BLOCKED"
+classification without re-checking — followed by the two named small fixes as
+fallback (toast overlap, BUG-026), then a live-research industry gap analysis.
 
-Ran a ~25-turn live investigation through the real console (open FIR → what happened →
-who's involved → priors → why-those-cases → associates → what-supports → similar cases
-→ geography → financial trail → what's-unusual → evidence-for → next-steps → briefing →
-switch case → follow-up → attempted return → explicit return → context-isolation check →
-ambiguous-pronoun clarification → five improvised natural-language follow-ups → Kannada),
-screenshotting key steps, then inspected every screenshot as a judge would.
+**QuickML: re-investigated, BLOCKED confirmed with a concrete, freshly-verified
+reason** (not the same reason restated — actually re-derived):
+- The Catalyst CLI (v1.26.2, authenticated) has no QuickML command at all.
+- Probed the Admin API directly for a model/endpoint discovery route
+  (`.../quickml/model`, `.../quickml/models`, `.../ml/model`, `.../quickml`) — all
+  404. `.../connections` (Catalyst's Connections/secrets feature) returned a real,
+  empty list — nothing stored there either.
+- Fetched the live AppSail app's configuration and, separately, triggered a real
+  `/chat` call and read `/health` immediately after: `QUICKML_ENDPOINT` **is**
+  actually set on the live container (an earlier session's guessed URL,
+  `.../quickml/v1/project/{id}/glm/chat`, no known provenance — see
+  `PHASE1_FAILURE_LOG.md` BUG-022) and the live call still fails with the identical
+  `PATTERN_NOT_MATCHED` error every prior pass recorded. `QUICKML_ENDPOINT_KEY`
+  remains unset.
+- Fetched Zoho's current LLM Serving documentation directly: it states the invoke
+  URL/key come **only** from the console's "Model Details → API Details" popup, and
+  documents no Admin API alternative.
+- **No CLI command, Admin API route, or Connections mechanism in this authenticated
+  environment can discover or configure a working QuickML endpoint.** This is a
+  genuine console-UI-only platform gap, confirmed today, not a credential this
+  session failed to locate. Stopped investigating here per the prompt's own
+  instruction against repeated guessing. **BLOCKED, unchanged in outcome, changed in
+  how firmly the reason is now established.**
 
-**Found and fixed five real, live defects:**
+**PDF export: re-confirmed BLOCKED, the identity question specifically closed out.**
+Live `/export/pdf` still returns the identical `INVALID_ID`/"No such User" from
+SmartBrowz and "no Chromium-family browser found on this host" from the local
+fallback. New this pass: checked whether the 6 officer accounts have real Catalyst
+identities — they do (`GET .../project-user`, all `ACTIVE` App Users) — but
+`apps/api/api/auth/`'s actual sign-in flow is a custom `POST /auth/token` REST call,
+never Catalyst's own hosted login, so no request ever carries a genuine Catalyst
+session cookie for SmartBrowz to resolve. Minting one server-side without the
+officer completing a real interactive Catalyst sign-in would be authentication
+bypass — explicitly out of scope. **BLOCKED, root cause now stated precisely.**
 
-1. **A refusal still shipped the evidence it had just rejected (P0 — the single most
-   damaging finding).** `node_synthesize`'s general refusal branch (`requires_
-   escalation`, reason `no_evidence` and others) cleared `state.citations` but not
-   `state.evidence_items` — every *other* refusal branch in the same function
-   (`CAPABILITY`, `nothing_prior`, `ambiguous_person`) clears both. Reproduced clean,
-   live, single-turn: *"Tell me about the flying saucer incident on the moon"* → the
-   chat pane correctly showed an honest red-bordered refusal — **and the Evidence rail
-   simultaneously showed "8 cited"**, listing 8 unrelated Raichur robbery FIRs at ~40%
-   "text similarity." A judge reading both panels side by side sees a direct
-   contradiction: the system says it found nothing, while visibly displaying 8 pieces
-   of "evidence." Same failure class as BUG-006/RAG-35, recurring through a third door.
-   Screenshot: `repro-refusal-evidence.png`. Fixed by clearing `evidence_items` in that
-   branch too; confirmed empty live post-deploy (`verify-fix1-refusal-clean.png`).
-2. **`CASE_REFERENCE_UNSUPPORTED` only matched an ordinal directly before "case."** The
-   already-shipped fix (v6/finalization pass) catches "go back to the **first** case."
-   It does not catch **"go back to the case we started with"** — equally natural
-   investigator phrasing, no ordinal at all. Live, this fell through to a real semantic
-   search that had enough confidence to pass CRAG and returned 5 confidently-cited,
-   completely unrelated records (an Attempt to Murder case in Ballari/Kolar, answering
-   a question about a Kidnapping case). Broadened the regex to cover a trailing
-   back-reference ("case we started/began/opened with") and a bare demonstrative
-   ("back to that case"), not just a leading ordinal.
-3. **Associate evidence text said `gang: Community 6`.** CLAUDE.md §4 documents this
-   grouping as deliberately labelled honestly — "network community 6," never "gang,"
-   since the ER records no gang and none is invented. `copilot/brief.py`'s leads
-   already follow this; `_network_evidence()` (chat's `PERSON_NETWORK` path) was the
-   one place still printing the literal word.
-4. **A genuine namesake collision rendered as an apparent duplicate.** "Who are her
-   associates?" for Usha Naika listed "Suma Nadkarni is a known associate..." twice,
-   verbatim. Confirmed via the raw evidence `source_id`s these are two *different* real
-   `PersonUID`s (7334, 8395) who happen to share a `CanonicalName` — not a duplicate-row
-   bug, the same namesake possibility BUG-026 already documented for canonical/as-filed
-   drift, surfacing here as two genuinely distinct people instead. `_network_evidence`
-   now appends `(person <id>)` only when a real collision exists within that specific
-   result set — an ordinary list of distinct names is untouched.
-5. **Two UI-only defects, found from screenshots, judged as a judge would:**
-   - `NetworkView.tsx` labelled a node only above 40% of the graph's max pagerank —
-     tuned for large expanded networks, where it correctly thins ~30 nodes to the real
-     hubs. On a small, high-variance graph (a bare 4-accused "who is involved" view,
-     one clear organiser) that same cutoff left 3 of 4 accused as unlabelled dots — an
-     investigator cannot tell who they are. Below a small node count, every node now
-     keeps its label.
-   - `.toast-stack` (live anomaly alerts) was pinned to the viewport's bottom-right
-     corner — the same corner the Evidence rail's citation cards occupy. A stack of 3
-     toasts could sit directly over several cards. Moved to anchor under the topbar
-     instead (a fixed, predictable height, unlike the rail's dynamic content). Live
-     re-check: this reduced the overlap from several cards to, at most, the panel's own
-     header/first card when 3 toasts are simultaneously active — a real but smaller
-     residual overlap, left as-is rather than redesigned further (see Not done, below).
+**Fixed (commit `1aecd82`, console redeployed) — the toast/Evidence-rail overlap,
+closed structurally rather than reduced further:**
+`AlertToasts` moved out of `position: fixed` and into the Evidence rail pane's own
+flexbox column, rendered between `.pane-head` and the scrollable `.pane-body`. A
+toast can now only push the citation list down; it cannot occlude a card, regardless
+of how many alerts are active. Live-verified via CDP: a real anomaly toast rendered
+as a `position: static` child of `.pane.glass.rail`, above `.pane-body`.
 
-All five ship with regression tests reproducing the underlying condition directly against
-the affected code (not re-running the live repro, which isn't reproducible offline):
-5 new backend tests (`packages/rag_agent/tests/test_engine.py`), **374 tests collected,
-all green**. Frontend changes are `apps/web` only; `npx tsc --noEmit` clean (no frontend
-test suite exists in this repo — none was added, matching existing project convention).
+**BUG-026: found already fixed, not re-fixed.** `copilot/brief.py`'s `_lead_name()`
+already reconciles canonical/as-filed names (landed 2026-08-26, finishing pass).
+Live-confirmed unchanged and correct on FIR 9992 via `/copilot/9992`. The only real
+defect was this file's own "open bugs" list having drifted stale against
+`docs/QA_FUNCTIONALITY_MATRIX.md`'s own detailed section, which already said FIXED —
+corrected below.
 
-Commits: `15ff976` (fixes 1–3), `23291eb` (fix 4), `7d4e581` (fix 5, frontend). Deploys:
-`0988f04`→`52852000000321046` (API, fixes 1–3), `f310c4a`→`52852000000318080` (API, fix
-4), console deploy after `7d4e581` (fix 5).
+**Industry gap analysis** — `docs/INDUSTRY_GAP_ANALYSIS.md` (new). Live research
+against Palantir Gotham, IBM i2 Analyst's Notebook, Maltego, and DFIR chain-of-custody
+practice. Headline finding: Veritas's largest gap is that it has no investigation
+memory surviving past one chat session — every mature platform researched treats a
+persistent, editable case artifact as the analyst's core object. Ranked, smallest
+first: (1) a persistent per-case board (pin evidence/leads, officer notes, survives
+across sessions and officers), (2) lead disposition (pursued/dismissed) on the same
+schema, (3) a cross-entity timeline correlation view. None built this pass — analysis
+plus the two named small fixes only, as scoped.
 
-## Verified live this pass (through the real console, not just the API)
-- **The three core evidence-integrity/routing fixes** (1–3 above): re-driven clean,
-  single-turn, post-deploy — `verify-fix1-refusal-clean.png` (0 evidence items, honest
-  empty-state), the case-reference phrasing now refuses correctly, `network community`
-  wording confirmed with zero `gang:` occurrences.
-- **The namesake fix** (4 above): re-driven through the same 4-turn conversation that
-  found it; both "Suma Nadkarni" entries now carry distinct `(person 7334)`/`(person
-  8395)` suffixes.
-- **Both UI fixes** (5 above): fresh screenshots post console-deploy —
-  `verify-fix5-network-labels.png` (all 4 nodes labelled), `verify-fix6-toast-position.png`
-  (toast-stack rect confirmed at `top:78` instead of the viewport bottom).
-- **The full ~25-turn investigation itself**, end to end, live: open case → case context
-  → accused → priors → associates → why-these → similar cases → geography → financial
-  (honest negative finding — no account linked) → what's-unusual → evidence-for →
-  next-steps → briefing → case switch (a malformed short-form FIR number correctly
-  refused rather than guessing) → follow-up on the still-open case (proves a failed
-  switch doesn't corrupt context) → attempted return by position (now refuses honestly)
-  → explicit return → context-isolation re-check → ambiguous-pronoun clarification (all
-  4 names offered) → five improvised natural-language follow-ups ("tell me more about
-  her," "what about the other one," "are any of these people connected," "what should I
-  focus on first" — correctly reused the prior NEXT_STEPS answer, "what information are
-  we missing") → Kannada round-trip (3 citations, correct translation both ways).
-- **The real MapLibre/OpenFreeMap basemap**: judged fresh (`06-geography-map.png`) —
-  real street names, real district labels, legend, scale, zoom, correct OSM attribution.
-  Genuinely judge-ready; no defect found here this pass.
-- **RBAC, Cron, QuickML, PDF export**: re-confirmed unchanged from the prior pass (see
-  below) — not re-exercised from scratch since nothing this pass touched those surfaces.
+## Verified live this pass
+- **Toast/Evidence-rail overlap**: CDP-confirmed structurally closed (see above).
+- **BUG-026**: live-confirmed still correct via a real `/copilot/9992` call.
+- **QuickML**: live-confirmed the exact current failure (`PATTERN_NOT_MATCHED`) via a
+  real `/chat` call + `/health` re-check, and confirmed via the Admin API that the
+  configured `QUICKML_ENDPOINT` has no working provenance and no key is set.
+- **PDF export**: live-confirmed unchanged via a real `/export/pdf` call.
 
 ## Not verified / not done this pass, stated plainly
-- **RBAC was not re-driven live through the console this specific pass** (the prior
-  pass's API-level IO-cross-station-refusal check stands, unchanged code path).
-- **The toast/evidence-rail overlap is reduced, not eliminated.** With 3 alerts active
-  simultaneously the stack can still cover the Evidence panel's header and first card.
-  A structurally different placement (e.g., a dedicated alert rail, or docking inside
-  the topbar itself) would close this fully; not attempted this pass — the current fix
-  already closes the far worse "covers most of the visible evidence" case, and further
-  redesign felt like scope creep for a decision-support side-channel, not a core
-  investigation surface.
-- **Voice pipeline (STT/TTS), case-status filter chips (UI-20), map pan/drag gesture,
-  AML positive-case verification, `dowhy`** — unchanged from all prior passes, same
-  environmental/data constraints as documented there.
-- **QuickML and PDF export** — not re-checked this pass (no code in either area
-  changed); the prior pass's BLOCKED status stands: `QUICKML_ENDPOINT_KEY` absent from
-  live AppSail config, `/export/pdf` still returns the honest HTML fallback.
+- **None of the three industry-gap recommendations were implemented** — this pass was
+  scoped to analysis plus the two named small fixes, not new feature work.
+- **No full UI click-through beyond the toast fix** — the console wasn't otherwise
+  re-driven; the prior "final live judge pass" CDP verification of the rest of the UI
+  stands, unrepeated here since nothing else in the UI changed.
+- **`dowhy`** — explicitly out of scope this pass per the prompt's own instruction not
+  to prioritize it without a clean way to fit the deployment size constraints.
+  Unchanged from CLAUDE.md v12's measured-and-declined analysis.
+- **Voice pipeline, case-status filter chips, map pan/drag, AML positive-case
+  verification** — unchanged from all prior passes, same constraints as documented
+  there.
 
 ## Open bugs (see `docs/PHASE1_FAILURE_LOG.md` for full detail)
-BUG-015 (dowhy), BUG-016 (Kannada latency), BUG-018 (PDF export — HTML fallback,
-honest), BUG-022 (QuickML key), BUG-026 (Copilot leads canonical-vs-as-filed name, P2,
-deliberately left open) remain open, externally blocked or deliberately scoped out,
-unchanged this pass. This pass's five fixes are not yet assigned BUG-NNN numbers (same
-pattern several prior passes have used) — see commits `15ff976`/`23291eb`/`7d4e581` for
-full detail if numbers are wanted later.
+BUG-015 (`dowhy`), BUG-016 (Kannada latency), BUG-018 (PDF export — HTML fallback,
+honest), BUG-022 (QuickML endpoint/key — now confirmed console-UI-only, no Admin API
+path exists) remain open, externally/platform blocked, unchanged this pass. **BUG-026
+is fixed** (corrected from this file's own stale prior listing — see above; the fix
+landed 2026-08-26 and was never re-opened, this file simply hadn't caught up to it).
 
 ## Important architecture facts a new session must not re-derive
-See `CLAUDE.md` in full, and every fact listed in prior passes' handoffs. New this pass:
-**the `catalyst` CLI is installed but not on this shell's `PATH`** — it's the
-`zcatalyst-cli` npm global package, shimmed at `~/AppData/Roaming/npm/catalyst[.cmd]`.
-Either `export PATH=".../AppData/Roaming/npm:$PATH"` first, or invoke the shim by its
-full path, before `scripts/deploy-console.sh` or any other script that shells out to
-`catalyst`. Also: **`node_synthesize`'s refusal branches are the one place in this
-codebase where "clear both citations and evidence_items" is a rule enforced only by
-convention, not by structure** — three of four branches already did this correctly, one
-didn't, and it went unnoticed until a live screenshot caught the contradiction. Worth a
-second look next time any of those branches is touched.
+See `CLAUDE.md` in full, and every fact listed in prior passes' handoffs. New this
+pass: **QUICKML_ENDPOINT is genuinely set on the live AppSail container** (to an
+unverified-provenance guessed URL from an earlier session) even though it does not
+appear in every Admin API view of the app's configuration a session might fetch —
+don't infer "not configured" from a configuration GET alone; a live `/health` check
+after a real `/chat` call is the reliable signal, since `ENDPOINT`/`ENDPOINT_KEY` are
+read from `os.getenv` once at process import in `llm.py`. **The 6 officer accounts
+are real, ACTIVE Catalyst App User identities** (`GET .../project-user`) — but the
+console's sign-in flow never establishes a Catalyst session cookie for any of them,
+so that fact doesn't help SmartBrowz or anything else that needs a real Catalyst
+Authentication session; it would take the officer completing Catalyst's own hosted
+login flow, which nothing in this deployment currently drives.
 
 ## Data-generation constraints
 Unchanged — do not regenerate the live 10k-case dataset casually. Nothing this pass
 touched the generator.
 
 ## Next recommended action
-1. If a QuickML endpoint key or a working Catalyst OAuth sign-in is ever obtained,
-   BUG-022 and BUG-018 both close for real — both remain credential-blocked, not
-   code-blocked.
-2. Consider a real fix for the residual toast/evidence-rail overlap (see above) if it
-   keeps coming up in review — a dedicated alert surface rather than a floating stack.
-3. BUG-026 (Copilot leads canonical-vs-as-filed name) remains a well-scoped, still-open
-   P2 with a documented recommended fix in `docs/QA_FUNCTIONALITY_MATRIX.md` — worth
-   picking up in a future pass that isn't racing to close out a submission.
-4. Consider whether a genuine "return to a specific earlier case" capability (an actual
-   small case-history stack, not just an honest refusal) is worth building — unchanged
-   recommendation from the prior pass.
+1. **Build the case board** (`docs/INDUSTRY_GAP_ANALYSIS.md` §7, item 1) — the
+   highest-ranked, smallest-effort item from this pass's gap analysis, and the most
+   concrete answer available to "is this more than a chatbot."
+2. If a QuickML endpoint URL/key or a working Catalyst hosted-login flow is ever
+   obtained through the console UI directly (not the Admin API — confirmed this pass
+   to have no path there), BUG-022 and BUG-018 both close for real.
+3. Consider the lead-disposition feature (§7 item 2) once the case board exists — it
+   is almost free once that schema is in place.
+4. BUG-026 is closed; drop it from any future "open bugs" list rather than
+   re-flagging it from an old copy of this file.
