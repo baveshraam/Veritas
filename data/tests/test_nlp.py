@@ -2,7 +2,7 @@
 import pytest
 
 from data.nlp import ner_extract, transliterate
-from data.nlp.translate import TranslationUnavailable, translate
+from data.nlp.translate import TranslationUnavailable, translate, _protect_spans, _restore_spans
 
 
 def _labels(text):
@@ -136,3 +136,62 @@ def test_query_stopwords_are_not_mistaken_for_names():
               "Trace the money trail",
               "Forecast crime next month"):
         assert not [e for e in ner_extract(q) if e.label == "PERSON"], q
+
+
+# --- code-switched translation: protecting identifiers from the MT model ----------
+#
+# A KSP officer types FIR numbers, IPC codes and vehicle plates in Latin script inside
+# an otherwise-Kannada sentence — the ordinary way of speaking, not an edge case. NLLB
+# translates the whole string with no notion that a digit run is a record identifier;
+# measured directly against the real model (see data/data/nlp/translate.py's module
+# comment), the number itself usually survives on its own, but leaving that to the
+# model's discretion is not a guarantee a police tool can stand behind. These tests
+# check the guarantee structurally, with a fake backend under our own control, rather
+# than depending on a specific model's current behaviour.
+
+def test_protect_spans_finds_fir_numbers_ipc_codes_and_plates():
+    text = 'FIR 100222201202600022, IPC 302, vehicle KA 05 MJ 1234'
+    protected, mapping = _protect_spans(text)
+    assert '100222201202600022' not in protected
+    assert 'KA 05 MJ 1234' not in protected
+    assert set(mapping.values()) == {'100222201202600022', '302', 'KA 05 MJ 1234'}
+
+
+def test_protect_then_restore_spans_round_trips_exactly():
+    text = 'ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ FIR 100222201202600022, IPC 302 ಬಗ್ಗೆ ಏನಿದೆ?'
+    protected, mapping = _protect_spans(text)
+    assert _restore_spans(protected, mapping) == text
+
+
+def test_protect_spans_leaves_ordinary_words_and_short_numbers_alone():
+    # Single digits and plain words are not identifiers — protecting them would only
+    # fragment the sentence the model has to translate, for no benefit (see the
+    # module comment's "Is that 10001 to 10002 another 10003?" counter-example).
+    protected, mapping = _protect_spans('ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ? 5 ಜನ')
+    assert mapping == {}
+    assert protected == 'ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ? 5 ಜನ'
+
+
+def test_translate_sends_the_backend_a_placeholder_not_the_raw_identifier(monkeypatch):
+    """The identifier must never reach the backend at all — proving fidelity does not
+    depend on the model choosing to preserve it, only on this wrapper never exposing
+    it. A backend that "corrupts everything it can see" still can't corrupt what it's
+    never shown; one that echoes its input back verbatim (a stand-in for how NLLB
+    handles a short digit placeholder in practice — see the module comment) proves the
+    round trip reconstructs the original text exactly."""
+    import importlib
+    translate_mod = importlib.import_module('data.nlp.translate')
+
+    seen = {}
+
+    class _RecordingEchoBackend:
+        def translate(self, text, src_flores, tgt_flores):
+            seen['text'] = text
+            return text          # NLLB copies a short digit placeholder through as-is
+
+    monkeypatch.setattr(translate_mod, '_load', lambda: _RecordingEchoBackend())
+    query = 'ಮಂಡ್ಯದಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ'
+    out = translate(query, 'kn', 'en')
+
+    assert '100222201202600022' not in seen['text']   # never shown to the backend
+    assert out == query                               # and the round trip is exact

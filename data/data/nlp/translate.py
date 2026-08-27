@@ -49,6 +49,56 @@ from functools import lru_cache
 # which alphabet it is looking at, so it stays deterministic.
 _KANNADA = re.compile(r"[ಀ-೿]")
 
+# A KSP officer's Kannada is routinely code-switched with English: FIR numbers, IPC
+# codes and vehicle plates are typed in Latin script inside an otherwise-Kannada
+# sentence, exactly as spoken. NLLB translates the *whole string* it is given, with no
+# concept that a digit run is a record identifier rather than a quantity to render
+# idiomatically — so a record identifier's fidelity was, before this, left entirely to
+# a generative model's discretion. This makes that fidelity structural instead:
+# protected spans are removed before translation and spliced back verbatim after, so
+# they cannot be altered by the model no matter what it does with the rest of the
+# sentence.
+#
+# What this does NOT fix, found and left open by the same experiments (see
+# ENGINEERING_BRIEF.md §10): NLLB-200-distilled-600M mistranslates the district name
+# "ಮಂಡ್ಯ" (Mandya) to "Mandi" — a real but wrong, more common Indian place name —
+# specifically when "FIR" and a number sit in the same sentence, independent of
+# whether that number is the raw 18-digit value or a short placeholder; "ಬೆಂಗಳೂರು"
+# (Bengaluru) in the identical construction translates correctly. This looks like a
+# genuine model-quality gap (a less common name losing to a more common phonetic
+# neighbour), not something a pre-translation substitution can paper over — ruled out
+# by testing the placeholder swap against exactly this sentence before writing it off.
+# Blanket-protecting every Latin-script word (not just identifiers) was also tried and
+# rejected: it swallows the English loanwords ("FIR", "case") that anchor the model's
+# translation of the surrounding Kannada grammar, and produced visibly worse output
+# ("Is that 10001 to 10002 another 10003?"). So only numeric/identifier-shaped spans
+# are protected — vehicle plates and any run of 2+ digits (FIR numbers in both forms,
+# IPC codes) — never ordinary words.
+_PROTECT = re.compile(
+    r"\bKA[\s-]?\d{2}[\s-]?[A-Z]{1,2}[\s-]?\d{3,4}\b"     # vehicle plate, e.g. KA 05 MJ 1234
+    r"|\d{2,}",                                             # FIR numbers, IPC codes
+    re.I,
+)
+
+
+def _protect_spans(text: str) -> tuple[str, dict[str, str]]:
+    """Replace protected spans with digit-shaped placeholders NLLB reliably copies
+    through untouched, and return the mapping needed to restore them verbatim."""
+    mapping: dict[str, str] = {}
+
+    def repl(m: "re.Match[str]") -> str:
+        placeholder = str(90001 + len(mapping))
+        mapping[placeholder] = m.group(0)
+        return placeholder
+
+    return _PROTECT.sub(repl, text), mapping
+
+
+def _restore_spans(text: str, mapping: dict[str, str]) -> str:
+    for placeholder, original in mapping.items():
+        text = text.replace(placeholder, original)
+    return text
+
 # NLLB uses FLORES-200 codes; IndicTrans2 uses the same script-tagged convention.
 _FLORES = {"en": "eng_Latn", "kn": "kan_Knda"}
 
@@ -71,8 +121,10 @@ def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise TranslationUnavailable(f"unsupported language pair {src}->{tgt}")
 
+    protected, mapping = _protect_spans(text)
     backend = _load()
-    return backend.translate(text, _FLORES[src], _FLORES[tgt])
+    result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
+    return _restore_spans(result, mapping) if mapping else result
 
 
 @lru_cache(maxsize=1)
