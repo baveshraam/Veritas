@@ -59,12 +59,41 @@ forbids nesting). Two real consequences:
 What remains an honest guess, clearly marked as one: the exact key name(s)
 `input_data` must carry for an LLM Serving endpoint specifically (the generic ML-pipeline
 docs show arbitrary "column name" keys; GLM-4.7-Flash's own page states "Input type: Text
-only" but not the field name). `_PROMPT_FIELD` below is the inferred value — change it in
-one place, not a claim it is confirmed correct. This is unverifiable without a live
-`endpoint_key`, and there is none in this environment (see ENDPOINT_KEY below) — publishing
-one is a console-only action (Generative AI -> LLM Serving -> a model's Model Details ->
-API Details popup), with no equivalent in the Admin API this project provisions everything
-else through, confirmed by probing plausible listing/creation paths directly, not assumed.
+only" but not the field name). `PROMPT_FIELD` below is the inferred value — change it in
+one place, not a claim it is confirmed correct.
+
+## A second, deeper blocker found by actually invoking predict() — not just the missing key
+
+Confirmed live (2026-08-27, "build the actual conversational brain" pass): with a
+deliberately invalid `QUICKML_ENDPOINT_KEY` set temporarily on the deployed app to force a
+real call through this exact code path, the SDK's own `AuthorizedHttpClient` never even
+reaches key validation — it fails first with:
+
+    CatalystAPIError: {'code': 'API_ERROR', 'message': "Request failed with status 400
+    and response data: {'code': 'ORGID_HEADER_UNAVAILABLE' ...
+
+Traced to `zcatalyst_sdk/_http_client.py`: `HttpClient.request()` only attaches the
+`CATALYST-ORG` header when `os.getenv('X_ZOHO_CATALYST_ORG_ID')` is set, and QuickML's
+gateway specifically requires it (Data Store/Cache/every other call this app makes do not
+— confirmed working throughout this deployment). Two things rule out a workaround from
+this environment, not just "not yet tried":
+
+  1. Setting `X_ZOHO_CATALYST_ORG_ID` via `POST /appsail/{id}/configuration` (the same
+     endpoint that successfully manages every other env var this app has) is rejected
+     outright: `{"error_code": "INVALID_INPUT", "message": "environment_variables must
+     not contain reserved keywords"}` — the platform reserves this name for itself, and
+     is not injecting it into a `custom_runtime` AppSail container.
+  2. It is not recoverable from an incoming request either: the AppSail gateway's own
+     per-request headers this SDK reads (`ProjectHeader`/`CredentialHeader` in
+     `_constants.py` — project id, domain, key, environment, admin/user credential
+     tokens) carry no org id in any form.
+
+So the honest state is: **even a real, published `endpoint_key` would not be sufficient**
+on its own — this app has no path to the org-id context QuickML's gateway requires, and
+no configuration surface reachable from here can supply one. This is a platform gap for
+custom_runtime AppSail apps calling QuickML specifically, not a missing credential this
+project forgot to obtain. (The live diagnostic env var was set and then immediately
+reverted to the exact prior state — this file's behavior with an absent key is unchanged.)
 """
 import json
 import logging

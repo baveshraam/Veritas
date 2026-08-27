@@ -432,6 +432,27 @@ questions:
      with console access to publish an LLM Serving endpoint for GLM-4.7-Flash and
      copy its key — that action cannot be performed or verified from this
      environment, no matter how the integration code is written.
+3. **A second, deeper blocker — found by actually invoking `predict()`, not just
+   confirming the key is absent.** "Do not blindly trust the previous
+   conclusion" (this pass's own instruction) was taken literally: a deliberately
+   invalid `QUICKML_ENDPOINT_KEY` was set on the live app for the duration of
+   one real call, to see what the SDK does when it actually runs. The result
+   was not a key-validation error — the request failed before that, with
+   `CatalystAPIError ... 'code': 'ORGID_HEADER_UNAVAILABLE'`. Traced to
+   `zcatalyst_sdk/_http_client.py`: the `CATALYST-ORG` header is only attached
+   when `os.getenv('X_ZOHO_CATALYST_ORG_ID')` is set, and this app's container
+   does not have it — unlike Data Store/Cache/every other Catalyst call this
+   app makes successfully, which apparently don't need it. Two things rule out
+   a workaround, not just "not yet tried": setting that env var through
+   `POST /appsail/{id}/configuration` (the same endpoint that manages every
+   other env var here) is rejected outright as a reserved keyword; and the
+   AppSail gateway's own per-request headers (`X-ZC-ProjectId` etc.) carry no
+   org id in any form this SDK reads. **The honest conclusion: even a real,
+   published `endpoint_key` would not be sufficient on its own** — this is a
+   platform gap for `custom_runtime` AppSail apps calling QuickML specifically,
+   not a missing credential. The diagnostic key was reverted immediately after
+   the one test call; live state and behavior are unchanged from before this
+   probe (verified via `/health` before and after).
 
 **The semantic-interpreter layer (§5.1 migration) runs in fully-degraded mode**: it
 calls `llm.py:generate_json()` and catches `LLMUnavailable`, falling back to
