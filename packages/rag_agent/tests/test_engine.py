@@ -1599,6 +1599,28 @@ def test_network_evidence_never_says_gang():
     assert "network community 6" in ev.content
 
 
+def test_network_evidence_disambiguates_a_real_namesake_collision():
+    """Found live 2026-08-27 (final judge pass): 'Who are her associates?' for Usha
+    Naika listed 'Suma Nadkarni is a known associate...' TWICE, verbatim, in the same
+    answer — confirmed via the raw evidence source_ids that these are two DIFFERENT
+    real PersonUIDs (7334 and 8395) who happen to share a CanonicalName, not a
+    duplicate-row bug. With nothing distinguishing them, it read as broken rendering
+    rather than two real associates. Only a genuine collision within the same result
+    set gets a disambiguator; an ordinary list of distinct names is untouched."""
+    import rag_agent.orchestrator as orch
+
+    rows = [
+        {"person_id": "7334", "name_en": "Suma Nadkarni", "hops": 1, "gang": "Community 6"},
+        {"person_id": "8395", "name_en": "Suma Nadkarni", "hops": 1, "gang": "Community 6"},
+        {"person_id": "151", "name_en": "Nithin Madar", "hops": 1, "gang": "Community 6"},
+    ]
+    evidence = [orch._network_evidence(r, rows) for r in rows]
+
+    assert "7334" in evidence[0].content and "8395" in evidence[1].content
+    assert evidence[0].content != evidence[1].content
+    assert "person" not in evidence[2].content.lower()  # untouched: no collision here
+
+
 def test_a_bare_pronoun_after_case_people_asks_which_of_the_named_candidates():
     """CASE_PEOPLE lists every accused on a case but deliberately leaves active_person
     unset when there's more than one (naming one would be a guess). A pronoun follow-up

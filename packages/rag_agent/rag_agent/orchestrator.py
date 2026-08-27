@@ -336,7 +336,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
     elif intent == "PERSON_NETWORK" and pid:
         rows = graph_agent.person_network(pid, role)
         state.graph_query_results += rows
-        out += [_network_evidence(r) for r in rows]
+        out += [_network_evidence(r, rows) for r in rows]
         _trace(state, "Cypher Agent", f"{len(rows)} associate(s) within policy depth", t0)
 
     elif intent == "ALIAS_CHECK" and pid:
@@ -826,16 +826,26 @@ def _fir_evidence(r: dict) -> EvidenceItem:
         confidence=0.95)
 
 
-def _network_evidence(r: dict) -> EvidenceItem:
+def _network_evidence(r: dict, siblings: list[dict] | None = None) -> EvidenceItem:
     # CLAUDE.md §4: the ER records no gang, so the derived Louvain grouping is
     # labelled honestly as what it is — "network community 6", never "gang" — the
     # same discipline copilot/brief.py already follows. This rendering was the one
     # place still printing the literal word "gang" in front of an officer.
+    name = r["name_en"]
+    if siblings and sum(1 for s in siblings if s["name_en"] == name) > 1:
+        # Two DIFFERENT real PersonUIDs can share a CanonicalName — a genuine
+        # namesake, the same possibility BUG-026 documented elsewhere for
+        # canonical-vs-as-filed drift. Found live: "Suma Nadkarni" listed twice in
+        # one associates answer with identical text and nothing to indicate they
+        # are two different people, reading as a rendering bug rather than two
+        # real associates. Disambiguated only when this list actually has a
+        # collision — every other list is untouched.
+        name = f"{name} (person {r['person_id']})"
     return EvidenceItem(
         evidence_id=f"assoc:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
         source_id=str(r["person_id"]),
         source_query="MATCH (p)-[:CO_ACCUSED_WITH*]-(o)",
-        content=(f"{r['name_en']} is a known associate ({r['hops']} hop(s) away"
+        content=(f"{name} is a known associate ({r['hops']} hop(s) away"
                  # r['gang'] is already formatted "Community 47" (data/gds.py); lower-
                  # cased to match the "network community 6" phrasing used everywhere
                  # else this same derived grouping is shown (copilot/brief.py's leads).
