@@ -199,6 +199,7 @@ def test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_exp
         ("PERSON_HISTORY", "previous cases", "CRIME_SEARCH", "cases"),
         ("FINANCIAL", "account", "CRIME_SEARCH", "count"),
         ("SIMILAR_CASES", "matching cases", "CRIME_SEARCH", "cases"),
+        ("SIMILAR_CASES", "related cases", "CRIME_SEARCH", "cases"),
         ("CRIME_SEARCH", "firs", "FIR_LOOKUP", "fir"),
     }
     found = set()
@@ -292,22 +293,61 @@ def test_citations_are_1_based_and_aligned_to_evidence():
 # into LLMUnavailable / {} so the deterministic paths take over, because the one
 # thing this engine may never do is fail a turn just because the LLM blinked.
 
+class _FakeQuickML:
+    """Stands in for app.quick_ml() — the real SDK class (zcatalyst_sdk.quick_ml.QuickML)
+    is AppSail-only and not installed in this dev/test environment."""
+    def __init__(self, predict_fn):
+        self._predict_fn = predict_fn
+
+    def predict(self, end_point_key, input_data):
+        return self._predict_fn(end_point_key, input_data)
+
+
+def _fake_app(predict_fn):
+    class _App:
+        def quick_ml(self_):
+            return _FakeQuickML(predict_fn)
+    return _App()
+
+
+def test_a_successful_predict_call_is_parsed_and_marks_the_llm_available(monkeypatch):
+    """The real predict() response shape (the generic ML-pipeline one documented for
+    QuickML) is {"status": "success", "result": [...]}, not an OpenAI chat-completion
+    shape — this is what actually gets parsed now, not what the old raw-HTTP version
+    assumed."""
+    from rag_agent import llm
+    import data.ds as ds_module
+
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
+    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    monkeypatch.setattr(llm, "_ever_succeeded", False)
+
+    def fake_predict(key, data):
+        assert key == "a-key"
+        assert data == {llm.PROMPT_FIELD: "hello"}
+        return {"status": "success", "result": ["a fluent answer"]}
+
+    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(fake_predict))
+    assert llm.generate("hello") == "a fluent answer"
+    assert llm._ever_succeeded is True
+    assert llm.status() == f"quickml ({llm.MODEL})"
+
+
 def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     from rag_agent import llm
+    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
-    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
     monkeypatch.setattr(llm, "_degraded_reason", "")
-    monkeypatch.setattr(llm, "_token", lambda: "a-token")
 
     class Boom(Exception):
         pass
 
-    def explode(*_a, **_k):
+    def explode(_key, _data):
         raise Boom("429 RESOURCE_EXHAUSTED")
 
-    monkeypatch.setattr(llm.urllib.request, "urlopen", explode)
+    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(explode))
     assert llm.available() is True             # configured, nothing known bad yet
 
     with pytest.raises(llm.LLMUnavailable):    # NOT the raw provider error
@@ -318,139 +358,71 @@ def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     assert llm.generate_json("hello", {}) == {}   # returns {}, never raises
 
 
-def test_endpoint_key_header_sent_only_when_configured(monkeypatch):
-    """BUG-022: QuickML's sibling 'pipeline endpoints' REST surface documents a required
-    per-endpoint X-QUICKML-ENDPOINT-KEY header. It cannot be obtained or verified from this
-    environment (console-only), so it must stay optional — sent when someone sets it, absent
-    otherwise, never fabricated."""
+def test_endpoint_key_is_passed_to_predict_only_when_configured(monkeypatch):
+    """BUG-022: the key cannot be obtained or verified from this environment
+    (console-only), so it must stay optional — passed through when someone sets it,
+    never fabricated. Verified against the real SDK's predict(end_point_key, ...)
+    signature, not a guessed HTTP header."""
     from rag_agent import llm
+    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
-    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    monkeypatch.setattr(llm, "_token", lambda: "a-token")
-
     captured = {}
 
-    class FakeResp:
-        def __enter__(self):
-            return self
-        def __exit__(self, *a):
-            return False
-        def read(self):
-            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    def fake_predict(key, data):
+        captured["key"] = key
+        return {"status": "success", "result": ["ok"]}
 
-    def fake_urlopen(req, timeout):
-        captured["headers"] = dict(req.headers)
-        return FakeResp()
-
-    monkeypatch.setattr(llm.urllib.request, "urlopen", fake_urlopen)
-    monkeypatch.setattr(json, "load", lambda f: {"choices": [{"message": {"content": "ok"}}]})
-
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "")
-    llm.generate("hello")
-    assert "X-quickml-endpoint-key" not in captured["headers"]
+    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(fake_predict))
 
     monkeypatch.setattr(llm, "ENDPOINT_KEY", "secret-from-console")
     llm.generate("hello")
-    assert captured["headers"].get("X-quickml-endpoint-key") == "secret-from-console"
+    assert captured["key"] == "secret-from-console"
 
 
 def test_an_unconfigured_llm_is_reported_honestly(monkeypatch):
-    """The deployed service authenticates as itself inside AppSail, so "no LLM" locally is
-    the normal case, not an error. It must say so rather than name a model it cannot reach."""
+    """"No LLM" (no published endpoint key) is the normal case everywhere but a fully
+    set-up AppSail deployment — it must say so rather than name a model it cannot reach."""
     from rag_agent import llm
 
-    monkeypatch.setattr(llm, "ENDPOINT", "")
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "")
     assert llm.available() is False
     assert "not configured" in llm.status()
     assert llm.generate_json("hello", {}) == {}
 
 
 def test_no_catalyst_credential_means_no_llm(monkeypatch):
-    """QuickML is only reachable with the app's own Catalyst token. Without one — which is
-    every environment that is not AppSail — the engine runs deterministically."""
+    """QuickML is only reachable with the app's own Catalyst token, resolved entirely
+    inside app.quick_ml().predict() by the SDK's AuthorizedHttpClient. Without a real
+    Catalyst context — every environment that is not AppSail — that call raises, and
+    the engine must run deterministically rather than propagate it."""
     from rag_agent import llm
+    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
-    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    monkeypatch.setattr(llm, "_token", lambda: None)
+
+    def no_credential(_app=None):
+        raise RuntimeError("no Catalyst credential — QuickML is only reachable in AppSail")
+    monkeypatch.setattr(ds_module, "catalyst_app", no_credential)
 
     with pytest.raises(llm.LLMUnavailable):
         llm.generate("hello")
 
 
-# --- BUG (QuickML unreachable): _token() called a method that never existed --------
+# --- QuickML invocation contract corrected against the real SDK --------------------
 #
-# Verified live: /health reported "quickml (glm-4.7-flash)" while every answer was
-# extractive. The actual cause was `catalyst_app()._app._credential.get_token()`:
-# `zcatalyst_sdk.initialize()` returns the CatalystApp object DIRECTLY (there is no
-# `._app` wrapper), and Credential subclasses expose `.token()`, never `.get_token()`
-# — confirmed by extracting the published zcatalyst-sdk 1.4.0 wheel and reading
-# credentials.py / catalyst_app.py directly, then round-tripping the fixed logic
-# against the real installed package with simulated AppSail request headers
-# (X-ZC-Admin-Cred-Token etc., per zcatalyst_sdk._constants.CredentialHeader). The old
-# code raised AttributeError on the first attribute lookup, every single call, in
-# every environment — this was never specific to being unreachable "in AppSail"; the
-# LLM had never actually been called successfully.
-#
-# Skipped where the SDK isn't installed (by design — see llm.py's own "Absent
-# everywhere else" and the test above). Run it anywhere the real dependency is present,
-# including inside the deployed image, to catch a regression against the actual
-# credential contract rather than a hand-rolled stand-in for it.
-
-class _FakeAppSailRequest:
-    def __init__(self, headers):
-        self.headers = headers
-
-
-def _fake_appsail_app(zcatalyst_sdk):
-    """A CatalystApp initialized exactly the way AppSail's middleware does it —
-    real SDK classes, simulated gateway headers."""
-    headers = {
-        "X-ZC-ProjectId": "52852000000013048",
-        "X-ZC-Project-Domain": "veritas-60077763394.development.catalystserverless.in",
-        "X-ZC-Project-Key": "k",
-        "X-ZC-Environment": "Development",
-        "X-ZC-PROJECT-SECRET-KEY": "s",
-        "X-ZC-Admin-Cred-Type": "token",
-        "X-ZC-Admin-Cred-Token": "REAL-ADMIN-TOKEN",
-        "X-ZC-User-Cred-Type": "token",
-        "X-ZC-User-Cred-Token": "REAL-USER-TOKEN",
-    }
-    return zcatalyst_sdk.initialize(name=f"test-{id(headers)}", req=_FakeAppSailRequest(headers))
-
-
-def test_the_old_credential_path_never_existed_on_the_real_sdk():
-    """Documents the actual defect against the real classes, not a guess about them.
-
-    A function-scoped import: pytest.importorskip must never sit at module level in
-    this file — doing so once already skipped collection of every test below it, all
-    93 of them, silently. That mistake is worth naming so it is not repeated: a skip
-    reason belongs to the one test that needs it, not to everything textually after it.
-    """
-    zcatalyst_sdk = pytest.importorskip("zcatalyst_sdk", reason="AppSail-only dependency")
-    app = _fake_appsail_app(zcatalyst_sdk)
-    assert not hasattr(app, "_app")
-    with pytest.raises(AttributeError):
-        app._app._credential.get_token()  # noqa: SLF001 — reproducing the old bug on purpose
-
-
-def test_token_reads_the_admin_credential_the_way_the_sdks_own_http_client_does(monkeypatch):
-    """The fixed _token(): same credential.token() call AuthorizedHttpClient makes
-    before every Data Store / Cache / graph request, picking the admin scope Data
-    Store operations already run under."""
-    zcatalyst_sdk = pytest.importorskip("zcatalyst_sdk", reason="AppSail-only dependency")
-    from rag_agent import llm
-
-    app = _fake_appsail_app(zcatalyst_sdk)
-    import data.ds as ds_module
-    monkeypatch.setattr(ds_module, "catalyst_app", lambda: app)
-
-    token = llm._token()
-    assert token == "REAL-ADMIN-TOKEN"
-    assert token != "REAL-USER-TOKEN"      # the app authenticates as itself, not as an officer
+# Every prior version of llm.py called a hand-built URL with a raw urllib POST and a
+# guessed OpenAI-shaped body, including a manually-replicated `_token()` standing in
+# for auth. Reading the real installed zcatalyst-sdk (1.4.0) directly
+# (`zcatalyst_sdk/quick_ml.py`) showed the SDK exposes exactly one QuickML method —
+# `app.quick_ml().predict(end_point_key, input_data)` — whose underlying
+# AuthorizedHttpClient already does the admin-credential switch internally, the same
+# call `_token()` used to replicate by hand. Delegating to the real method (see
+# `_predict()`) makes that whole replicated-auth bug class structurally impossible
+# rather than merely fixed — there is no hand-rolled credential path left to get
+# wrong. `test_no_catalyst_credential_means_no_llm` above covers the "no real
+# Catalyst context" case at this new call site.
 
 
 # --- Exact FIR lookup: the number on the paper FIR --------------------------
@@ -800,13 +772,16 @@ def test_a_refusal_already_decided_by_orchestrate_does_not_still_run_a_generic_s
 
 def test_a_missing_credential_degrades_the_reported_status(monkeypatch):
     from rag_agent import llm
+    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
-    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
     monkeypatch.setattr(llm, "_degraded_reason", "")
     monkeypatch.setattr(llm, "_ever_succeeded", False)
-    monkeypatch.setattr(llm, "_token", lambda: None)
+
+    def no_credential():
+        raise RuntimeError("no Catalyst credential — QuickML is only reachable in AppSail")
+    monkeypatch.setattr(ds_module, "catalyst_app", no_credential)
 
     with pytest.raises(llm.LLMUnavailable):
         llm.generate("hello")
@@ -818,8 +793,7 @@ def test_a_missing_credential_degrades_the_reported_status(monkeypatch):
 def test_a_configured_but_uncontacted_endpoint_is_not_reported_as_serving(monkeypatch):
     from rag_agent import llm
 
-    monkeypatch.setattr(llm, "ENDPOINT", "https://quickml.invalid/chat")
-    monkeypatch.setenv("CATALYST_PROJECT_ID", "52852000000013048")
+    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
     monkeypatch.setattr(llm, "_ever_succeeded", False)
 

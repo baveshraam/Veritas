@@ -521,6 +521,17 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             # the incident scatter under the polygons — a hull with no points beneath
             # it is an assertion, not a hotspot
             state.sql_query_results += sql_agent.fir_points(dc)
+            # No "sample" concept here (a hotspot map is exhaustive over the
+            # district), but the operation+district still need recording so a bare
+            # "and Mysuru?" follow-up (semantic_interpreter._REPEAT_CUE_BARE_RE)
+            # has a prior operation to repeat — found live: it silently fell
+            # through to UNKNOWN without this, since result_context stayed {}.
+            from data.districts import canonical_name
+            state.result_context = {
+                "operation": "HOTSPOT", "total_matched": None, "shown": len(polys),
+                "is_sample": False, "shown_ids": [],
+                "constraints": {"district": canonical_name(dc)},
+            }
             _trace(state, "Prediction Agent (hotspots)",
                    f"{len(polys)} cluster(s) over {len(state.sql_query_results)} incidents", t0)
 
@@ -530,6 +541,12 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             fc, ev = prediction_agent.forecast(dc)
             state.prediction_results["forecast_crime"] = fc
             out += ev
+            from data.districts import canonical_name
+            state.result_context = {
+                "operation": "FORECAST", "total_matched": None, "shown": len(fc.series),
+                "is_sample": False, "shown_ids": [],
+                "constraints": {"district": canonical_name(dc)},
+            }
             _trace(state, "Prediction Agent (forecast)",
                    f"Prophet+MinT, {len(fc.series)} day(s)", t0)
 

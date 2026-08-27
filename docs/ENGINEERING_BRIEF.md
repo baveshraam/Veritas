@@ -388,21 +388,61 @@ test honestly — noted as unverified rather than assumed fine).
 
 ## 12. Resource constraints — the semantic interpreter, deployed and running in degraded mode
 
-**QuickML (the LLM) is currently unreachable in production.** `BUG-022`,
-`packages/rag_agent/rag_agent/llm.py:44-55`: the endpoint key needed for QuickML's
-invoke contract has never been obtainable through the Admin API this project
-provisions with — confirmed as still true as of the last direct check
-(`CLAUDE.md` v14). **The semantic-interpreter layer (§5.1 migration, now complete and
-merged) runs in fully-degraded mode: it calls `llm.py:generate_json()` and catches
-`LLMUnavailable`, falling back to deterministic `intents.classify()` on any failure.**
-When `QUICKML_ENDPOINT_KEY` is obtained, the LLM path activates with zero code change.
+**QuickML (the LLM) is currently unreachable in production — root-caused precisely
+this pass, not re-asserted from a prior check.** Two separate, now-resolved
+questions:
 
-The architecture in §6 was correct; it is now live. `rag_agent/semantic_interpreter.py`
-(`interpret()` function, `SemanticRequest` model) deployed to `node_orchestrate`
-(updated to call the interpreter, no downstream changes). The 30 current intents remain
-the compatibility layer, valid values for the `operation` field. All 202+ tests pass
-(27 new adversarial conversation tests + full regression suite). End-to-end verified:
-deterministic path works live as designed; LLM path waits for the endpoint key.
+1. **Is `GLM-4.7-Flash` real, and does it support what §6 needs (conversation
+   context, tool calling)?** Yes — checked directly against current Catalyst docs
+   (`docs.catalyst.zoho.com/en/quickml/help/available-models/glm-4.7-flash/`):
+   "Conversation Mode" (prior messages retained as context) and tool/function
+   calling are both documented, tool calling "Supported on GLM 4.7 Flash only."
+   This is genuinely the right model for a planning layer, if it were reachable.
+2. **What was actually blocking `llm.py`, precisely?** More than a missing key.
+   `pip install zcatalyst-sdk==1.4.0` and reading `zcatalyst_sdk/quick_ml.py`
+   directly (not assumed from marketing docs, which describe Node/Java-only
+   `askLlm()`/`converseWithLlm()` methods that do not exist in the installed Python
+   SDK) shows the **only** QuickML method the Python SDK exposes is
+   `app.quick_ml().predict(end_point_key, input_data)` — a generic ML-pipeline
+   call: `POST {base}/quickml/v1/project/{id}/endpoints/predict`, header
+   `X-QUICKML-ENDPOINT-KEY`, body `{"data": {flat str/int dict}}`. Every prior
+   version of `llm.py` called a **hand-built URL** with a **raw urllib POST** and a
+   **guessed OpenAI chat-completions body** (`{"model","messages","temperature"}`)
+   — a shape that does not match the real SDK contract at all, independent of
+   whether a key existed. `llm.py` is rewritten this pass to call the real SDK
+   method (`_predict()`); the base URL/project id/auth are now resolved by the
+   SDK's own `AuthorizedHttpClient` (the app's admin credential, the same
+   mechanism every Data Store/Cache call already uses) instead of being guessed —
+   `QUICKML_ENDPOINT` is gone, it was never a real requirement.
+   - **What remains an honest guess**: the exact `input_data` key name(s) an LLM
+     Serving endpoint expects (`PROMPT_FIELD`, default `"prompt"`) — the generic
+     ML-pipeline docs show arbitrary column-name keys, and GLM-4.7-Flash's own
+     page states "Input type: Text only" without naming the field. Unverifiable
+     without a live `endpoint_key`, which does not exist in this environment.
+   - **The `endpoint_key` itself remains obtainable only through the console**:
+     Generative AI → LLM Serving → a model's Model Details → API Details popup.
+     Confirmed by direct probing this pass — `GET .../appsail/get-signature`-style
+     listing/creation paths under both `quickml/v1/...` and `baas/v1/.../quickml`
+     all 404 — there is no Admin API equivalent, the same conclusion every prior
+     check reached, now backed by an actual attempt rather than an assumption.
+     Re-confirmed directly against the live AppSail app's own `configuration`
+     object: `QUICKML_ENDPOINT_KEY` is absent entirely (2026-08-27).
+   - **What this means for the officer**: obtaining a real key requires a human
+     with console access to publish an LLM Serving endpoint for GLM-4.7-Flash and
+     copy its key — that action cannot be performed or verified from this
+     environment, no matter how the integration code is written.
+
+**The semantic-interpreter layer (§5.1 migration) runs in fully-degraded mode**: it
+calls `llm.py:generate_json()` and catches `LLMUnavailable`, falling back to
+deterministic `intents.classify()`/the structural extractors in §5 on any failure.
+When `QUICKML_ENDPOINT_KEY` is set, the corrected LLM path activates with zero
+further code change — and now, for the first time, activates against a request
+shape that actually matches what the SDK sends.
+
+The architecture in §6 was correct; it is live via the deterministic path.
+`rag_agent/semantic_interpreter.py` (`interpret()` function, `SemanticRequest`
+model) deployed to `node_orchestrate`. The 30 current intents remain the
+compatibility layer, valid values for the `operation` field.
 
 ## 13. Failure behavior
 
@@ -483,6 +523,84 @@ Not keyword tests. Representative of what an officer would actually say, and wha
 
 ## 16. Changelog (append here; do not create a new file)
 
+- **2026-08-27 — final architectural push: QuickML root-caused precisely, and a
+  genuine adversarial pass on the compositional layer.** Not a new architecture —
+  the requested LLM-driven planning layer remains unbuildable-and-verifiable this
+  pass (see the QuickML finding below); the real, live-verified work is a
+  root-cause fix to the QuickML integration itself and five real conversational
+  gaps found by substantially expanding `scripts/adversarial_eval.py` (15 → 40
+  scenarios, all 15 dimension-tagged categories from the milestone's own
+  acceptance list, latency measured per turn) and actually running it, not just
+  writing it.
+  - **QuickML — precisely diagnosed, not re-asserted.** See §12 for the full
+    finding: the Python SDK (`zcatalyst-sdk` 1.4.0, read directly, not assumed
+    from Node/Java-only docs) exposes exactly one QuickML method,
+    `app.quick_ml().predict(endpoint_key, input_data)` — a generic ML-pipeline
+    call, not the OpenAI-chat-shaped request every prior version of `llm.py`
+    built by hand against a guessed URL. `llm.py` rewritten to call the real SDK
+    method; `QUICKML_ENDPOINT` deleted (the SDK resolves routing itself). The
+    `endpoint_key` remains obtainable only through the console (confirmed by
+    directly probing plausible Admin API listing/creation paths, all 404) — a
+    human action this environment cannot perform, independent of how correct the
+    integration code is. Not faked: `available()`/`status()` still report
+    degraded/not-configured honestly, and every test exercising this was
+    rewritten against the real call shape (`_predict`), not left asserting a
+    dead `_token()`/`urllib` path.
+  - **Five real gaps found live, fixed, re-verified — each a structural
+    widening of a mechanism already shipped, not a new phrase-specific
+    pattern**, per this pass's own explicit instruction not to grow a regex
+    library:
+    1. **`NOT_INFERABLE` (the "never name a suspect" safety boundary) missed
+       "Who do you think committed X?"** — literal two-word adjacency
+       ("who committed") broke on "do you think" sitting between them. Widened
+       to tolerate up to 4 filler words between "who" and the verb phrase.
+       Found this was answering a guilt-attribution question with a real,
+       confident record — the single most serious finding this pass.
+    2. **"Show me related cases" / "Does he go by any other name?" scored
+       `CRIME_SEARCH`/`UNKNOWN`** instead of `SIMILAR_CASES`/`ALIAS_CHECK` —
+       missing synonyms ("related cases", "other name") in the existing keyword
+       tuples, the same class of vocabulary gap "matching cases" already covers
+       for `SIMILAR_CASES`.
+    3. **"And Mysuru?" (a bare two-word constraint-change) fell to `UNKNOWN`**
+       after a `HOTSPOT`/`FORECAST` turn — two compounding causes: the
+       constraint-change regex only recognized "what about"/"and for"/"and in",
+       never a bare "and X?"; and `HOTSPOT`/`FORECAST` never populated
+       `result_context` at all, so even a matching regex had no prior operation
+       to read. Fixed both — a new whole-query-anchored `_REPEAT_CUE_BARE_RE`
+       (only fires when the bare form names a real extractable constraint, so
+       "And then?" correctly falls through untouched), and `result_context`
+       population added to both producers.
+    4. **A named subject with no operation verb — "Tell me about Soom Nadkarni",
+       "I meant Usha Naika specifically" — reached `UNKNOWN` and refused**, even
+       with a specific, resolved person right there. The same defaulting
+       principle already built for a bare ordinal/"other" reference
+       (`_default_operation_for_subject`) extended to an explicitly named
+       subject with nothing else asked.
+    - **Found and corrected in the eval harness itself, not the product**: the
+      first run of the expanded battery showed a case failing to "stay open"
+      across turns — traced to `scripts/adversarial_eval.py`'s `run_local` never
+      re-reading `SessionFocus` between turns the way `apps/api`'s real `/chat`
+      endpoint does. Worth recording precisely because it demonstrates why this
+      pass verified findings against the real wiring before treating a failure
+      as a product bug — two of the seven initial "failures" were this one
+      harness gap, not two separate product defects.
+    - **After all five fixes: 32/32 non-Kannada scenarios pass locally against
+      the real dataset** (up from 25/32 on the first honest run); Kannada
+      scenarios verified live only, per §10's own note on local NLLB load cost.
+  - **Three hero investigations identified from the existing dataset** (not
+    regenerated — `scripts/find_hero_investigations.py`, ranked by prior-case
+    count + real co-offending network size + real transaction count): Soom
+    Nadkarni (person 877 — 196 priors, 63-person network, community 28, 6
+    transactions, FIR 100050512202300008 — the same identity this document's
+    BUG-026 finding already named for its romanisation drift), Chetan Hegde
+    (person 1626 — 62 cases, 34 associates, community 21, FIR
+    100121202202300022), Yogesh Nadgouda (person 99 — 72 cases, 6 associates, 4
+    transactions, community 65, FIR 100050513202300003) — each rich enough to
+    walk `PERSON_HISTORY → PERSON_NETWORK → FINANCIAL → RISK → TIMELINE` with
+    real, non-trivial evidence at every step.
+  - **Test suite**: 492 collected (5 new — the NOT_INFERABLE/vocabulary/bare-
+    constraint-change/explicit-name-default regressions), 490 passed, 2
+    pre-existing failures unrelated (unchanged from prior passes).
 - **2026-08-27 — compositional semantic layer milestone.** The next slice of the §5.1
   migration, per its own "future phases" note: §5.2 (generic reference resolution),
   §5.3 (result-set awareness), a new bounded deterministic multi-step composition

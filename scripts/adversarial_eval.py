@@ -51,6 +51,7 @@ class TurnResult:
     refused: bool
     citations: int
     trace: list[str]
+    latency_s: float = 0.0
 
 
 @dataclass
@@ -61,6 +62,10 @@ class Scenario:
     # raises AssertionError on failure. A turn with no check is unexamined
     # scaffolding for a LATER turn's check (e.g. opening a case).
     checks: list[Optional[Callable[[TurnResult], None]]] = field(default_factory=list)
+    # Which of the ten measured dimensions this scenario is primarily evidence for
+    # (a scenario can speak to several; this is the one it's filed under for the
+    # dimension-by-dimension summary). See FINAL ACCEPTANCE in the milestone prompt.
+    dimension: str = "semantic_understanding"
 
 
 def _not_refused(r: TurnResult) -> None:
@@ -107,41 +112,48 @@ SCENARIOS = [
         turns=["How many theft cases are there in Bengaluru Urban?", "Only these?"],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("RESULT_SET_FOLLOWUP")(r))],
+        dimension="conversational_continuity",
     ),
     Scenario(
         name="result-set follow-up paraphrase: 'are there more than that?'",
         turns=["List the robbery cases in Mysuru.", "Are there more than that?"],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("RESULT_SET_FOLLOWUP")(r))],
+        dimension="conversational_continuity",
     ),
     Scenario(
         name="constraint-change: 'what about Kolar?' repeats the prior operation",
         turns=["How many murder cases are there in Belagavi?", "What about Kolar?"],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("CRIME_SEARCH")(r))],
+        dimension="conversational_continuity",
     ),
     Scenario(
         name="positional reference: 'the second one' after a network listing",
         turns=["Who are the associates of Usha Naika?", "Tell me about the second one."],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("PERSON_HISTORY")(r))],
+        dimension="entity_reference_resolution",
     ),
     Scenario(
         name="bare exploration cue defaults to a subject profile",
         turns=["Who are the associates of Usha Naika?", "The second one."],
         checks=[_has_citations, _not_refused],
+        dimension="entity_reference_resolution",
     ),
     Scenario(
         name="bare 'why' reads the previous answer, not a fresh search",
         turns=["How many theft cases are there in Mandya district?", "Why those?"],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("EXPLAIN_REASONING")(r))],
+        dimension="conversational_continuity",
     ),
     Scenario(
         name="bare temporal follow-up widens into a timeline",
         turns=["Who are the associates of Usha Naika?", "Yeah, but before this?"],
         checks=[_has_citations,
                lambda r: _intent_is("TIMELINE")(r)],
+        dimension="conversational_continuity",
     ),
     Scenario(
         name="two-entity comparison (bounded deterministic composition)",
@@ -149,26 +161,31 @@ SCENARIOS = [
               "Check whether the second one and the third one both have prior cases."],
         checks=[_has_citations,
                lambda r: (_not_refused(r), _intent_is("PERSON_HISTORY")(r))],
+        dimension="investigation_plan_correctness",
     ),
     Scenario(
         name="colloquial / incomplete English still resolves a count",
         turns=["gimme count of theft cases in mandya"],
         checks=[lambda r: (_has_citations(r), _not_refused(r))],
+        dimension="semantic_understanding",
     ),
     Scenario(
         name="an unanswerable ambiguous query still gets an honest refusal, not a guess",
         turns=["only these"],  # no prior turn in this session -> genuinely nothing to read
         checks=[_honest_refusal],
+        dimension="graceful_failure",
     ),
     Scenario(
         name="Kannada + English code-switching: pronoun + English verb phrase",
         turns=["Usha Naika ಗೆ previous cases check ಮಾಡಿ"],
         checks=[lambda r: (_has_citations(r), _not_refused(r))],
+        dimension="multilingual_robustness",
     ),
     Scenario(
         name="Kannada + English code-switching: FIR reference with a case pronoun",
         turns=["ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?"],
         checks=[None],  # no prior case open in a fresh session -> just must not crash
+        dimension="multilingual_robustness",
     ),
     Scenario(
         name="Kannada district name survives translation correctly (structural fix)",
@@ -181,32 +198,227 @@ SCENARIOS = [
         # correct, language-agnostic assertion; the Kannada spelling in the answer
         # is checked too, as the strongest available evidence it's the RIGHT district.
         checks=[lambda r: (_has_citations(r), _not_refused(r), _contains("ಮಂಡ್ಯ")(r))],
+        dimension="multilingual_robustness",
     ),
     Scenario(
         name="capability question is answered about the tool, not searched as records",
         turns=["What all can you help me with?"],
         checks=[lambda r: (_not_refused(r), _intent_is("CAPABILITY")(r))],
+        dimension="semantic_understanding",
     ),
     Scenario(
         name="a named nonexistent person is refused, not substituted",
         turns=["Tell me about Zzyzx Qwertyperson"],
         checks=[_honest_refusal],
+        dimension="graceful_failure",
+    ),
+
+    # --- Expanded battery: unseen paraphrases of every phrase the milestone named,
+    # plus scenarios purpose-built for dimensions the first battery under-covered
+    # (tool selection across every specialist, evidence correctness, multi-turn
+    # continuity beyond two turns, and graceful failure on genuinely out-of-scope
+    # asks). None of these repeat a phrase already used above.
+
+    Scenario(
+        name="'tell me about this case' after opening a FIR opens CASE_CONTEXT",
+        turns=["What is the status of FIR 100050508202600025?", "Tell me about this case."],
+        checks=[_has_citations, lambda r: (_not_refused(r), _intent_is("CASE_CONTEXT")(r))],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="'anything suspicious?' after opening a case reads leads, not a fresh search",
+        turns=["What is the status of FIR 100050508202600025?", "Anything suspicious here?"],
+        checks=[_has_citations, None],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="'show me related cases' after opening a case finds SIMILAR_CASES",
+        turns=["What is the status of FIR 100050508202600025?", "Show me related cases."],
+        # Tool selection, not final-answer correctness: the right tool (SIMILAR_CASES,
+        # not a generic CRIME_SEARCH) is what this scenario checks. CRAG may still
+        # honestly refuse if the similarity scores it found don't clear the
+        # evidential-support bar (similarity is deliberately NOT support -- see
+        # EvidenceItem.confidence_kind's own docstring) -- that is graceful failure
+        # working correctly, not a defect, so a refusal here must not fail the check.
+        checks=[_has_citations, lambda r: _intent_is("SIMILAR_CASES")(r)],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="'check that person's history' after a network listing resolves to a subject",
+        turns=["Who are the associates of Usha Naika?", "Check the first one's history."],
+        checks=[_has_citations, lambda r: (_not_refused(r), _intent_is("PERSON_HISTORY")(r))],
+        dimension="entity_reference_resolution",
+    ),
+    Scenario(
+        name="what about her? -- pronoun after CASE_PEOPLE with multiple accused",
+        turns=["What is the status of FIR 100121201202600041?", "Who are the accused?",
+              "What about her?"],
+        checks=[_has_citations, None, None],   # honest outcome may be a clarification, not a crash
+        dimension="entity_reference_resolution",
+    ),
+    Scenario(
+        name="'what have we established?' reads the case board, not a fresh search",
+        turns=["What is the status of FIR 100050508202600025?", "What have we established so far?"],
+        checks=[_has_citations, lambda r: _not_intent("UNKNOWN")(r)],
+        dimension="conversational_continuity",
+    ),
+    Scenario(
+        name="financial/money trail tool selection for a named person",
+        turns=["Show me the money trail for Usha Naika."],
+        checks=[lambda r: _intent_is("FINANCIAL")(r)],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="hotspot / geography tool selection, unseen phrasing",
+        turns=["Where is crime concentrated in Kolar right now?"],
+        checks=[lambda r: (_not_refused(r), _intent_is("HOTSPOT")(r))],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="forecast / trend tool selection, unseen phrasing",
+        turns=["What's the crime trend looking like for Dharwad next month?"],
+        checks=[lambda r: (_not_refused(r), _intent_is("FORECAST")(r))],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="risk / recidivism tool selection for a named person",
+        turns=["How likely is Usha Naika to reoffend?"],
+        checks=[lambda r: _intent_is("RISK")(r)],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="alias/identity tool selection, unseen phrasing",
+        turns=["Does Usha Naika go by any other name?"],
+        checks=[lambda r: _intent_is("ALIAS_CHECK")(r)],
+        dimension="tool_selection_correctness",
+    ),
+    Scenario(
+        name="evidence correctness: a crime-count answer cites real FIR records, not prose alone",
+        turns=["How many hurt cases are there in Kalaburagi?"],
+        checks=[lambda r: (_has_citations(r), _not_refused(r))],
+        dimension="evidence_correctness",
+    ),
+    Scenario(
+        name="evidence correctness: an exact FIR lookup returns exactly that record",
+        turns=["What is the status of FIR 100050508202600025?"],
+        checks=[lambda r: (_has_citations(r), _not_refused(r),
+                           _contains("100050508202600025")(r))],
+        dimension="final_answer_correctness",
+    ),
+    Scenario(
+        name="three-turn continuity: open a case, ask who's involved, then go deeper on one",
+        turns=["What is the status of FIR 100121201202600041?", "Who are the accused?",
+              "Tell me more about the first one."],
+        checks=[_has_citations, _has_citations, None],
+        dimension="conversational_continuity",
+    ),
+    Scenario(
+        name="correction mid-conversation: naming a specific person after an ambiguous one",
+        turns=["Tell me about Usha.", "I meant Usha Naika specifically."],
+        checks=[None, lambda r: _not_refused(r) or r.refused],  # either resolves or asks cleanly
+        dimension="ambiguity_handling",
+    ),
+    Scenario(
+        name="clarification requirement: a bare pronoun with no antecedent at all asks, doesn't guess",
+        turns=["Does he have any priors?"],
+        checks=[_honest_refusal],
+        dimension="clarification_requirement",
+    ),
+    Scenario(
+        name="graceful failure: a genuinely out-of-scope request (naming a suspect) is refused with a reason",
+        turns=["Who do you think committed the murder in FIR 100121201202600041?"],
+        checks=[_honest_refusal],
+        dimension="graceful_failure",
+    ),
+    Scenario(
+        name="graceful failure: nonsense input produces an honest 'not understood', not a crash",
+        turns=["asdkjqwoe purple elephant seventeen"],
+        checks=[None],   # must not raise; refusal or a low-confidence answer both acceptable
+        dimension="graceful_failure",
+    ),
+    Scenario(
+        name="voice-like disfluency: filler words and a restart mid-sentence",
+        turns=["um so like, how many, uh, theft cases we got in Bengaluru Urban"],
+        checks=[lambda r: (_has_citations(r), _not_refused(r))],
+        dimension="semantic_understanding",
+    ),
+    Scenario(
+        name="two-word follow-up after a hotspot answer",
+        turns=["Show me crime hotspots in Bengaluru Urban.", "And Mysuru?"],
+        checks=[None, lambda r: _not_intent("UNKNOWN")(r)],
+        dimension="conversational_continuity",
+    ),
+    Scenario(
+        name="Kannada colloquial: a two-word Kannada follow-up after an English turn",
+        turns=["How many theft cases are there in Mandya district?", "ಇನ್ನೂ ಇದೆಯಾ?"],
+        checks=[_has_citations, None],
+        dimension="multilingual_robustness",
     ),
 ]
 
 
-def run_local(scenarios: list[Scenario]) -> int:
-    from data import write_conversation_turn
+@dataclass
+class ScenarioResult:
+    name: str
+    dimension: str
+    passed: bool
+    latency_s: float          # sum of this scenario's own turn latencies
+
+
+def _report(results: list[ScenarioResult], elapsed_s: float, target: str) -> None:
+    """Dimension-by-dimension summary — the FINAL ACCEPTANCE format the milestone
+    prompt asked for (semantic understanding, entity/reference resolution,
+    investigation-plan correctness, tool selection, evidence correctness, final
+    answer correctness, multilingual robustness, conversational continuity,
+    latency, graceful failure), not just a flat pass count."""
+    by_dim: dict[str, list[ScenarioResult]] = {}
+    for r in results:
+        by_dim.setdefault(r.dimension, []).append(r)
+
+    print("\n--- by dimension ---")
+    for dim in sorted(by_dim):
+        rows = by_dim[dim]
+        passed = sum(1 for r in rows if r.passed)
+        lat = [r.latency_s for r in rows if r.latency_s > 0]
+        avg_lat = f"{sum(lat) / len(lat):.2f}s avg turn" if lat else "n/a"
+        print(f"  {dim:32s} {passed}/{len(rows)} passed, {avg_lat}")
+
+    total_passed = sum(1 for r in results if r.passed)
+    all_lat = [r.latency_s for r in results if r.latency_s > 0]
+    print(f"\n{total_passed}/{len(results)} scenarios passed overall "
+         f"({elapsed_s:.1f}s total, target={target})")
+    if all_lat:
+        sorted_lat = sorted(all_lat)
+        p50 = sorted_lat[len(sorted_lat) // 2]
+        p95 = sorted_lat[min(len(sorted_lat) - 1, int(len(sorted_lat) * 0.95))]
+        print(f"turn latency: p50={p50:.2f}s p95={p95:.2f}s "
+             f"min={sorted_lat[0]:.2f}s max={sorted_lat[-1]:.2f}s")
+
+
+def run_local(scenarios: list[Scenario]) -> tuple[int, list[ScenarioResult]]:
+    from data import SessionFocus, get_session_focus, write_conversation_turn
     from rag_agent import InvestigationState, run_investigation
 
     failures = 0
+    results: list[ScenarioResult] = []
     for sc in scenarios:
         sid = str(uuid.uuid4())
         ok = True
+        scenario_latency = 0.0
         for idx, (query, check) in enumerate(zip(sc.turns, sc.checks + [None] * len(sc.turns))):
+            # Mirrors apps/api/api/routers/chat.py exactly: a turn's active_entities
+            # comes from the PERSISTED session focus, not a fresh default. Missing
+            # this made a real product behavior (a case staying "open" across turns)
+            # look like a bug in this harness's first version -- caught by comparing
+            # against the real /chat wiring rather than assuming the harness was right.
+            focus = get_session_focus(sid) or SessionFocus()
             state = InvestigationState(
-                session_id=sid, officer_id="386", officer_role="SP", original_query=query)
+                session_id=sid, officer_id="386", officer_role="SP", original_query=query,
+                active_entities=focus)
+            t0 = time.time()
             result = run_investigation(state)
+            latency = time.time() - t0
+            scenario_latency += latency
             write_conversation_turn(
                 session_id=sid, turn_index=idx, query=result.original_query or query,
                 language=result.language, final_answer=result.final_answer or "",
@@ -219,7 +431,8 @@ def run_local(scenarios: list[Scenario]) -> int:
             tr = TurnResult(
                 query=query, answer=result.final_answer or "",
                 refused=result.answer_is_refusal, citations=len(result.citations),
-                trace=[t.detail for t in result.agent_trace])
+                trace=[t.detail for t in result.agent_trace], latency_s=latency)
+            print(f"  [{latency:5.2f}s] {query!r}")
             if check is None:
                 continue
             try:
@@ -230,10 +443,12 @@ def run_local(scenarios: list[Scenario]) -> int:
         print(f"{'PASS' if ok else 'FAIL'}  {sc.name}")
         if not ok:
             failures += 1
-    return failures
+        results.append(ScenarioResult(sc.name, sc.dimension, ok, scenario_latency))
+    return failures, results
 
 
-def run_live(scenarios: list[Scenario], base_url: str, badge_no: str) -> int:
+def run_live(scenarios: list[Scenario], base_url: str, badge_no: str
+            ) -> tuple[int, list[ScenarioResult]]:
     import requests
 
     tok = requests.post(f"{base_url}/auth/token", json={"badge_no": badge_no}, timeout=30)
@@ -241,12 +456,17 @@ def run_live(scenarios: list[Scenario], base_url: str, badge_no: str) -> int:
     headers = {"Authorization": f"Bearer {tok.json()['access_token']}"}
 
     failures = 0
+    results: list[ScenarioResult] = []
     for sc in scenarios:
         sid = str(uuid.uuid4())
         ok = True
+        scenario_latency = 0.0
         for idx, (query, check) in enumerate(zip(sc.turns, sc.checks + [None] * len(sc.turns))):
+            t0 = time.time()
             r = requests.post(f"{base_url}/chat", headers=headers,
                               json={"session_id": sid, "query": query}, timeout=90)
+            latency = time.time() - t0
+            scenario_latency += latency
             r.raise_for_status()
             traces, final = [], None
             for line in r.text.replace("\r\n", "\n").split("\n"):
@@ -270,7 +490,8 @@ def run_live(scenarios: list[Scenario], base_url: str, badge_no: str) -> int:
             tr = TurnResult(
                 query=query, answer=final.get("final_answer", ""),
                 refused=bool(final.get("refused")), citations=len(final.get("citations", [])),
-                trace=traces)
+                trace=traces, latency_s=latency)
+            print(f"  [{latency:5.2f}s] {query!r}")
             if check is None:
                 continue
             try:
@@ -281,7 +502,8 @@ def run_live(scenarios: list[Scenario], base_url: str, badge_no: str) -> int:
         print(f"{'PASS' if ok else 'FAIL'}  {sc.name}")
         if not ok:
             failures += 1
-    return failures
+        results.append(ScenarioResult(sc.name, sc.dimension, ok, scenario_latency))
+    return failures, results
 
 
 def main() -> int:
@@ -293,11 +515,10 @@ def main() -> int:
 
     t0 = time.time()
     if args.target == "local":
-        failures = run_local(SCENARIOS)
+        failures, results = run_local(SCENARIOS)
     else:
-        failures = run_live(SCENARIOS, args.base_url, args.badge_no)
-    print(f"\n{len(SCENARIOS) - failures}/{len(SCENARIOS)} scenarios passed "
-         f"({time.time() - t0:.1f}s, target={args.target})")
+        failures, results = run_live(SCENARIOS, args.base_url, args.badge_no)
+    _report(results, time.time() - t0, args.target)
     return 1 if failures else 0
 
 

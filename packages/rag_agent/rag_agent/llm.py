@@ -29,30 +29,57 @@ the one signal the rest of the system already understands:
     generate_json()  returns {}             -> callers treat it as "no LLM opinion"
 
 and trips a short cooldown so an exhausted endpoint is not hammered.
+
+## The invocation contract — corrected against the real Python SDK (v1.4.0), not guessed
+
+Every prior version of this file called a hand-built URL (`QUICKML_ENDPOINT`) with a raw
+`urllib.request` POST and an OpenAI-shaped `{"model", "messages", "temperature"}` body,
+because QuickML LLM Serving's own invoke contract is not published in the reachable docs.
+That was wrong on more than the missing key: `pip install zcatalyst-sdk` and reading
+`zcatalyst_sdk/quick_ml.py` directly shows the ONLY method the Python SDK exposes for
+QuickML is:
+
+    app.quick_ml().predict(end_point_key: str, input_data: Dict[str, Union[str, int]])
+        -> POST {base}/quickml/v1/project/{project_id}/endpoints/predict
+           headers: X-QUICKML-ENDPOINT-KEY: <end_point_key>
+           body:    {"data": input_data}
+
+which is a generic ML-pipeline `predict()` call — a flat key/value dict in, a JSON dict out
+— not an OpenAI chat-completions shape, and not a `messages` array (the SDK's own type hint
+forbids nesting). Two real consequences:
+
+  1. The base URL is resolved by the SDK's own `AuthorizedHttpClient` from the project id
+     already known — `QUICKML_ENDPOINT` was never a real requirement, only a symptom of not
+     having found this. Removed.
+  2. Multi-turn conversation ("Conversation Mode" in the GLM-4.7-Flash docs) cannot be a
+     client-sent message array through this call shape; whatever mechanism it uses is
+     server-side and undocumented here. Not implemented — `generate()`/`generate_json()`
+     stay single-turn, exactly as every caller already treats them.
+
+What remains an honest guess, clearly marked as one: the exact key name(s)
+`input_data` must carry for an LLM Serving endpoint specifically (the generic ML-pipeline
+docs show arbitrary "column name" keys; GLM-4.7-Flash's own page states "Input type: Text
+only" but not the field name). `_PROMPT_FIELD` below is the inferred value — change it in
+one place, not a claim it is confirmed correct. This is unverifiable without a live
+`endpoint_key`, and there is none in this environment (see ENDPOINT_KEY below) — publishing
+one is a console-only action (Generative AI -> LLM Serving -> a model's Model Details ->
+API Details popup), with no equivalent in the Admin API this project provisions everything
+else through, confirmed by probing plausible listing/creation paths directly, not assumed.
 """
 import json
 import logging
 import os
 import time
-import urllib.error
-import urllib.request
 
 log = logging.getLogger(__name__)
 
 MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")
-ENDPOINT = os.getenv("QUICKML_ENDPOINT", "").strip()
-# QuickML's "pipeline endpoints" REST surface documents a required per-endpoint
-# X-QUICKML-ENDPOINT-KEY header (docs.catalyst.zoho.com/en/quickml/help/
-# pipeline-endpoints/); LLM Serving's own invoke contract is not published
-# anywhere this session could reach. BUG-022's live failure — PATTERN_NOT_MATCHED,
-# "Error in processing `zoho-inputstream` parameter" — is consistent with a route
-# the gateway does not recognise at all, which is what a guessed URL with no
-# endpoint key produces. The key itself lives only in the console's Model Details
-# -> API Details popup, unreachable over the Admin API this project provisions
-# with, so it cannot be obtained or verified from here. This constant exists so
-# that the day someone copies it out of the console, it takes effect with no
-# further code change — not a claim that it is confirmed correct.
+# The unique id of a PUBLISHED QuickML LLM Serving endpoint — the one thing that must come
+# from the console (see module docstring). Everything else the SDK's predict() call needs
+# (base URL, project id, auth) it resolves itself from the already-initialized CatalystApp.
 ENDPOINT_KEY = os.getenv("QUICKML_ENDPOINT_KEY", "").strip()
+# Inferred input_data key for a single text prompt — see module docstring's last paragraph.
+PROMPT_FIELD = os.getenv("VERITAS_LLM_PROMPT_FIELD", "prompt")
 TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
 
 COOLDOWN_SECONDS = 70.0
@@ -66,52 +93,10 @@ class LLMUnavailable(RuntimeError):
     """No usable LLM right now: not configured, exhausted, or the provider is failing."""
 
 
-def _token() -> str | None:
-    """The app's own Catalyst token. In AppSail the SDK context comes from the request
-    headers the API middleware captured into data.ds — a bare initialize() would fail
-    with empty headers. Absent everywhere else.
-
-    This used to read `catalyst_app()._app._credential.get_token()`, which cannot ever
-    have worked: `zcatalyst_sdk.initialize()` returns the CatalystApp object directly
-    (there is no `._app` wrapper — confirmed by reading the 1.4.0 wheel), and
-    `Credential` subclasses expose `.token()`, never `.get_token()` (that name exists
-    only on the unrelated cookie-auth `JwtTokenCredential`). Both attribute lookups
-    raised AttributeError on every call, in every environment, and the bare
-    `except Exception: return None` below turned that into a silent "no credential" —
-    which is exactly the symptom `/health` was reporting live. The LLM had never
-    actually been reached; this was never an AppSail-specific reachability problem.
-
-    The correct call is the one the SDK's own HTTP client makes on every Data Store /
-    Cache / graph request (zcatalyst_sdk._http_client.AuthorizedHttpClient.
-    _authenticate_request): `credential.token()`, dispatched by credential type. In
-    AppSail that credential is `CatalystCredential`, whose `.token()` returns
-    `(class_name, value)` rather than a bare string — `AccessTokenCredential` gives a
-    real bearer token; `TicketCredential`/`CookieCredential` do not, and there is
-    nothing this function can reuse from them.
-
-    `_switch_user('admin')` picks the same scope Data Store operations already run
-    under ("the SDK authenticates as the app itself" — no per-officer token exists to
-    call an LLM with). It is the SDK's own mechanism for this: AuthorizedHttpClient
-    calls the identical method internally before every authenticated request; there is
-    no public wrapper for a one-off manual call like this one.
-    """
-    try:
-        from data.ds import catalyst_app
-        credential = catalyst_app().credential
-        credential._switch_user("admin")  # noqa: SLF001 — see docstring
-        token = credential.token()
-
-        from zcatalyst_sdk.credentials import CatalystCredential
-        if isinstance(credential, CatalystCredential):
-            cred_type, value = token
-            return value if cred_type == "AccessTokenCredential" else None
-        return token
-    except Exception:
-        return None
-
-
 def _configured() -> bool:
-    return bool(ENDPOINT) and os.getenv("CATALYST_PROJECT_ID", "").strip() != ""
+    """A published endpoint key is the only thing predict() genuinely requires — the SDK
+    resolves project id/base URL/auth itself from the already-initialized CatalystApp."""
+    return bool(ENDPOINT_KEY)
 
 
 def available() -> bool:
@@ -134,7 +119,7 @@ def status() -> str:
     now says which one it knows.
     """
     if not _configured():
-        return "deterministic (QuickML not configured)"
+        return "deterministic (QuickML not configured — no published endpoint key)"
     if time.monotonic() < _degraded_until:
         return f"deterministic (LLM degraded: {_degraded_reason})"
     if not _ever_succeeded:
@@ -151,60 +136,69 @@ def _degrade(exc: Exception) -> LLMUnavailable:
     return LLMUnavailable(_degraded_reason)
 
 
-def _chat(messages: list[dict], temperature: float, json_mode: bool) -> str:
+def _predict(prompt: str) -> str:
+    """The one real call: app.quick_ml().predict(endpoint_key, {PROMPT_FIELD: prompt}).
+
+    Auth is handled entirely by the SDK's AuthorizedHttpClient (it switches to the admin
+    credential internally, the same way every Data Store/Cache call in this codebase
+    already authenticates) — no manual token fetch, unlike the raw-HTTP version this
+    replaced.
+    """
     global _ever_succeeded
 
-    token = _token()
-    if not token:
-        # Through _degrade(), not raised bare. Raised bare it left _degraded_until at
-        # zero, so status() went on reporting a serving model while every single call
-        # failed on this line — which is exactly what was happening in production.
-        raise _degrade(RuntimeError(
-            "no Catalyst credential — QuickML is only reachable in AppSail"))
-
-    body: dict = {"model": MODEL, "messages": messages, "temperature": temperature}
-    if json_mode:
-        body["response_format"] = {"type": "json_object"}
-
-    headers = {"Authorization": f"Zoho-oauthtoken {token}",
-               "Content-Type": "application/json"}
-    if ENDPOINT_KEY:
-        headers["X-QUICKML-ENDPOINT-KEY"] = ENDPOINT_KEY
-    req = urllib.request.Request(
-        ENDPOINT, data=json.dumps(body).encode(), method="POST", headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            payload = json.load(resp)
-    except urllib.error.HTTPError as e:
-        raise _degrade(RuntimeError(f"HTTP {e.code}: {e.read()[:200].decode(errors='replace')}"))
+        from data.ds import catalyst_app
+        result = catalyst_app().quick_ml().predict(ENDPOINT_KEY, {PROMPT_FIELD: prompt})
+    except ImportError as e:
+        raise _degrade(RuntimeError(f"zcatalyst-sdk not installed: {e}")) from e
     except Exception as e:
         raise _degrade(e) from e
 
-    try:
-        out = (payload["choices"][0]["message"]["content"] or "").strip()
-    except (KeyError, IndexError, TypeError) as e:
-        raise _degrade(RuntimeError(f"unexpected response shape: {str(payload)[:200]}")) from e
+    # Response shape is the generic ML-pipeline one documented for predict():
+    # {"status": "success", "result": [...]}. Handle a bare string or a dict with a
+    # "response"/"text" key too — genuinely unverified which one LLM Serving uses
+    # (see module docstring), so this degrades cleanly to "unexpected shape" rather
+    # than crashing on whichever guess is wrong.
+    text = None
+    if isinstance(result, dict):
+        r = result.get("result")
+        if isinstance(r, list) and r:
+            text = r[0] if isinstance(r[0], str) else json.dumps(r[0])
+        elif isinstance(r, str):
+            text = r
+        elif isinstance(result.get("response"), str):
+            text = result["response"]
+        elif isinstance(result.get("text"), str):
+            text = result["text"]
+    if text is None:
+        raise _degrade(RuntimeError(f"unexpected response shape: {str(result)[:200]}"))
     _ever_succeeded = True
-    return out
+    return text.strip()
 
 
 def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -> str:
-    """Plain text completion. Raises LLMUnavailable on any failure — callers fall back."""
+    """Plain text completion. Raises LLMUnavailable on any failure — callers fall back.
+
+    temperature is accepted for interface compatibility but not sent — predict()'s
+    input_data is a flat str/int dict scoped to whatever LLM Serving's own endpoint
+    schema defines, which is not documented anywhere this session could reach (see
+    module docstring); adding an unconfirmed extra key risks the call being rejected
+    rather than merely ignored.
+    """
     if not available():
         raise LLMUnavailable(_degraded_reason or "no LLM configured")
-    messages = ([{"role": "system", "content": system}] if system else []) + \
-               [{"role": "user", "content": prompt}]
-    return _chat(messages, temperature, json_mode=False)
+    full_prompt = f"{system}\n\n{prompt}" if system else prompt
+    return _predict(full_prompt)
 
 
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> dict:
     """Structured output. Returns {} on any failure or unparseable output — callers treat
     that as 'no LLM opinion' and use their deterministic path.
 
-    The schema is stated in the prompt rather than enforced by the provider: QuickML's
-    OpenAI-compatible surface has `json_object` but no `json_schema`, so the model is told
-    the shape and the result is validated by parsing. An unparseable answer degrades to {},
-    which is the same thing a refusal would have produced.
+    The schema is stated in the prompt rather than enforced by the provider: predict()'s
+    generic input_data shape has no response-format parameter to request JSON mode with,
+    so correctness depends entirely on the model following the instruction and on the
+    parsing below, not on a provider guarantee.
     """
     if not available():
         return {}
@@ -213,8 +207,7 @@ def generate_json(prompt: str, schema: dict, system: str | None = None) -> dict:
         + json.dumps(schema)
     )
     try:
-        raw = _chat([{"role": "system", "content": sys_prompt.strip()},
-                     {"role": "user", "content": prompt}], 0.0, json_mode=True)
+        raw = _predict(f"{sys_prompt.strip()}\n\n{prompt}")
     except LLMUnavailable:
         return {}
 

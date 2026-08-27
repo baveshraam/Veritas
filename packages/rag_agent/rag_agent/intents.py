@@ -16,7 +16,7 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "PERSON_HISTORY":    (("prior", "priors", "history", "record", "previous case",
                            "previous cases", "convicted", "arrested before", "rap sheet"),
                           "none"),
-    "ALIAS_CHECK":       (("another name", "different name", "different spelling",
+    "ALIAS_CHECK":       (("another name", "other name", "different name", "different spelling",
                            "alias", "same person", "duplicate"), "network"),
     "PERSON_NETWORK":    (("associate", "associates", "network", "gang", "accomplice",
                            "co-accused", "linked to", "connections", "who does he work"), "network"),
@@ -32,7 +32,7 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "CAUSAL":            (("why", "cause", "caused", "because", "correlat",
                            "unemployment", "literacy", "poverty"), "none"),
     "SIMILAR_CASES":     (("similar", "same modus", "same mo", "like this case",
-                           "comparable", "matching cases"), "none"),
+                           "comparable", "matching cases", "related cases"), "none"),
     "CRIME_SEARCH":      (("show", "list", "find", "cases", "firs", "how many",
                            "count", "theft", "murder", "robbery"), "none"),
     "FIR_LOOKUP":        (("fir", "case number", "case details", "status of"), "none"),
@@ -124,9 +124,18 @@ NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
 # arrested and charged; they do not hold who "could be" guilty, and inferring it is the
 # one thing an evidence-grounded police tool must not do. This is a refusal with a
 # reason, not a retrieval that happens to fail.
+# Found live via the adversarial battery (docs/superpowers/specs/2026-08-27-
+# compositional-semantic-layer-design.md): "Who do you think committed the murder
+# in FIR ...?" was ANSWERED, not refused — the literal two-word "who committed"
+# match requires the verb to sit immediately after "who", and "do you think" broke
+# that adjacency. This is a safety boundary (never name a suspect), not a topic
+# keyword, so it is widened to tolerate filler between "who" and the verb phrase —
+# the same shape-not-phrase discipline every other regex in this file already
+# follows — rather than enumerating "who do you think committed" as its own
+# literal alternative.
 _NOT_INFERABLE = re.compile(
     r"\b(who (could|might|may|would) (be|have)|likely (suspect|culprit|offender)|"
-    r"who did it|who is guilty|who committed)\b", re.I)
+    r"who\b(?:\s+\S+){0,4}\s+(?:did\s+it|is\s+guilty|committed))\b", re.I)
 
 # "What can you do" is a question about the tool, not about the records. Routed through
 # retrieval it returned five unrelated criminal profiles and then a refusal telling the

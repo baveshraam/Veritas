@@ -9,6 +9,7 @@ Live-reproduced baseline this pass fixes (docs/superpowers/specs/
 by "Only these?" scored Intent: UNKNOWN and refused with no_evidence, even though the
 previous turn's own count/sample was sitting right there.
 """
+import unittest.mock as mock
 from datetime import datetime, timezone
 
 from data import SessionFocus
@@ -282,3 +283,61 @@ def test_handle_comparison_runs_the_same_retrieval_path_once_per_subject(monkeyp
     assert tags == {"501", "502"}
     contents = " ".join(e.content for e in state.evidence_items)
     assert "Ramesh Gowda" in contents and "Suresh Naik" in contents
+
+
+# --- Gaps found live via scripts/adversarial_eval.py's expanded battery -------
+# (docs/superpowers/specs/2026-08-27-compositional-semantic-layer-design.md's
+# follow-on "final push" pass) — each fixed as a structural widening of an
+# existing mechanism, not a new phrase-specific pattern.
+
+def test_a_named_subject_with_no_operation_verb_defaults_to_a_profile():
+    """'Tell me about X' / 'I meant X specifically' -- an explicitly named person
+    with nothing else asked used to reach UNKNOWN and refuse, even though a
+    specific record was sitting right there. Same defaulting principle already
+    used for a bare ordinal/'other' reference, extended to an explicit name."""
+    import rag_agent.semantic_interpreter as si
+
+    with mock.patch.object(si.sql_agent, "person_by_name",
+                           return_value=[{"person_id": "877", "name_en": "Soom Nadkarni",
+                                        "record_count": 5}]):
+        req = interpret("Tell me about Soom Nadkarni.", "en", SessionFocus(), prior_turn=None)
+    assert req.operation == "PERSON_HISTORY"
+    assert req.subject_id == "877"
+
+
+def test_bare_and_district_repeats_the_prior_operation():
+    """'And Mysuru?' after a HOTSPOT/FORECAST turn -- no 'for'/'in'/'about' to
+    anchor on, so this only fires when the bare form actually names a real
+    constraint (never on 'And then?' or similar, which fall through untouched)."""
+    prior = _turn(result_context={
+        "operation": "HOTSPOT", "total_matched": None, "shown": 3, "is_sample": False,
+        "shown_ids": [], "constraints": {"district": "Bengaluru Urban"},
+    })
+    req = interpret("And Mysuru?", "en", SessionFocus(), prior_turn=prior)
+    assert req.operation == "HOTSPOT"
+    assert "Mysuru" in req.constraints["district"]
+
+
+def test_bare_and_then_does_not_misfire_with_no_real_constraint():
+    prior = _turn(result_context={
+        "operation": "HOTSPOT", "total_matched": None, "shown": 3, "is_sample": False,
+        "shown_ids": [], "constraints": {"district": "Bengaluru Urban"},
+    })
+    req = interpret("And then?", "en", SessionFocus(), prior_turn=prior)
+    assert req.operation != "HOTSPOT" or req.reference_kind != "constraint_change"
+
+
+def test_who_committed_is_refused_even_with_filler_words_between_who_and_the_verb():
+    """Safety boundary widened, not a new alternative enumerated: 'who do you
+    think committed X' used to be ANSWERED (with a real record, confidently)
+    because the literal two-word 'who committed' match requires strict
+    adjacency."""
+    from rag_agent.intents import classify
+    assert classify("Who do you think committed the murder in this case?") == "NOT_INFERABLE"
+    assert classify("Who committed this crime?") == "NOT_INFERABLE"
+
+
+def test_related_cases_and_other_name_are_recognized_vocabulary():
+    from rag_agent.intents import classify
+    assert classify("Show me related cases.") == "SIMILAR_CASES"
+    assert classify("Does he go by any other name?") == "ALIAS_CHECK"

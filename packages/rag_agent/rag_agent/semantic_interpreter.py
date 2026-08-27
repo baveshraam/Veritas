@@ -258,6 +258,13 @@ _TEMPORAL_BARE_RE = re.compile(
 _REPEAT_CUE_RE = re.compile(
     r"^\s*(?:same\s+(?:thing|query|question)?\s*(?:for|in)\b"
     r"|what\s+about\b|and\s+for\b|and\s+in\b)", re.I)
+# The bare two-word form ("And Mysuru?") — found live via the adversarial battery:
+# a real officer follow-up to a hotspot answer, with no "for"/"in"/"about" to
+# anchor on. Whole-query anchored to a SHORT "and <phrase>?" shape (the same
+# discipline _BARE_WHY_RE/_TEMPORAL_BARE_RE already use) rather than a bare
+# "and\s+" prefix, so it can't misfire on an unrelated sentence that happens to
+# start with "and" ("and then what happened next to the case").
+_REPEAT_CUE_BARE_RE = re.compile(r"^\s*and\s+[\w][\w\s]{0,24}\??\s*$", re.I)
 
 # Bounded deterministic multi-step composition (design spec §3): "check whether
 # EITHER of those people had a prior case in Bengaluru" / "does she have a record
@@ -445,6 +452,20 @@ def _interpret_deterministic(
             constraints=merged_constraints, previous_result_context=prior_result,
             confidence=0.8)
 
+    if prior_turn and prior_result.get("operation") and _REPEAT_CUE_BARE_RE.search(q):
+        # "And Mysuru?" -- the bare two-word form has no "for"/"in"/"about" to
+        # anchor on, so it only fires when THIS turn's text actually names a real
+        # constraint (a district or crime type) -- otherwise "And then?" or "And
+        # why?" would wrongly be read as a repeat-with-new-constraint instead of
+        # falling through to their own handling (temporal/why, above).
+        new_constraints = _extract_constraints(q)
+        if new_constraints:
+            merged_constraints = {**prior_result.get("constraints", {}), **new_constraints}
+            return SemanticRequest(
+                operation=prior_result["operation"], reference_kind="constraint_change",
+                constraints=merged_constraints, previous_result_context=prior_result,
+                confidence=0.7)
+
     # Bounded deterministic multi-step composition (design spec §3): "check
     # whether either of those people had a prior case in Bengaluru" — two-entity
     # only, explicitly not open-ended planning (see the module docstring above
@@ -514,6 +535,16 @@ def _interpret_deterministic(
                 if hits:
                     subject_id = str(hits[0]["person_id"])
             reference_kind = "pronoun"
+
+    # A resolved subject with no operation verb at all -- "Tell me about Usha
+    # Naika", "I meant Usha Naika specifically" -- found live via the adversarial
+    # battery: neither has a keyword any INTENT recognizes, so this used to reach
+    # UNKNOWN and refuse even though a specific, resolved person was RIGHT THERE.
+    # Same defaulting principle already used for a bare ordinal/"other" reference
+    # (_default_operation_for_subject) -- a named subject with nothing else asked
+    # gets the richest single-call profile, not a refusal.
+    if operation == "UNKNOWN" and subject_id and subject_type == "person":
+        operation = _default_operation_for_subject("person")
 
     # Extract constraints
     constraints = _extract_constraints(q)

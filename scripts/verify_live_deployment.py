@@ -25,6 +25,10 @@ import sys
 
 import requests
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 
 def check_health(base_url: str) -> list[str]:
     problems = []
@@ -99,7 +103,8 @@ def check_adversarial_battery(base_url: str, badge_no: str) -> list[str]:
         "adversarial_eval", "scripts/adversarial_eval.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    failures = mod.run_live(mod.SCENARIOS, base_url, badge_no)
+    failures, results = mod.run_live(mod.SCENARIOS, base_url, badge_no)
+    mod._report(results, sum(r.latency_s for r in results), "live")
     if failures:
         return [f"{failures}/{len(mod.SCENARIOS)} adversarial scenarios failed live"]
     return []
