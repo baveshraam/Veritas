@@ -10,9 +10,10 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `f21e24c`. Test count, file:line
-references and the mixed-script translation findings in §10 were confirmed directly
-against the running code on 2026-08-27, not copied from an earlier document.
+Last verified against the repository at commit `86f1665`, live-deployed at AppSail
+deployment `52852000000366005`. Test count, file:line references and the mixed-script
+translation findings in §10 were confirmed directly against the running code on
+2026-08-27, not copied from an earlier document.
 
 ---
 
@@ -597,6 +598,27 @@ Not keyword tests. Representative of what an officer would actually say, and wha
     (pre-existing), 2 pre-existing failures confirmed unrelated (identical on
     `main` before this pass — `apps/api/tests/test_acceptance.py`'s two acceptance
     tests, not investigated further as out of this milestone's scope).
+  - **Deployed and live-verified, twice** (the second pass fixing a real defect the
+    first pass's own live verification found). Commit `f21e24c` relayed
+    (`get-signature` → `.github/relay-upload.url` → `relay-deploy.yml` → local
+    `appsail/upsert`) to deployment `52852000000355006`. Running the new
+    `scripts/verify_live_deployment.py` against it caught the reverse-direction
+    district bug (§10 above) live — the automated adversarial battery is what
+    found it, not a manual spot-check. Fixed (commit `86f1665`), relayed again to
+    deployment `52852000000366005`. `scripts/verify_live_deployment.py` then
+    passed clean: `/health` reports the expected fields; the exact baseline
+    reproduction (`CRIME_SEARCH` → "Only these?") no longer scores `UNKNOWN` and
+    no longer refuses; all 15/15 adversarial scenarios pass live, including both
+    Kannada code-switching ones and the district-name fix. **Console
+    re-verified via real CDP** (headless Chrome, Node 22's native WebSocket, the
+    established technique — apps/web was NOT touched this pass, so this confirms
+    the backend change didn't break the UI, not a new UI feature): signed in as
+    `?as=SP`, drove the exact two-turn baseline sequence through the actual
+    textarea/button, and read the rendered DOM — `msg-a` (not `msg-a refusal`),
+    citation `[1]` reading "646 record(s) matched in total; 5 were shown before —
+    here are 5 more" at "90% evidence strength." Screenshot evidence captured, not
+    checked into the repo per this document's own no-new-artifact discipline for a
+    routine verification pass.
 - **2026-08-28 — semantic interpreter milestone.** §5.1 (Understanding bottleneck)
   now addressed: replaced 30-flat-intent classifier with structured `SemanticRequest`
   decomposition. New `rag_agent/semantic_interpreter.py` module (`interpret()` +
