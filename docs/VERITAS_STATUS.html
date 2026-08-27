@@ -180,14 +180,27 @@ footer{max-width:1180px;margin:40px auto 0;padding:20px 24px;border-top:1px soli
 <div class="factgrid">
   <div class="fact"><div class="k">North Star phases</div><div class="v">6 / 6 complete, live-verified <span class="b b-pass">DONE</span></div></div>
   <div class="fact"><div class="k">Core investigation workflow</div><div class="v">Trusted single-record lookup — live-verified, both API and browser</div></div>
-  <div class="fact"><div class="k">Current commit</div><div class="v mono">5022c46f — "deploy: relay BUG-019/025 (intent word-boundary fix; docs)"</div></div>
+  <div class="fact"><div class="k">Current commit</div><div class="v mono">e66e5a3 — "deploy: relay a fresh signed upload URL for the cross-entity timeline feature" (feature commit 6da6b85)</div></div>
   <div class="fact"><div class="k">Working tree</div><div class="v">Clean — re-confirmed at report time (<code>git status</code>)</div></div>
   <div class="fact"><div class="k">Live API</div><div class="v"><span class="b b-pass">UP</span> <code>veritas-api-50043864344.development.catalystappsail.in</code> — <code>/health</code> returned 200 at report time</div></div>
   <div class="fact"><div class="k">Live console</div><div class="v"><span class="b b-pass">UP</span> <code>veritas-60077763394.development.catalystserverless.in/app/</code> — 200 at report time</div></div>
-  <div class="fact"><div class="k">Live deployment</div><div class="v mono">52852000000316042 — Aug 26, 2026 03:59 AM, status: success, memory 2048MB</div></div>
-  <div class="fact"><div class="k">Tests</div><div class="v">358 passed, 2 skipped (AppSail-only dependency, by design), 0 failed — re-run at report time</div></div>
-  <div class="fact"><div class="k">Last verified timestamp</div><div class="v">2026-08-26 07:52 UTC (this report's own live check) — see §9 for the full deploy/verify history through the night of Aug 25–26</div></div>
+  <div class="fact"><div class="k">Live deployment</div><div class="v mono">52852000000345002 — Aug 27, 2026 01:57 PM, status: success, memory 2048MB (console redeployed same pass via <code>scripts/deploy-console.sh</code>)</div></div>
+  <div class="fact"><div class="k">Tests</div><div class="v">433 collected, 0 failed (up from 403 — 30 new this pass, all against the real dataset fixture) — re-run at report time</div></div>
+  <div class="fact"><div class="k">Last verified timestamp</div><div class="v">2026-08-27 (cross-entity timeline pass) — live HTTP/SSE against production plus real headless-Chrome CDP against both the deployed API and console; see <code>docs/WORK_LOG.md</code>'s newest entry</div></div>
 </div>
+
+<div class="callout"><b>This pass (2026-08-27):</b> built the cross-entity investigation timeline
+(<code>docs/INDUSTRY_GAP_ANALYSIS.md</code> §7 item 3, the gap analysis's next-ranked
+recommendation after the investigation board) — <code>packages/rag_agent/rag_agent/timeline.py</code>,
+two new REST endpoints, two new conversational intents (TIMELINE, TIMELINE_CONNECTION), and a
+new TimelineView.tsx shared between the chat-driven context pane and a third tab in the Copilot
+overlay. No new table — every event traces to a real ER/vx_ column already in the record layer,
+and each is labelled "authoritative" or "derived" (a person's other case, linked only by
+Fellegi-Sunter's inferred identity match, is never presented as a stated fact). Found and fixed
+three real live defects in the process: a board-pin keyword collision, a silent wrong-item
+fallback in the board-pin resolver, and a pronoun-ambiguity collision between
+TIMELINE_CONNECTION's own "both of them" and the pre-existing generic pronoun refusal. See §4 for
+the full writeup.</div>
 
 <h3>Bug ledger totals — <code>docs/PHASE1_FAILURE_LOG.md</code>, its own summary line</h3>
 <div class="stats">
@@ -303,6 +316,61 @@ footer{max-width:1180px;margin:40px auto 0;padding:20px 24px;border-top:1px soli
 <p class="section-desc">Reconstructed from <code>git log</code> and the phase-completion docs. Grouped into the six North Star phases plus the Phase 1 audit that preceded them and the deployment-era work that preceded that. Each phase is collapsible; expand for the commit-level detail.</p>
 
 <details class="phase" open>
+<summary><b>Cross-entity investigation timeline</b> — 2026-08-27 — <code>docs/INDUSTRY_GAP_ANALYSIS.md</code> §7 item 3</summary>
+<div class="phasebody">
+<p><b>Note on this table's own currency:</b> the investigation-board pass (2026-08-27,
+commits <code>af3ad7a</code>…<code>86b4dd8</code>) that shipped immediately before this one is not
+yet reflected as its own phase entry below — see <code>docs/VERITAS_HANDOFF.md</code> and
+<code>docs/WORK_LOG.md</code> for that pass's full detail; this report was not re-derived from
+scratch this pass, only appended to, per this document's own stated update discipline.</p>
+<p>Built the gap analysis's next-ranked recommendation after the board: a chronological event
+list spanning a case's own dates, its accused persons' arrests, their OTHER cases, and money
+through any account they own — no new table, every event traced to a real ER/vx_ column already
+in the record layer. New module <code>packages/rag_agent/rag_agent/timeline.py</code>
+(<code>case_timeline</code>, <code>person_timeline</code>, <code>connection_between</code>); two
+new REST endpoints (<code>GET /timeline/case/{fir_id}</code>, <code>GET /timeline/person/{id}</code>);
+two new conversational intents (<code>TIMELINE</code>, <code>TIMELINE_CONNECTION</code>), matched
+by shape (not keyword score) so "what happened before this incident" doesn't collide with
+<code>CASE_CONTEXT</code>'s "what happened" and "why are these events connected" doesn't collide
+with <code>CAUSAL</code>'s bare "why". Every event carries <code>kind: authoritative | derived</code>
+— a person's other case, linked only by Fellegi-Sunter's inferred identity match, is labelled and
+never presented as a stated fact; <code>connection_between</code> reports only real graph/ER facts
+(co-accused, shared case, an inter-account transfer) as a connection, never temporal proximity
+alone. New <code>TimelineView.tsx</code> shared between the chat-driven context pane and a third
+"Timeline" tab in the Copilot overlay (alongside Briefing / Investigation Board).</p>
+<p><b>Three real defects found and fixed by driving this live</b>, not just reading the code:</p>
+<ol>
+<li>"Add this event to the investigation board" collided with <code>BOARD_VIEW</code>'s bare
+"investigation board" keyword — the same collision class v16 fixed for "case board", not yet
+closed for this phrase. Fixed with a shape pre-check, same discipline as the existing one.</li>
+<li><code>_pin_evidence_from_context</code>'s fallback silently grabbed the previous turn's TOP
+evidence whenever a genuine <code>active_evidence_id</code> target didn't match that turn's own
+pool — invisible until the Copilot overlay's new Timeline tab (which fetches over REST, so its
+events were never part of any chat turn) made a real target/pool mismatch possible for the first
+time. Reproduced live via curl before fixing: asked to pin a specific transaction event, the
+system silently pinned an unrelated FIR record instead, with nothing on screen indicating a
+substitution had happened. Fixed the precedence (a target must be tried against every source
+before ever falling back to "whatever was last shown") and added a reconstruction fallback so an
+event from that tab can be pinned with no priming chat turn required.</li>
+<li><code>TIMELINE_CONNECTION</code>'s own pronoun ("both of them") was being caught by
+<code>node_orchestrate</code>'s generic 2-candidate ambiguous-person refusal before the intent's
+own handler — which resolves exactly those two candidates by design — ever ran. Reproduced live:
+"Show me events involving both of them" right after a 2-accused <code>CASE_PEOPLE</code> turn
+refused with "I will not guess which one you mean" instead of showing the merged timeline. Fixed
+by exempting <code>TIMELINE_CONNECTION</code> from that refusal branch.</li>
+</ol>
+<p>30 new tests (<code>test_timeline.py</code>, plus additions to <code>test_api.py</code> and
+<code>test_engine.py</code>), all against the real dataset fixture. 433 collected, all green.
+Deployed both API (relay → <code>appsail/upsert</code>, deployment
+<code>52852000000345002</code>) and console (<code>scripts/deploy-console.sh</code>); both
+re-verified live afterward — direct HTTP/SSE against production for every intent and endpoint,
+and real headless-Chrome CDP against the deployed console for the full chat→timeline,
+Copilot-tab→timeline, and pin→board flows, including the exact reconstruction-fallback scenario
+(pin an event from the Copilot Timeline tab with no prior chat turn ever mentioning it).</p>
+</div>
+</details>
+
+<details class="phase">
 <summary><b>Overnight finalization pass</b> — 2026-08-26 03:39–03:56 — BUG-005, BUG-016, BUG-017, BUG-018, BUG-019, BUG-022, BUG-025</summary>
 <div class="phasebody">
 <div class="twrap"><table>

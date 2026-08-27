@@ -865,3 +865,136 @@ about someone) covers the same need and is tested; a dedicated graph-node pin bu
 would be a small follow-up, not a gap. QuickML and PDF export remain correctly BLOCKED,
 unchanged, not re-investigated this pass (no new information available since the prior
 pass's from-scratch re-check).
+
+---
+
+## 2026-08-27 (later) — cross-entity investigation timeline
+
+Built `docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3 — the analysis's next-ranked
+recommendation, explicitly deferred by the investigation-board pass immediately above.
+One chronological event list spanning a case's own dates, its accused persons'
+arrests, their OTHER cases, and money through any account they own — no new table,
+every event traced to a real ER/vx_ column already in the record layer.
+
+**Reconnaissance first** (per this pass's own instruction): read `copilot/brief.py`'s
+existing single-case `_timeline()`, `queries.py`, `data/graph.py` (TRANSFERRED_TO edges
+already carry `amount`/`date`/`txn_id` — no new query needed for financial events),
+`orchestrator.py`'s BOARD_*/CASE_LOCATIONS short-circuit pattern, and the console's
+Board.tsx/Copilot.tsx precedent, before writing anything.
+
+**New module `packages/rag_agent/rag_agent/timeline.py`**:
+- `case_timeline(fir_id, ...)` / `person_timeline(person_id, ...)` assemble events from
+  `CaseMaster` registration/disposition, `ArrestSurrender`, `ChargesheetDetails`, and
+  TRANSFERRED_TO graph edges. Every event carries `kind: "authoritative"` (a directly
+  stated ER/vx_ fact) or `"derived"` — used for exactly one thing: a person's OTHER
+  case, linked only by Fellegi-Sunter's inferred identity match, shown with its match
+  confidence and never presented as a stated fact.
+- `connection_between(...)` — "why are these connected" — reports only real graph/ER
+  facts (co-accused, a shared case, a transfer between owned accounts) as a
+  connection. Two events merely falling near each other in time are explicitly never
+  reported as one, per this pass's own instruction not to call proximity a correlation.
+
+**New REST endpoints**: `GET /timeline/case/{fir_id}`, `GET /timeline/person/{person_id}`
+(`apps/api/api/routers/timeline.py`), same station-scope/masking discipline as
+`/copilot` and `/board`.
+
+**Conversational integration** (`orchestrator.py`, `intents.py`): two new intents,
+`TIMELINE` and `TIMELINE_CONNECTION`, matched by shape (regex pre-check, like
+`CASE_LOCATIONS`/`EXPLAIN_REASONING` already are) rather than keyword score — "what
+happened before this incident" would otherwise tie `CASE_CONTEXT`'s bare "what
+happened" keyword, and "why are these events connected" would otherwise score
+`CAUSAL`'s bare "why". Each timeline event becomes an ordinary `EvidenceItem`, so
+`EXPLAIN_REASONING`/`EVIDENCE_FOR` and board-pinning reuse the exact mechanisms every
+other intent already has, with zero new plumbing there — confirmed by driving both
+live, not assumed from the architecture.
+
+**Three real defects found and fixed by driving this live**, each reproduced against
+the running local API/console before being fixed, matching this project's own
+established discipline:
+
+1. **Keyword collision.** "Add this event to the investigation board" (a natural
+   phrasing of the feature's own spec example) contains "investigation board" — a
+   bare `BOARD_VIEW` keyword — so it misrouted to a board summary instead of pinning.
+   The same collision class v16 already fixed for "case board"; not yet closed for
+   this phrase. Fixed with a `_BOARD_PIN_EVENT` regex pre-check, same discipline as
+   the existing "case board" fix.
+2. **Silent wrong-item pin (the more serious one).** `_pin_evidence_from_context`'s
+   fallback logic unconditionally grabbed the previous turn's TOP evidence item
+   whenever a genuine `active_evidence_id` target didn't match anything in that
+   turn's own pool — invisible until now, because until the Copilot overlay's new
+   Timeline tab (which fetches over REST, so its events were never part of any chat
+   turn) this mismatch could never actually happen. Reproduced live via curl: opened
+   a case (turn 1, FIR-record evidence), then asked to pin a specific transaction
+   event by id — the API silently pinned the unrelated FIR record from turn 1
+   instead, with nothing in the response indicating a substitution had happened.
+   Fixed the precedence: a target is now tried against the prior turn's pool, then
+   its citations, then (if it looks like a timeline event) reconstructed directly
+   from the case's own timeline — and ONLY when there was no target at all does it
+   fall back to "whatever the previous turn showed." Re-verified live after the fix:
+   the exact same pin request now correctly pins the named event.
+3. **Pronoun-ambiguity collision.** `TIMELINE_CONNECTION`'s own pronoun ("both of
+   them") was being caught by `node_orchestrate`'s pre-existing generic
+   2-candidate ambiguous-person refusal (RAG-34's mechanism) before
+   `_handle_timeline_connection` — which resolves exactly those two candidates by
+   design — ever ran. Reproduced live: "Who are the accused on this case?" (2
+   accused, correctly leaves `active_person` unset) → "Show me events involving
+   both of them." fell to "I will not guess which one you mean" instead of showing
+   the merged timeline. Fixed by exempting `TIMELINE_CONNECTION` specifically from
+   that refusal branch, since its own pronoun semantics are plural-by-design, not
+   the singular ambiguity that refusal exists to catch.
+
+**Live-verified, both local and production, HTTP/SSE and real CDP**:
+- `/timeline/case/{fir_id}` and `/timeline/person/{id}` — chronological, entity
+  attribution correct, RBAC (403 cross-station via the same `can_view_fir` check as
+  `/fir`/`/copilot`), 404 on a missing subject.
+- Chat `TIMELINE` — "Show me the timeline for this case" produces a 23-event
+  chronological timeline, ACCEPTs via an authoritative finding, 12 citations, correct
+  `visualization.kind: "timeline"`.
+- Chat `TIMELINE_CONNECTION` — "Show me events involving both of them" after a
+  2-accused `CASE_PEOPLE` turn correctly resolves both people, finds their real
+  co-accused connection, and renders a merged chronological timeline.
+- Board pin from a chat-driven timeline event, AND from the Copilot overlay's own
+  Timeline tab with no prior chat turn at all (the reconstruction-fallback path,
+  defect #2 above) — both correctly pin the exact named event, confirmed via the
+  live DOM (`.board-item-body` text matches the pinned event verbatim).
+- Real headless-Chrome CDP against both `localhost` and the deployed console:
+  chat → timeline visualization → click an event → Pin via the Evidence rail; case
+  index → Copilot brief → Timeline tab → Pin directly from there → Investigation
+  Board tab shows it. Screenshots captured for both.
+- Kannada: `translation_agent.to_english()` + `intents.classify()` confirmed directly
+  that "ಈ ಪ್ರಕರಣದ ಟೈಮ್‌ಲೈನ್ ತೋರಿಸಿ" translates to "Show the timeline of this case" and
+  classifies as `TIMELINE`. The full round trip through a freshly-started local dev
+  server was not captured within this session's test window — the first Kannada call
+  on a cold local process exceeded it, consistent with BUG-016's already-documented
+  cold-load latency, not a defect this pass introduced. Not re-attempted against the
+  already-warm live deployment for lack of remaining session time; named here rather
+  than silently claimed.
+
+**One data observation, not a defect**: `TIMELINE_CONNECTION` between two specific
+habitual offenders in the seeded dataset merged 750+ events — one of the two has 196
+cases on file, an extreme hub in the generator's preferential-attachment scheme.
+Genuine data, rendered honestly in a scrollable list; not capped, since capping would
+mean silently hiding real history with no principled cutoff. Left as-is; worth a
+"summarize when very large" affordance if this becomes a demo pain point.
+
+**Deployed**: API via the established relay pipeline (deployment
+`52852000000345002`); console via `scripts/deploy-console.sh`. Both re-verified live
+after deploy, not just after the local run.
+
+**Test suite**: 30 new tests (`test_timeline.py`: 25; `test_api.py`: +5;
+`test_engine.py`: +5 minus overlap — see the file diff for the exact split), all
+against the real dataset fixture, none mocked. 433 collected, all green.
+
+**Docs updated**: this file, `docs/VERITAS_HANDOFF.md`, `docs/QA_FUNCTIONALITY_MATRIX.md`,
+`docs/VERITAS_STATUS.html`.
+
+**Not done this pass, named rather than silently skipped**: a dedicated "pin" click
+target inside `NetworkView.tsx`/`MapView.tsx` for a timeline event's underlying
+relationship (the Evidence rail's generic Pin button and the Timeline view's own Pin
+button already cover this for every event type, tested) — small, additive, not a
+functional gap. A true "before/after this specific event" filter beyond the two
+`before`/`after` keyword cases implemented is not built — the anchor resolution
+(`active_evidence_id` when set, else the timeline's own first event) covers the
+spec's own example phrasing but not arbitrary date-range queries. QuickML and PDF
+export remain correctly BLOCKED, not re-investigated (no new information since the
+prior pass).

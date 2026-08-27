@@ -58,6 +58,8 @@ that stated, not `VERIFIED`.
 | UI-31 | Investigation Board tab | `Board.tsx`, inside `Copilot.tsx`'s overlay | Persistent per-case board: pinned evidence/findings, people, leads, notes, questions | **VERIFIED** (investigation-board pass, 2026-08-27) | CDP: opened live, correct grouping by kind, distinct visual treatment per kind (amber record / blue finding / dashed neutral note), inline Add note / Save lead forms work and refresh correctly (a real bug — stale `turns.length`-keyed reload — found and fixed this pass). Lead status buttons (Mark pursued / Dismiss / Reopen) verified via REST PATCH. Case-switch isolation confirmed: two different cases show completely different board content |
 | UI-32 | Pin to board (Evidence rail) | `EvidenceRail.tsx` | Pins the selected evidence card via a synthetic chat turn | **VERIFIED** | CDP: expanded an evidence card, clicked "Pin to board," confirmed the item appeared on `GET /board/{id}` with matching `ref_id`/content, targeting the exact card the console had selected (`active_evidence_id`), not merely "whatever came first" |
 | UI-33 | Open Case Board (Evidence rail + case index) | `EvidenceRail.tsx`, `CaseExplorer.tsx` | Opens the board tab for a FIR-record evidence card or a case-index card | **VERIFIED** | CDP: both entry points open the same overlay on the Board tab. The case-index button also fires "Ask about this case" first (a real fix this pass — opening the board with no prior chat turn left the session with no active case, so the panel's own note/lead forms refused with "no case is open") |
+| UI-34 | Timeline tab (Copilot overlay) | `Copilot.tsx`, `viz/TimelineView.tsx` | Third tab (Briefing / Investigation Board / Timeline); fetches `GET /timeline/case/{fir_id}` | **VERIFIED** (cross-entity timeline pass, 2026-08-27) | CDP against both local and the deployed console: 23 events rendered, correct chronological order, "RECORD"/"DERIVED" kind badges, entity chips. A per-row Pin button correctly pins the exact event with NO prior chat turn ever mentioning it (exercises the reconstruction-fallback fix, defect #2 below) — confirmed by reading the resulting `.board-item-body` text in the live DOM |
+| UI-35 | Timeline view (chat context pane) | `ContextView.tsx`, `viz/TimelineView.tsx` | Renders `visualization.kind === "timeline"` from a `TIMELINE`/`TIMELINE_CONNECTION` chat turn | **VERIFIED** (cross-entity timeline pass) | CDP: "Show me the timeline for this case." renders a 23-event connecting-rail list; clicking an event row selects it in the Evidence rail; the Evidence rail's own Pin button correctly pins the selected event. "Show me events involving both of them." (after a 2-accused `CASE_PEOPLE` turn) renders a connection banner ("...co-accused together in 6 case(s)") plus the merged 750+-event timeline |
 
 ## 2. API routes
 
@@ -79,6 +81,8 @@ that stated, not `VERIFIED`.
 | API-14 | `POST /board/{fir_id}/items` | `board.py` | **VERIFIED (live)** | Real HTTP + via `/chat`'s BOARD_* intents; audit chain confirmed intact after |
 | API-15 | `PATCH /board/{fir_id}/items/{item_id}` | `board.py` | **VERIFIED (live)** | Lead status transitions, content edits; rejects an invalid lead status (400); cross-case item id rejected (404) |
 | API-16 | `DELETE /board/{fir_id}/items/{item_id}` | `board.py` | **VERIFIED (live)** | Rejects a lead (400 — "dismiss instead"); real delete for evidence/person/note/finding confirmed |
+| API-17 | `GET /timeline/case/{fir_id}` | `timeline.py` | **VERIFIED (live, both local + production)** | Chronological, correct entity attribution, RBAC (403 cross-station, same `can_view_fir` check as `/fir`/`/copilot`), 404 on a missing case |
+| API-18 | `GET /timeline/person/{person_id}` | `timeline.py` | **VERIFIED (live)** | Spans every one of the person's cases, correctly masks the name below DSP, 404 on a missing person |
 
 ## 3. Conversational RAG — every intent
 
@@ -127,6 +131,9 @@ that stated, not `VERIFIED`.
 | RAG-40 | `BOARD_ADD_LEAD` — "save this as a lead: ..." | same | Yes, live HTTP + CDP | **VERIFIED** — captures trailing free text as the lead's content; defaults to a name-derived description when none given; always created `status: open` |
 | RAG-41 | `BOARD_ADD_NOTE` — "add a note that ..." | same | Yes, live HTTP + CDP | **VERIFIED** — refuses locally ("say what the note should record") on empty note text rather than creating a blank item |
 | RAG-42 | `BOARD_LEAD_STATUS` — "dismiss/pursue that lead" | same | Yes, live HTTP + CDP | **VERIFIED** — resolves "that lead" to the most recent OPEN lead (optionally filtered to one naming the person currently in view); dismissing never deletes the row |
+| RAG-43 | `TIMELINE` — "show me the timeline for this case", "what happened before this incident", "what happened around the time he was involved" | `orchestrator.py` (`_handle_timeline`, new, cross-entity timeline pass) | Yes, live HTTP + CDP, both local and production | **VERIFIED, one bug found+fixed** — matched by shape (regex pre-check), not keyword score, so it doesn't collide with `CASE_CONTEXT`'s bare "what happened"; person takes priority over an open case when both are in view. `before`/`after` filters against the previously-selected event's own timestamp (`active_evidence_id`) when set, else the timeline's own first event |
+| RAG-44 | `TIMELINE_CONNECTION` — "show me events involving both of them", "are there events connecting these two people", "why are these events connected", "what connects these two people" | same | Yes, live HTTP + CDP, both local and production | **VERIFIED, one bug found+fixed** — resolves "both of them" against the previous turn's own citations (`_recent_person_candidates`, RAG-34's mechanism) with no re-typing needed; reports only real graph/ER facts as a connection, never temporal proximity alone. Found live: `node_orchestrate`'s generic 2-candidate pronoun-ambiguity refusal caught this intent's own plural pronoun before its handler ever ran — fixed by exempting `TIMELINE_CONNECTION` from that branch |
+| RAG-45 | Timeline event pinned to the board — "add this event to the investigation board" | `orchestrator.py` (`_pin_evidence_from_context`, extended) | Yes, live HTTP + CDP, both local and production | **VERIFIED, two bugs found+fixed** — (1) the phrase collided with `BOARD_VIEW`'s bare "investigation board" keyword, same class as v16's "case board" fix, not yet closed for this phrase; (2) a genuine `active_evidence_id` target that didn't match the prior turn's own evidence pool (only possible now that the Copilot Timeline tab fetches over REST, outside any chat turn) silently fell back to pinning the previous turn's unrelated TOP evidence instead — reproduced live via curl before fixing. Both fixed; a reconstruction fallback lets a Timeline-tab event be pinned with no priming chat turn |
 
 **A note on the two board-specific bugs (keyword collision, refusal styling)**: both were
 found by literally typing the feature's own specified example sentences into the live
@@ -431,3 +438,22 @@ detailed in `docs/WORK_LOG.md` and covered by new regression tests. RBAC, audit
 chaining, and case isolation were all re-verified live specifically for the new
 endpoints, not assumed to hold from the existing pattern. **Test suite: 403 collected,
 all green.**
+
+---
+
+**2026-08-27 (later still) — cross-entity investigation timeline pass**: built and
+deployed the cross-entity timeline (`docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3) — see
+UI-34–35, API-17–18, RAG-43–45 above for the row-level detail. A live pass against a
+real local dev stack (real dataset, not mocked) found and fixed three genuine defects
+before ever reaching the deployed console: a keyword collision on "investigation
+board" (the same class as the board pass's own "case board" fix, one phrase short of
+covered), a silent wrong-item board-pin fallback exposed for the first time by the new
+REST-fetched Copilot Timeline tab, and a pronoun-ambiguity collision between the new
+`TIMELINE_CONNECTION` intent's own "both of them" and the pre-existing generic
+pronoun-ambiguity refusal. All three detailed in `docs/WORK_LOG.md`, covered by new
+regression tests confirmed against a real repro first, and re-verified against the
+deployed console/API afterward via real CDP, not merely curl. Kannada translate+classify
+for a `TIMELINE` query confirmed correct in isolation; a full browser round trip was
+not captured within this session's window (cold local NLLB load, `BUG-016`'s
+already-documented latency class, not a new defect). **Test suite: 433 collected, all
+green.**
