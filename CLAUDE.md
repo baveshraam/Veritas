@@ -9,7 +9,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 354 green (`pytest --collect-only -q` for the current
+- **Tests**: `python -m pytest` — 403 green (`pytest --collect-only -q` for the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -965,3 +965,95 @@ volume justifies the training cost.
     dataset, still correctly not fabricated. Pan/drag interaction was not driven live
     (screenshots prove render correctness, not gesture handling) — unchanged from v14's
     own note on this.
+- **v16 (the persistent per-case investigation board) — the first genuine
+  product-level differentiation past the North Star baseline, and the answer to the
+  industry gap analysis's own top-ranked finding.**
+  - **Built `docs/INDUSTRY_GAP_ANALYSIS.md`'s #1 recommendation whole**: a
+    persistent, editable case artifact — pinned evidence, derived findings, people,
+    leads (`open`/`pursued`/`dismissed`, with a `reason` field), investigator notes,
+    open questions — that survives a page refresh, a new chat session, and a new
+    officer's login. One new table, `vx_case_board_item`
+    (`data/data/schema.py`), `ItemType`-discriminated so a note can never render as
+    a database fact and a derived finding can never be mistaken for an authoritative
+    record. References the record layer (`RefType`/`RefID`) plus a content
+    *snapshot* at pin time; never a second copy of FIR/person/financial/graph facts.
+  - **Layered exactly like `copilot.brief`**: `data/data/board.py` (raw CRUD, no
+    policy) → `rag_agent/board.py` (the ONE policy-checked entry point,
+    station-scoped via `policy.can_view_fir`, cross-case item tampering blocked) →
+    both `apps/api/api/routers/board.py` (4 REST endpoints) and the conversational
+    orchestrator call *that same function* — the BUG-003 discipline ("a rule
+    enforced by one caller and not its neighbour is not a rule") applied from the
+    start rather than retrofitted. Deleting a lead is rejected (400); the API for
+    retiring one is a status change (`dismissed`), so "a dismissed lead must remain
+    auditable" is structurally enforced, not merely documented.
+  - **Six new case-scoped intents** (`BOARD_VIEW`, `BOARD_PIN_EVIDENCE`,
+    `BOARD_PIN_PERSON`, `BOARD_ADD_LEAD`, `BOARD_ADD_NOTE`, `BOARD_LEAD_STATUS`)
+    extend `intents.NEEDS_CASE` and short-circuit before CRAG evaluation in
+    `node_retrieve` — the same pattern `CAPABILITY` already uses, since a board
+    mutation/read is not a retrieval and has nothing for CRAG to score. "Pin this"
+    resolves against the console's selected evidence card (new `active_evidence_id`
+    on `/chat`) or the previous turn's top citation. A lead's status never changes
+    without an explicit instruction — never inferred from context.
+  - **Console**: `Board.tsx` joins `Copilot.tsx`'s existing per-FIR overlay as a
+    second tab ("Briefing" / "Investigation Board") — one overlay, two views of one
+    case, not a new destination — reachable from the Evidence rail (new "Pin to
+    board" / "Open Case Board"), the case index (new "Investigation board" button),
+    and chat. Distinct visual treatment per item kind so provenance stays visible,
+    not just stored correctly.
+  - **Provisioned live**: `python -m data.provision` created the one new table over
+    the Admin API, idempotently, alongside the 37 already-live tables. Deployed via
+    the existing relay pipeline (API) and `scripts/deploy-console.sh` (console) —
+    both redeployed twice more this pass for the fixes below.
+  - **A real live-judge pass — driving the deployed console with the feature's own
+    example phrasing, not re-reading the code — found and fixed two genuine defects
+    a green `/health` and passing tests did not catch:**
+    1. **Keyword collision.** "Pin this to the case board." and "Add that to the
+       case board." (the feature spec's own literal examples) both contained "case
+       board," which was also a bare `BOARD_VIEW` keyword — `classify()`'s
+       score-tie rule (earliest-registered intent wins) routed every successful pin
+       to a board *summary* instead. Fixed by removing the bare "case
+       board"/"investigation board" fragments from `BOARD_VIEW`'s keyword list.
+       Added a systematic substring-collision test across every intent's keyword
+       list (`test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_expected`)
+       so this class of bug can't recur silently.
+    2. **Every citation-free answer rendered as a refusal.** The console inferred
+       "refusal" from `citations.length === 0`, which a successful `CAPABILITY`
+       answer and a successful board confirmation both satisfy without being one —
+       "Pinned this evidence…" rendered in the same red, left-bordered styling as
+       "I could not find this in the records." Replaced the inference with an
+       explicit `answer_is_refusal` field, set by `node_synthesize` at the exact
+       point a refusal-shaped answer is produced — deliberately *not* derived from
+       `requires_escalation`, which is set generically before synthesis runs and
+       does not track whether synthesis went on to answer successfully (a found
+       `EXPLAIN_REASONING`/`EVIDENCE_FOR` prior turn re-shows real citations despite
+       `requires_escalation` having been `True` on the way in).
+    - Also fixed: the board panel reloaded on `turns.length` (increments the
+      instant a query is *sent*), not on turns that had actually *finished* — a
+      lead saved via the panel's own inline form read stale, pre-mutation state.
+      And opening the board directly from the case index (no prior chat turn) left
+      the session with no active case, so the panel's own note/lead forms refused
+      with "no case is open" — the board button now also asks about the case first.
+  - **Live-verified end to end, real HTTP/SSE against production**: sign in → open
+    case → "pin this" → note → lead → `GET /board` shows all three, correctly
+    typed. A **second, brand-new session** (fresh `session_id`) reopens the case and
+    "What is on the board for this case?" correctly lists all 3 — the board
+    survives the session, not just the turn. "Dismiss that lead" resolves "that
+    lead" to the most recent open one; the lead stays, `status: dismissed`, never
+    deleted. An IO gets 403 on another station's board (REST and via chat), 401
+    with no token. Audit chain confirmed intact after every mutation. Console
+    re-verified via real CDP after each fix: the spec's own example phrases now
+    classify correctly, a genuine refusal renders `msg-a refusal` while a board
+    confirmation renders plain `msg-a` (read from the live DOM's actual CSS class),
+    and two different cases' boards show completely different, correctly-scoped
+    content. Screenshots: `docs/screenshots/2026-08-27-investigation-board/`.
+  - **Test suite**: 403 collected (25 new for the feature, 4 more for the two live-
+    found defects), all green.
+  - **Not done this pass, named rather than silently skipped**: the cross-entity
+    timeline correlation view (`docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3) — ranked
+    below the board, not part of this pass's scope. A dedicated in-visualization
+    pin button (`NetworkView.tsx`/`MapView.tsx`/`SankeyView.tsx`) — the Evidence
+    rail's generic "Pin to board" and the conversational path already cover the
+    same need for every evidence type, tested; a graph-native click target would be
+    a small, purely additive follow-up. QuickML and PDF export remain correctly
+    BLOCKED, not re-investigated (no new information since the prior pass's
+    from-scratch re-check).

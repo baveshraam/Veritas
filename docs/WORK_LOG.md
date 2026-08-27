@@ -750,3 +750,118 @@ re-driven live through the console this specific pass (API-level check from the 
 pass stands, unchanged code path). Voice pipeline, case-status filter chips, map
 pan/drag, AML positive-case verification, `dowhy`, BUG-026 (Copilot canonical/as-filed
 name) — all unchanged from prior passes, same constraints as documented there.
+
+---
+
+## 2026-08-27 (later still) — Built the persistent per-case investigation board:
+`docs/INDUSTRY_GAP_ANALYSIS.md`'s top recommendation, now live
+
+The prior pass's gap analysis named this the single largest gap against Gotham/i2/
+Maltego: no investigation state survived past one chat session. Built it end to end —
+schema, policy-checked backend, conversational integration, console UI, tests,
+provisioning, deployment, and a real live-judge pass that found and fixed three defects
+the deploy itself didn't catch.
+
+**Schema and backend (commit `af3ad7a`):**
+- `vx_case_board_item` (`data/data/schema.py`) — one table, `ItemType` discriminates six
+  kinds (evidence, person, lead, note, question, finding) so a note can never render as
+  a database fact. References the authoritative record (`RefType`/`RefID`) plus a
+  content snapshot taken at pin time; never a second copy of FIR/person/financial/graph
+  facts. Provisioned live over the Admin API (`python -m data.provision`, idempotent —
+  37 existing tables untouched, 1 created).
+- `data/data/board.py` (raw CRUD) → `rag_agent/board.py` (the ONE policy-checked entry
+  point, station-scoped via `policy.can_view_fir`, cross-case item tampering blocked) →
+  `apps/api/api/routers/board.py` (`GET/POST/PATCH/DELETE /board/{fir_id}`, every
+  mutation audited). Deleting a lead is rejected (400) — dismiss (`status=dismissed`)
+  instead, so "a dismissed lead must remain auditable" is enforced, not just documented.
+- Six new case-scoped intents (`BOARD_VIEW`, `BOARD_PIN_EVIDENCE`, `BOARD_PIN_PERSON`,
+  `BOARD_ADD_LEAD`, `BOARD_ADD_NOTE`, `BOARD_LEAD_STATUS`) extend the existing
+  intent/orchestrator architecture rather than bolting on keyword patches — the same
+  `NEEDS_CASE` gate, the same short-circuit-before-CRAG pattern `CAPABILITY` already
+  uses. "Pin this" resolves against the evidence card the console had selected (new
+  `active_evidence_id` on `/chat`, sourced from `apps/web`'s existing `activeEvidence`
+  state) or falls back to the previous turn's top citation.
+- Console: `Board.tsx` joins `Copilot.tsx`'s existing per-FIR overlay as a second tab
+  ("Briefing" / "Investigation Board") instead of a new destination — reachable from the
+  Evidence rail (new "Pin to board" / "Open Case Board" buttons), the case index (new
+  "Investigation board" button per card), and chat. Distinct visual treatment per item
+  kind (amber = record, blue = derived finding, dashed neutral = investigator note).
+
+**25 new tests** (`data/tests/test_board.py`, `rag_agent/tests/test_board_policy.py`,
+`apps/api/tests/test_board_acceptance.py`) covering RBAC, cross-case isolation, lead
+lifecycle/auditability, and the full pin→note→lead→new-session-survives conversational
+workflow end to end, before any live deploy.
+
+**Deployed** (relay pipeline: signed URL → `relay-deploy.yml` build → `appsail/upsert`,
+deployment `52852000000319069`; console via `scripts/deploy-console.sh`) and **then
+actually driven live** — CDP over Node 22's global WebSocket, per
+`[[veritas-console-verification]]`, not just curl. Found and fixed **three real defects
+the deploy itself didn't catch**, each with a regression test, before calling the pass
+done:
+
+1. **Keyword collision misrouted the feature's own example phrasing.** "Pin this to the
+   case board." and "Add that to the case board." (the spec's own literal examples) both
+   contain "case board," which was also a bare `BOARD_VIEW` keyword — `classify()` picks
+   the earliest-registered intent on a score tie, so every successful pin answered with
+   a board *summary* instead of pinning anything. Found by actually typing the spec's
+   own example sentences into the live console, not by reasoning about the keyword
+   table. Fixed by removing the bare "case board"/"investigation board" fragments from
+   `BOARD_VIEW`; added a systematic substring-collision guard across every intent's
+   keyword list so a new one can't be introduced silently again.
+2. **Every citation-free answer rendered as a refusal.** `ChatPane.tsx` inferred
+   "refusal" from `citations.length === 0` — also true of a successful `CAPABILITY`
+   answer or a board confirmation, so "Pinned this evidence…" rendered in the same red,
+   left-bordered styling as "I could not find this in the records." Replaced the
+   inference with an explicit `answer_is_refusal` field set by `node_synthesize` at the
+   exact point a refusal-shaped answer is produced — not derived from
+   `requires_escalation`, which is set generically before synthesis runs and does not
+   track whether synthesis went on to answer successfully (a found
+   `EXPLAIN_REASONING`/`EVIDENCE_FOR` prior turn re-shows real citations despite
+   `requires_escalation` having been `True` on the way in).
+3. **Board-panel reload timing.** The panel refetched on `turns.length`, which
+   increments the instant a query is *sent*, not when its mutation lands server-side — a
+   lead saved via the panel's own inline form read stale (pre-mutation) state and never
+   refetched again. Reload now keys off the count of turns that have actually finished
+   streaming.
+   Also fixed in the same pass: opening the board directly from the case index (no prior
+   chat turn) never established the session's active case, so the panel's note/lead
+   forms — which operate through chat — refused with "no case is open." The board button
+   now also asks about the case first, same as "Ask about this case" already does.
+
+**Redeployed and re-verified live after each fix**: the spec's own example phrases now
+classify correctly (`Pin this to the case board.` → `BOARD_PIN_EVIDENCE`); a genuine
+refusal ("Tell me about the flying saucer incident on the moon") renders `msg-a
+refusal` while a board confirmation renders plain `msg-a` — confirmed by reading the
+live DOM's actual CSS class, not inferred from a screenshot; a lead saved via the
+panel's own form appears immediately without a manual reopen; two different cases'
+boards show completely different, correctly-scoped content (case isolation).
+
+**Live-verified via real HTTP/SSE against production** (not just the browser): sign-in
+→ open case → pin (conversational, falls back to top citation) → note → lead → `GET
+/board` shows all three, correctly typed and grouped; a **second, brand-new session**
+(fresh `session_id`, the same thing a new officer login produces) reopens the case and
+`"What is on the board for this case?"` correctly lists all 3 items — the board survives
+the session, not just the turn; `"Dismiss that lead"` correctly resolves "that lead" to
+the most recent open one and the lead stays on the board with `status: dismissed`,
+never deleted; an IO gets `403` reading or writing another station's board, `401` with
+no token; `DELETE` on a lead returns `400`; `/jobs/audit-verify?sync=true` reports the
+hash chain intact after every mutation above.
+
+**Test suite**: 403 collected (399 after the feature, +4 for the three live-found
+defects), all green.
+
+**Docs updated**: this file, `docs/VERITAS_HANDOFF.md`, `docs/QA_FUNCTIONALITY_MATRIX.md`,
+`docs/VERITAS_STATUS.html`. Screenshots in
+`docs/screenshots/2026-08-27-investigation-board/`.
+
+**Not done this pass, named rather than silently skipped**: the cross-entity timeline
+correlation view (`docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3) — the analysis's own
+ranking put the board first and named this the next step, not part of this pass's scope.
+A "pin a relationship" affordance inside `NetworkView.tsx` itself (associates are
+currently pinned only via the Evidence rail's generic "Pin to board," which works for
+any evidence item including `GRAPH_RELATIONSHIP` ones, but has no in-graph click
+target) — the conversational path ("add this person to the investigation" after asking
+about someone) covers the same need and is tested; a dedicated graph-node pin button
+would be a small follow-up, not a gap. QuickML and PDF export remain correctly BLOCKED,
+unchanged, not re-investigated this pass (no new information available since the prior
+pass's from-scratch re-check).

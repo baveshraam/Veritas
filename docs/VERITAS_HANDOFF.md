@@ -1,150 +1,205 @@
 # Veritas — Handoff
 
 Operational pointer for the next session. Not a history — that's `CLAUDE.md`'s changelog
-and `docs/PHASE1_FAILURE_LOG.md`. This file answers "where do things stand right now and
-what's next," and should be updated after any meaningful pass rather than left stale.
+and `docs/WORK_LOG.md`. This file answers "where do things stand right now and what's
+next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-`1aecd82` — "fix(web): toast stack no longer overlays the Evidence rail" (main,
-`github.com/baveshraam/Veritas`). Below it: `7759ec4` (final live judge pass docs),
-`7d4e581` (unlabeled network nodes + the first toast fix attempt), `23291eb`
-(namesake-disambiguation fix). No backend/API code changed this pass — the API
-deployment (`52852000000318080`) is unchanged from the prior pass.
+`efc6472` — "deploy: relay a fresh signed upload URL for the live-judge-pass fixes"
+(main, `github.com/baveshraam/Veritas`). Below it: `e7c3842` (fix: three live-judge-pass
+defects in the investigation board), `856f581` (deploy trigger), `af3ad7a` (feat:
+persistent per-case investigation board).
 
 ## Current live deployment
-- **API**: unchanged this pass, still `52852000000318080` (AppSail app `50043864344`,
-  appComputeId `52852000000204688`). Nothing in `apps/api` or the packages changed.
-- **Console**: redeployed this pass (`scripts/deploy-console.sh`, commit `1aecd82`) for
-  the toast/Evidence-rail structural fix. Live at
+- **API**: AppSail deployment `52852000000333002` (appComputeId `52852000000204688`,
+  app id `50043864344`). Carries the board feature plus all three live-found fixes
+  (keyword collision, refusal-styling signal, board-refresh timing).
+- **Console**: redeployed this pass (`scripts/deploy-console.sh`, three times — once
+  for the initial board feature, once for the session-focus/board-refresh fixes, once
+  for the refusal-signal fix). Live at
   `https://veritas-60077763394.development.catalystserverless.in/app/index.html`.
 
 ## Date/time of last verification
-2026-08-27, this session ("Catalyst blocker resolution + industry gap analysis" pass).
-Headless Chrome + CDP was available and used to verify the toast fix live (a real
-in-flight anomaly toast confirmed structurally unable to overlap the Evidence rail).
-QuickML/PDF were investigated via the authenticated Catalyst CLI and Admin API
-directly, not re-guessed from prior notes.
+2026-08-27, this session ("Investigation workspace" pass). Both curl/HTTP and real
+headless-Chrome CDP (over Node 22's global WebSocket, per
+`[[veritas-console-verification]]`) were used against the live production deployment —
+not a staging copy, not local. Full details in `docs/WORK_LOG.md`'s new entry.
 
 ## What this pass did, and why
-The prompt asked for a from-scratch re-investigation of QuickML and PDF export via
-the authenticated Catalyst CLI/Admin API — explicitly not to trust the prior "BLOCKED"
-classification without re-checking — followed by the two named small fixes as
-fallback (toast overlap, BUG-026), then a live-research industry gap analysis.
+Built `docs/INDUSTRY_GAP_ANALYSIS.md`'s top-ranked recommendation: a persistent
+per-case investigation board (pin evidence, derived findings, people, leads with an
+open/pursued/dismissed lifecycle, investigator notes, open questions) that survives a
+page refresh, a new chat session, and a new officer's login — the concrete answer to
+"is this more than a chatbot." Full design, schema, code, and endpoint list below.
 
-**QuickML: re-investigated, BLOCKED confirmed with a concrete, freshly-verified
-reason** (not the same reason restated — actually re-derived):
-- The Catalyst CLI (v1.26.2, authenticated) has no QuickML command at all.
-- Probed the Admin API directly for a model/endpoint discovery route
-  (`.../quickml/model`, `.../quickml/models`, `.../ml/model`, `.../quickml`) — all
-  404. `.../connections` (Catalyst's Connections/secrets feature) returned a real,
-  empty list — nothing stored there either.
-- Fetched the live AppSail app's configuration and, separately, triggered a real
-  `/chat` call and read `/health` immediately after: `QUICKML_ENDPOINT` **is**
-  actually set on the live container (an earlier session's guessed URL,
-  `.../quickml/v1/project/{id}/glm/chat`, no known provenance — see
-  `PHASE1_FAILURE_LOG.md` BUG-022) and the live call still fails with the identical
-  `PATTERN_NOT_MATCHED` error every prior pass recorded. `QUICKML_ENDPOINT_KEY`
-  remains unset.
-- Fetched Zoho's current LLM Serving documentation directly: it states the invoke
-  URL/key come **only** from the console's "Model Details → API Details" popup, and
-  documents no Admin API alternative.
-- **No CLI command, Admin API route, or Connections mechanism in this authenticated
-  environment can discover or configure a working QuickML endpoint.** This is a
-  genuine console-UI-only platform gap, confirmed today, not a credential this
-  session failed to locate. Stopped investigating here per the prompt's own
-  instruction against repeated guessing. **BLOCKED, unchanged in outcome, changed in
-  how firmly the reason is now established.**
+**Schema**: `vx_case_board_item` (`data/data/schema.py`) — one table, `ItemType`
+column discriminates six kinds. Provisioned live over the Admin API
+(`python -m data.provision`, idempotent — ran clean against the other 37 live tables).
 
-**PDF export: re-confirmed BLOCKED, the identity question specifically closed out.**
-Live `/export/pdf` still returns the identical `INVALID_ID`/"No such User" from
-SmartBrowz and "no Chromium-family browser found on this host" from the local
-fallback. New this pass: checked whether the 6 officer accounts have real Catalyst
-identities — they do (`GET .../project-user`, all `ACTIVE` App Users) — but
-`apps/api/api/auth/`'s actual sign-in flow is a custom `POST /auth/token` REST call,
-never Catalyst's own hosted login, so no request ever carries a genuine Catalyst
-session cookie for SmartBrowz to resolve. Minting one server-side without the
-officer completing a real interactive Catalyst sign-in would be authentication
-bypass — explicitly out of scope. **BLOCKED, root cause now stated precisely.**
+**Backend layering** (mirrors `copilot.brief`'s own pattern):
+- `data/data/board.py` — raw row CRUD, no policy (like `data/sessions.py`).
+- `packages/rag_agent/rag_agent/board.py` — the ONE policy-checked entry point
+  (station-scoped via `policy.can_view_fir`; cross-case item tampering blocked by
+  checking an item's `CaseMasterID` matches the URL's `fir_id` before any mutation).
+  Both the REST router and the conversational orchestrator call this, never the raw
+  `data.board` functions directly — the same discipline BUG-003 named for `/copilot`
+  vs `/fir` (a rule enforced by one caller and not its neighbour is not a rule).
+- `apps/api/api/routers/board.py` — four endpoints:
+  - `GET /board/{fir_id}` — full board, grouped by type.
+  - `POST /board/{fir_id}/items` — generic create, dispatches on `item_type` in the body
+    (`evidence`/`person`/`lead`/`note`/`question`/`finding`).
+  - `PATCH /board/{fir_id}/items/{item_id}` — status/reason/content update (lead
+    lifecycle, question resolution, note edits).
+  - `DELETE /board/{fir_id}/items/{item_id}` — hard delete; **rejects a lead with 400**
+    (dismiss via PATCH instead — "a dismissed lead must remain auditable").
+  - Every mutation calls `apps/api/api/audit.py:record()`, appending to the same
+    tamper-evident hash chain every other endpoint uses.
 
-**Fixed (commit `1aecd82`, console redeployed) — the toast/Evidence-rail overlap,
-closed structurally rather than reduced further:**
-`AlertToasts` moved out of `position: fixed` and into the Evidence rail pane's own
-flexbox column, rendered between `.pane-head` and the scrollable `.pane-body`. A
-toast can now only push the citation list down; it cannot occlude a card, regardless
-of how many alerts are active. Live-verified via CDP: a real anomaly toast rendered
-as a `position: static` child of `.pane.glass.rail`, above `.pane-body`.
+**Conversational integration** (`packages/rag_agent/rag_agent/orchestrator.py`): six new
+case-scoped intents (`BOARD_VIEW`, `BOARD_PIN_EVIDENCE`, `BOARD_PIN_PERSON`,
+`BOARD_ADD_LEAD`, `BOARD_ADD_NOTE`, `BOARD_LEAD_STATUS`) join `intents.NEEDS_CASE` and
+are handled in `node_retrieve` via `_handle_board_intent`, which short-circuits before
+CRAG evaluation (the same pattern `CAPABILITY` already uses — a board action is a
+mutation/read, not evidence retrieval, and has nothing for CRAG to score). "Pin this"
+resolves the target evidence from the console's `active_evidence_id` (a new field on
+`POST /chat`, sourced from `apps/web`'s existing `activeEvidence` client state) or falls
+back to the previous turn's top citation, read via `_last_turn` (the same mechanism
+`EXPLAIN_REASONING`/`EVIDENCE_FOR` already use). Lead status changes require an explicit
+instruction (dismiss/pursue/mark) — never inferred from context.
 
-**BUG-026: found already fixed, not re-fixed.** `copilot/brief.py`'s `_lead_name()`
-already reconciles canonical/as-filed names (landed 2026-08-26, finishing pass).
-Live-confirmed unchanged and correct on FIR 9992 via `/copilot/9992`. The only real
-defect was this file's own "open bugs" list having drifted stale against
-`docs/QA_FUNCTIONALITY_MATRIX.md`'s own detailed section, which already said FIXED —
-corrected below.
+**Console**: `apps/web/components/Board.tsx` is a new panel that joins
+`Copilot.tsx`'s existing per-FIR overlay as a second tab ("Briefing" / "Investigation
+Board") — one overlay, two views of the same case, reachable from the Evidence rail
+("Pin to board" on every evidence card, "Open Case Board" on FIR-record cards), the case
+index ("Investigation board" per card), and chat. Item kind gets a distinct visual
+treatment (amber = pinned record, blue = derived finding, dashed neutral =
+investigator note) so a note can never be mistaken for a database fact.
 
-**Industry gap analysis** — `docs/INDUSTRY_GAP_ANALYSIS.md` (new). Live research
-against Palantir Gotham, IBM i2 Analyst's Notebook, Maltego, and DFIR chain-of-custody
-practice. Headline finding: Veritas's largest gap is that it has no investigation
-memory surviving past one chat session — every mature platform researched treats a
-persistent, editable case artifact as the analyst's core object. Ranked, smallest
-first: (1) a persistent per-case board (pin evidence/leads, officer notes, survives
-across sessions and officers), (2) lead disposition (pursued/dismissed) on the same
-schema, (3) a cross-entity timeline correlation view. None built this pass — analysis
-plus the two named small fixes only, as scoped.
+**Provisioning + deployment, done for real, not just described:**
+```bash
+CATALYST_ACCESS_TOKEN=$(node scripts/catalyst-token.js) python -m data.provision
+# GET /appsail/get-signature -> write .github/relay-upload.url -> commit, push
+#   -> relay-deploy.yml builds Dockerfile.overlay on the runner, uploads
+# PUT /appsail/upsert (multipart: name, memory=2048, platform=custom_runtime,
+#   configuration={"port":8000,"catalyst_auth":false,"disk":1024}, local_object_key)
+#   -- NOTE: no "id" field. Including one returns a generic 400 INVALID_INPUT; the
+#   endpoint upserts by "name". This cost real time this pass — see below.
+# poll GET /appsail/{appComputeId}/deployment until deployment_status == success
+```
+`scripts/deploy-console.sh` for the client (needs the `catalyst` CLI shim on PATH —
+`export PATH="$PATH:$(npm config get prefix 2>/dev/null || echo ~/AppData/Roaming/npm)"`
+on Windows if `catalyst` isn't found directly).
+
+## Three real defects found by a live judge pass, after the deploy already "worked"
+The deploy succeeded and `/health` was green after the very first push — none of what
+follows was caught by that. All three were found by actually typing the feature's own
+example sentences into the live console and looking at the screen, not by re-reading
+the code:
+
+1. **Keyword collision** — "Pin this to the case board." (a literal spec example) also
+   matched a bare `BOARD_VIEW` keyword ("case board"), so every pin answered with a
+   board summary instead of pinning. `classify()`'s tie-break (earliest-registered
+   intent wins) hid this until the exact phrasing was tried.
+2. **Every citation-free success rendered as a refusal** — the console inferred
+   "refusal" from `citations.length === 0`, which is also true of a successful board
+   confirmation (a pin/note/lead has no record citation; it's the officer's own action).
+   Now an explicit `answer_is_refusal` field, set once by the engine at the exact point
+   a refusal is produced.
+3. **Board panel reload timing** — keyed off `turns.length` (increments the instant a
+   query is *sent*), not off turns that have actually *finished* — a lead saved via the
+   panel's own form silently didn't appear until something else remounted the panel.
+
+All three fixed, redeployed, and re-verified live (DOM class inspection for #2, not
+just a screenshot judgment call). See `docs/WORK_LOG.md` for the full writeup and
+`packages/rag_agent/tests/test_engine.py`'s new tests for the regression coverage.
 
 ## Verified live this pass
-- **Toast/Evidence-rail overlap**: CDP-confirmed structurally closed (see above).
-- **BUG-026**: live-confirmed still correct via a real `/copilot/9992` call.
-- **QuickML**: live-confirmed the exact current failure (`PATTERN_NOT_MATCHED`) via a
-  real `/chat` call + `/health` re-check, and confirmed via the Admin API that the
-  configured `QUICKML_ENDPOINT` has no working provenance and no key is set.
-- **PDF export**: live-confirmed unchanged via a real `/export/pdf` call.
+- **Full conversational workflow, real HTTP/SSE against production**: sign in → open
+  case → "pin this" (resolves the top citation) → add a note → save a lead → `GET
+  /board` shows all three, correctly typed. A **second, brand-new session** (fresh
+  `session_id`) reopens the case and "What is on the board for this case?" correctly
+  lists all 3 — the board survives the session. "Dismiss that lead" resolves "that
+  lead" to the most recent open one; the lead stays on the board with
+  `status: dismissed`, never deleted.
+- **RBAC**: an IO gets 403 reading/writing another station's board (both direct REST
+  and via a chat query naming that FIR), 401 with no token.
+- **Audit**: `/jobs/audit-verify?sync=true` reports the hash chain intact after every
+  mutation above.
+- **DELETE on a lead**: 400, confirming the auditability guard holds at the API layer.
+- **Console, via real CDP**: case-index board buttons render; the Evidence rail's "Pin
+  to board" button pins the selected card; the Board tab's inline note/lead forms work
+  and refresh correctly; a genuine refusal renders with `msg-a refusal` (red,
+  left-bordered) while a board confirmation renders plain `msg-a`; two different cases'
+  boards show completely different, correctly-scoped content (case-switch isolation).
+  Screenshots in `docs/screenshots/2026-08-27-investigation-board/`.
 
 ## Not verified / not done this pass, stated plainly
-- **None of the three industry-gap recommendations were implemented** — this pass was
-  scoped to analysis plus the two named small fixes, not new feature work.
-- **No full UI click-through beyond the toast fix** — the console wasn't otherwise
-  re-driven; the prior "final live judge pass" CDP verification of the rest of the UI
-  stands, unrepeated here since nothing else in the UI changed.
-- **`dowhy`** — explicitly out of scope this pass per the prompt's own instruction not
-  to prioritize it without a clean way to fit the deployment size constraints.
-  Unchanged from CLAUDE.md v12's measured-and-declined analysis.
-- **Voice pipeline, case-status filter chips, map pan/drag, AML positive-case
-  verification** — unchanged from all prior passes, same constraints as documented
-  there.
+- **The cross-entity timeline correlation view**
+  (`docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3) — the analysis ranked the board first;
+  this pass built that, not the timeline. Next recommended item, below.
+- **A dedicated "pin" click target inside `NetworkView.tsx`/`MapView.tsx`/`SankeyView.tsx`**
+  — pinning a relationship/hotspot/money-flow item currently goes through the Evidence
+  rail's generic "Pin to board" (works for any evidence item, including
+  `GRAPH_RELATIONSHIP`/`GEOSPATIAL_ANALYSIS`/financial ones) or the conversational path
+  ("add this person to the investigation"), both tested. An in-visualization click
+  target would be a small, purely additive follow-up, not a functional gap.
+- **QuickML / PDF export** — unchanged, correctly BLOCKED, not re-investigated this pass
+  (no new information since the prior pass's from-scratch re-check; see
+  `docs/PHASE1_FAILURE_LOG.md` BUG-018/BUG-022 and `CLAUDE.md`'s changelog for the full
+  history of why).
+- **`dowhy`** — unchanged, deliberately excluded (image-size measurement in `CLAUDE.md`
+  v12's changelog).
+- Voice pipeline, case-status filter chips, map pan/drag — unchanged from all prior
+  passes, same environmental constraints documented there.
 
 ## Open bugs (see `docs/PHASE1_FAILURE_LOG.md` for full detail)
 BUG-015 (`dowhy`), BUG-016 (Kannada latency), BUG-018 (PDF export — HTML fallback,
-honest), BUG-022 (QuickML endpoint/key — now confirmed console-UI-only, no Admin API
-path exists) remain open, externally/platform blocked, unchanged this pass. **BUG-026
-is fixed** (corrected from this file's own stale prior listing — see above; the fix
-landed 2026-08-26 and was never re-opened, this file simply hadn't caught up to it).
+honest), BUG-022 (QuickML endpoint/key — console-UI-only, no Admin API path exists),
+BUG-026 (Copilot canonical/as-filed name reconciliation, P2, small and scoped) remain
+open, unchanged this pass.
 
 ## Important architecture facts a new session must not re-derive
-See `CLAUDE.md` in full, and every fact listed in prior passes' handoffs. New this
-pass: **QUICKML_ENDPOINT is genuinely set on the live AppSail container** (to an
-unverified-provenance guessed URL from an earlier session) even though it does not
-appear in every Admin API view of the app's configuration a session might fetch —
-don't infer "not configured" from a configuration GET alone; a live `/health` check
-after a real `/chat` call is the reliable signal, since `ENDPOINT`/`ENDPOINT_KEY` are
-read from `os.getenv` once at process import in `llm.py`. **The 6 officer accounts
-are real, ACTIVE Catalyst App User identities** (`GET .../project-user`) — but the
-console's sign-in flow never establishes a Catalyst session cookie for any of them,
-so that fact doesn't help SmartBrowz or anything else that needs a real Catalyst
-Authentication session; it would take the officer completing Catalyst's own hosted
-login flow, which nothing in this deployment currently drives.
+Everything in prior handoffs still holds (see `CLAUDE.md` in full). New this pass:
+- **`appsail/upsert` takes no `id`/`app_id` field.** It upserts by `name`. Passing an
+  `id` (either the app id `50043864344` or the appComputeId `52852000000204688`)
+  returns a generic `{"error_code":"INVALID_INPUT","message":"either the request body
+  or parameters is in wrong format"}` with no field-level detail — cost real time this
+  pass before checking the exact documented recipe in `CONTEXT.md` and the
+  `catalyst-deploy-pipeline` memory, both of which had always omitted `id`. Trust those
+  recipes literally; do not add fields that seem obviously necessary.
+- **The `catalyst` CLI shim is not on this shell's default `PATH`** — it lives at
+  `<npm prefix>/catalyst(.cmd/.ps1)` (Windows: `%APPDATA%\npm`). `node
+  scripts/catalyst-token.js` does not need it (it resolves the global install path
+  itself via `npm root -g`); `scripts/deploy-console.sh`'s `catalyst deploy --only
+  client` call does.
+- **A citation-free `/chat` answer is not necessarily a refusal.** Any new intent that
+  produces a real, successful answer with zero citations (a board confirmation, a
+  capability description) must set `state.answer_is_refusal = False` explicitly (or
+  simply not touch it — it defaults False) rather than relying on the frontend to infer
+  correctly from citation count, which it can no longer do (and should not have been
+  doing in the first place).
+- **A new multi-word intent keyword must be checked against every other intent's
+  keyword list for substring collisions before shipping** —
+  `test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_expected`
+  in `packages/rag_agent/tests/test_engine.py` now guards this automatically; a failure
+  there means a new collision was introduced, not that the test needs updating (unless
+  the collision is genuinely intentional, in which case add it to the `_KNOWN` set with
+  a comment explaining why, matching the four pre-existing ones already there).
 
 ## Data-generation constraints
 Unchanged — do not regenerate the live 10k-case dataset casually. Nothing this pass
-touched the generator.
+touched the generator. The one new table (`vx_case_board_item`) is investigator-authored
+state, not generated data, and starts empty on every fresh dataset build.
 
 ## Next recommended action
-1. **Build the case board** (`docs/INDUSTRY_GAP_ANALYSIS.md` §7, item 1) — the
-   highest-ranked, smallest-effort item from this pass's gap analysis, and the most
-   concrete answer available to "is this more than a chatbot."
-2. If a QuickML endpoint URL/key or a working Catalyst hosted-login flow is ever
-   obtained through the console UI directly (not the Admin API — confirmed this pass
-   to have no path there), BUG-022 and BUG-018 both close for real.
-3. Consider the lead-disposition feature (§7 item 2) once the case board exists — it
-   is almost free once that schema is in place.
-4. BUG-026 is closed; drop it from any future "open bugs" list rather than
-   re-flagging it from an old copy of this file.
+1. **Cross-entity timeline correlation** (`docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3) —
+   the analysis's next-ranked item, independent of the board and buildable on the
+   per-case dates/districts already in the record layer. No new table needed.
+2. **Lead disposition already exists** (it was §7 item 2, "almost free once the board
+   schema is in place") — it shipped as part of this pass (`open`/`pursued`/`dismissed`
+   with a reason field), not a separate future step.
+3. If a QuickML endpoint URL/key or a working Catalyst hosted-login flow is ever
+   obtained through the console UI directly, BUG-022 and BUG-018 both close for real —
+   unchanged guidance from every prior pass.
+4. BUG-026 (Copilot canonical/as-filed name) remains a small, well-scoped, deliberately
+   deferred fix — pick it up alongside any other pass touching `copilot/brief.py`.
