@@ -118,6 +118,41 @@ def test_board_view_phrases_still_route_correctly():
     assert classify("What have we established so far?") == "BOARD_VIEW"
 
 
+def test_timeline_phrases_route_correctly_and_not_into_case_context():
+    """'What happened before this incident' and 'what happened around the time he
+    was involved' both contain 'what happened' — a bare CASE_CONTEXT keyword — and
+    would otherwise tie on dict-order (CASE_CONTEXT is registered first)."""
+    assert classify("Show me the timeline for this case.") == "TIMELINE"
+    assert classify("What happened around the time he was involved?") == "TIMELINE"
+    assert classify("What happened before this incident?") == "TIMELINE"
+    assert classify("What happened after that transaction?") == "TIMELINE"
+    assert classify("Show me the chronology of events.") == "TIMELINE"
+    # An ordinary "what happened" with none of the extra temporal language is
+    # still the case summary, not a timeline — TIMELINE must not swallow it.
+    assert classify("What happened?") == "CASE_CONTEXT"
+
+
+def test_timeline_connection_phrases_route_correctly_not_into_causal():
+    """'Why are these events connected' contains 'why' — a bare CAUSAL keyword —
+    and would otherwise be mistaken for a crime-causation question."""
+    assert classify("Show me events involving both of them.") == "TIMELINE_CONNECTION"
+    assert classify("Are there events connecting these two people?") == "TIMELINE_CONNECTION"
+    assert classify("Why are these events connected?") == "TIMELINE_CONNECTION"
+    assert classify("What connects these two people?") == "TIMELINE_CONNECTION"
+    assert classify("How are they connected?") == "TIMELINE_CONNECTION"
+    # An ordinary causal question is untouched.
+    assert classify("Why does crime correlate with poverty?") == "CAUSAL"
+
+
+def test_add_this_event_pins_instead_of_summarising_the_board():
+    """'Add this event to the investigation board' contains 'investigation board' —
+    a bare BOARD_VIEW keyword — the same collision class BOARD_VIEW's own docstring
+    already documents for 'case board' (v16), just not yet closed for this phrase."""
+    assert classify("Add this event to the investigation board.") == "BOARD_PIN_EVIDENCE"
+    assert classify("Pin that event.") == "BOARD_PIN_EVIDENCE"
+    assert classify("Save this event.") == "BOARD_PIN_EVIDENCE"
+
+
 def test_answer_is_refusal_distinguishes_genuine_refusals_from_citationless_success():
     """The console colors a refusal differently from a normal answer, keyed off
     this flag (not citation count — CAPABILITY and a successful board action both
@@ -195,6 +230,8 @@ def test_visualization_is_bound_to_intent():
     assert visualization_for("HOTSPOT") == "map"
     assert visualization_for("FORECAST") == "trend"
     assert visualization_for("PERSON_HISTORY") == "none"
+    assert visualization_for("TIMELINE") == "timeline"
+    assert visualization_for("TIMELINE_CONNECTION") == "timeline"
 
 
 def test_pronoun_without_a_named_person_needs_the_focus_stack():

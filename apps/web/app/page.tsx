@@ -19,7 +19,7 @@ export default function Console() {
   const [voiceOut, setVoiceOut] = useState(false);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [copilotFir, setCopilotFir] = useState<string | null>(null);
-  const [copilotTab, setCopilotTab] = useState<"brief" | "board">("brief");
+  const [copilotTab, setCopilotTab] = useState<"brief" | "board" | "timeline">("brief");
   const [exportNote, setExportNote] = useState<string | null>(null);
 
   // One session for the whole conversation — this is what makes "does HE have
@@ -131,6 +131,9 @@ export default function Console() {
           onAsk={(query) => send({ query })}
           onCopilot={(fir) => { setCopilotTab("brief"); setCopilotFir(fir); }}
           onBoard={(fir) => { setCopilotTab("board"); setCopilotFir(fir); }}
+          activeEvidence={activeEvidence}
+          onSelectEvidence={revealEvidence}
+          onPinEvidence={(evidenceId) => send({ query: "Add this event to the investigation board.", activeEvidenceId: evidenceId })}
         />
 
         <div className="pane glass rail">
@@ -160,6 +163,7 @@ export default function Console() {
           firId={copilotFir}
           onClose={() => setCopilotFir(null)}
           onAsk={(query) => send({ query })}
+          onPin={(evidenceId) => send({ query: "Add this event to the investigation board.", activeEvidenceId: evidenceId })}
           // The Board panel refetches when this changes — it must count turns that
           // have actually FINISHED, not turns.length: a turn is appended to `turns`
           // the instant it's sent (so the answer can stream in), well before a board

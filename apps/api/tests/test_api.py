@@ -171,6 +171,60 @@ def test_the_copilot_briefs_a_real_case(client, officers, indexed):
     assert isinstance(brief["similar_cases"], list)
 
 
+def test_the_case_timeline_is_reachable_and_chronological(client, officers, indexed):
+    from data import ds
+
+    case_id = ds.scalar('SELECT "Accused"."CaseMasterID" AS c FROM "Accused" '
+                        'JOIN "vx_accused_identity" '
+                        '  ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID"')
+    h = _auth(client, officers["DSP"]["badge_no"])
+    r = client.get(f"/timeline/case/{case_id}", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    dates = [e["date"] for e in body["events"]]
+    assert dates == sorted(dates)
+    assert any(e["entity_type"] == "person" for e in body["entities"])
+
+
+def test_the_case_timeline_obeys_the_same_station_rule_as_the_fir_endpoint(client, officers, indexed):
+    """The exact BUG-003 discipline the copilot test above documents, re-applied to
+    the timeline's own REST surface — a second reachable endpoint over a case an
+    officer could not otherwise open would be the same rule enforced by one caller
+    and not its neighbour."""
+    from data import ds
+
+    io = officers["IO"]
+    other = ds.scalar('SELECT "CaseMasterID" AS c FROM "CaseMaster" '
+                      'WHERE "PoliceStationID" != :p', {"p": int(io["ps_code"])})
+    assert other
+
+    h = _auth(client, io["badge_no"])
+    assert client.get(f"/timeline/case/{other}", headers=h).status_code == 403
+
+
+def test_the_case_timeline_404s_on_a_missing_case(client, officers, dataset):
+    h = _auth(client, officers["DSP"]["badge_no"])
+    assert client.get("/timeline/case/999999999", headers=h).status_code == 404
+
+
+def test_the_person_timeline_spans_their_cases(client, officers, habitual):
+    h = _auth(client, officers["IG"]["badge_no"])
+    r = client.get(f"/timeline/person/{habitual['PersonUID']}", headers=h)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["events"]
+    assert any(e["entity_type"] == "case" for e in body["entities"])
+
+
+def test_the_person_timeline_masks_names_below_dsp(client, officers, habitual):
+    from policy import MASKED_NAME
+
+    r = client.get(f"/timeline/person/{habitual['PersonUID']}",
+                   headers=_auth(client, officers["SHO"]["badge_no"]))
+    assert r.status_code == 200
+    assert r.json()["name"] == MASKED_NAME
+
+
 def test_every_request_appends_to_the_audit_chain(client, officers, dataset):
     from data.audit import verify_chain
 

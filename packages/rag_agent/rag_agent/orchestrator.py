@@ -11,12 +11,15 @@ handed the evidence list — it has no other input.
 """
 import re
 import time
+from datetime import datetime
 from typing import Optional
 
 from data import ds, upsert_session_focus
+from policy import mask_person_name
 
 from . import board as board_agent
 from . import intents
+from . import timeline as timeline_agent
 from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
     translation_agent, vector_agent, voice_agent,
@@ -170,7 +173,14 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
             # clarification path the tied-name search above already uses, sourced
             # from the previous turn instead of a fresh search.
             candidates = _recent_person_candidates(state.session_id)
-            if len(candidates) >= 2:
+            # TIMELINE_CONNECTION's own pronoun ("both of them", "these two") names
+            # MULTIPLE people by design — 2 recent candidates is exactly its intended
+            # input, not the singular ambiguity this branch otherwise refuses on.
+            # Found live: "Show me events involving both of them" right after a
+            # 2-accused CASE_PEOPLE turn fell to this generic refusal before
+            # _handle_timeline_connection (which resolves the identical 2 candidates
+            # itself) ever ran.
+            if len(candidates) >= 2 and state.intent != "TIMELINE_CONNECTION":
                 state.refusal_reason = "ambiguous_person"
                 state.ambiguous_candidates = candidates[:4]
                 resolved_note = (f"pronoun could mean any of {len(candidates)} people "
@@ -264,6 +274,16 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     # detection — HOTSPOT already owns "where are the crime hotspots" without a "those".
     if state.intent == "CASE_LOCATIONS":
         _handle_case_locations(state, t0)
+        return state
+
+    # Cross-entity timeline (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 3) — reads dated
+    # records across a case/person's related entities, not a fresh retrieval, so it
+    # short-circuits here the same way CASE_LOCATIONS and BOARD_* do.
+    if state.intent == "TIMELINE":
+        _handle_timeline(state, t0)
+        return state
+    if state.intent == "TIMELINE_CONNECTION":
+        _handle_timeline_connection(state, t0)
         return state
 
     if state.intent in intents.NEEDS_CASE and not state.active_entities.active_fir and not state.refusal_reason:
@@ -763,6 +783,179 @@ def _handle_case_locations(state: InvestigationState, t0: float) -> None:
            f"{len(rows)} case(s) tallied across {len(tally)} district(s)", t0)
 
 
+_TIMELINE_BEFORE_RE = re.compile(r"\bbefore\b", re.I)
+_TIMELINE_AFTER_RE = re.compile(r"\bafter\b", re.I)
+
+
+def _timeline_subject(state: InvestigationState) -> tuple[Optional[str], Optional[str]]:
+    """(anchor kind, id) to build the timeline around. A resolved PERSON takes
+    priority over an open case — "what happened around the time HE was involved"
+    names a person even on a turn where a case also happens to be open — and falls
+    back to the open case otherwise (the ordinary "show me the timeline" case)."""
+    pid = state.active_entities.active_person
+    if pid:
+        return "person", pid
+    fir_id = state.active_entities.active_fir
+    if fir_id:
+        return "case", fir_id
+    return None, None
+
+
+def _timeline_evidence(e: dict) -> EvidenceItem:
+    label = "(derived — inferred from resolved identity) " if e["kind"] == "derived" else ""
+    return EvidenceItem(
+        evidence_id=f"timeline:{e['event_type']}:{e['entity_id']}:{e['date']}",
+        source_type="GRAPH_RELATIONSHIP" if e["entity_type"] == "transaction" else
+                    ("CRIMINAL_RECORD" if e["kind"] == "derived" else "FIR_RECORD"),
+        source_id=e.get("ref_id") or e.get("entity_id") or "",
+        source_query=e.get("source_query"),
+        content=f"{label}{e['date'][:10]}: {e['description']}",
+        confidence=0.9 if e["kind"] == "authoritative" else 0.6,
+        authoritative=e["kind"] == "authoritative",
+        timestamp=ds.to_dt(e["date"]) or datetime.utcnow(),
+    )
+
+
+def _timeline_anchor_date(state: InvestigationState, fallback: Optional[str]) -> Optional[str]:
+    """The date "before"/"after" is relative to — the timeline event the console had
+    selected (active_evidence_id, the same field 'pin this' already reads) if one
+    was, else the anchor case/person's own earliest event."""
+    if state.active_evidence_id:
+        prior = _last_turn(state.session_id)
+        if prior:
+            for e in prior.evidence_items:
+                if e.get("evidence_id") == state.active_evidence_id:
+                    ts = e.get("timestamp")
+                    if ts:
+                        return str(ts)
+    return fallback
+
+
+def _handle_timeline(state: InvestigationState, t0: float) -> None:
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    kind, subject_id = _timeline_subject(state)
+    if not subject_id:
+        state.refusal_reason = "no_timeline_subject"
+        _trace(state, "Timeline", "No case or person in view to build a timeline for", t0)
+        return
+
+    try:
+        result = (timeline_agent.person_timeline(subject_id, role, ps) if kind == "person"
+                 else timeline_agent.case_timeline(subject_id, role, ps))
+    except KeyError:
+        state.refusal_reason = "board_not_found"
+        _trace(state, "Timeline", "Subject not found", t0)
+        return
+    except timeline_agent.NotPermitted:
+        state.refusal_reason = "board_forbidden"
+        _trace(state, "Timeline", "Outside this officer's station scope", t0)
+        return
+
+    events = result["events"]
+    query = state.original_query or ""
+    anchor = _timeline_anchor_date(state, events[0]["date"] if events else None)
+    if anchor and _TIMELINE_BEFORE_RE.search(query):
+        events = [e for e in events if e["date"] < anchor]
+    elif anchor and _TIMELINE_AFTER_RE.search(query):
+        events = [e for e in events if e["date"] > anchor]
+
+    state.prediction_results["timeline"] = {**result, "events": events}
+    if not events:
+        state.evidence_items.append(EvidenceItem(
+            evidence_id=f"timeline:{kind}:{subject_id}:none", source_type="FIR_RECORD",
+            source_id=subject_id,
+            source_query="cross-entity timeline over dated case/arrest/chargesheet/financial records",
+            content="No dated events fall within this timeline and access scope.",
+            confidence=0.9, authoritative=True))
+        _trace(state, "Timeline", "No dated events found", t0)
+        return
+
+    state.evidence_items += [_timeline_evidence(e) for e in events]
+    _trace(state, "Timeline",
+           f"{len(events)} event(s) across {len(result['entities'])} entit(y/ies)", t0)
+
+
+def _connection_targets(state: InvestigationState) -> list[tuple[str, str]]:
+    """Up to two (name, person_id) pairs for a TIMELINE_CONNECTION turn. Prefers
+    people named IN this query; falls back to the previous turn's own citations
+    (the same source RAG-34's pronoun clarification reads) so "both of them" after
+    a CASE_PEOPLE turn resolves without re-typing names. Deliberately takes the
+    first two candidates rather than asking which two — with exactly the two people
+    a prior CASE_PEOPLE turn just named, that IS "both of them"."""
+    from data.nlp import ner_extract
+    entities = ner_extract(state.original_query or "", "en")
+    named = [e.text for e in entities if e.label == "PERSON"]
+    pool = named or _recent_person_candidates(state.session_id)
+
+    resolved: list[tuple[str, str]] = []
+    seen_ids = set()
+    for n in pool:
+        hits = sql_agent.person_by_name(n)
+        if not hits or hits[0]["person_id"] in seen_ids:
+            continue
+        seen_ids.add(hits[0]["person_id"])
+        resolved.append((hits[0]["name_en"], hits[0]["person_id"]))
+        if len(resolved) == 2:
+            break
+    return resolved
+
+
+def _handle_timeline_connection(state: InvestigationState, t0: float) -> None:
+    role = state.officer_role
+    targets = _connection_targets(state)
+    if len(targets) < 2:
+        state.refusal_reason = "timeline_connection_no_subjects"
+        _trace(state, "Timeline",
+               "Fewer than two people in view to compare — name two, or ask this "
+               "right after I list several people on a case", t0)
+        return
+
+    (name_a, pid_a), (name_b, pid_b) = targets
+    masked_a, masked_b = mask_person_name(role, name_a), mask_person_name(role, name_b)
+    conn = timeline_agent.connection_between(pid_a, masked_a, pid_b, masked_b)
+
+    if conn["direct"]:
+        content = " ".join(d["description"] for d in conn["direct"])
+        state.evidence_items.append(EvidenceItem(
+            evidence_id=f"connection:{pid_a}:{pid_b}", source_type="GRAPH_RELATIONSHIP",
+            source_id=pid_b,
+            source_query="graph co-accused / shared-case / financial-transfer check "
+                         "between two resolved people",
+            content=content, confidence=0.95, authoritative=True))
+    else:
+        state.evidence_items.append(EvidenceItem(
+            evidence_id=f"connection:{pid_a}:{pid_b}:none", source_type="GRAPH_RELATIONSHIP",
+            source_id=pid_b,
+            source_query="graph co-accused / shared-case / financial-transfer check "
+                         "between two resolved people",
+            content=(f"No recorded connection (shared case, co-accused record, or "
+                     f"financial transfer) links {masked_a} and {masked_b}. Any events "
+                     f"involving them that fall near each other in time are not, on "
+                     f"that basis alone, reported as connected — temporal proximity is "
+                     f"not evidence of a relationship."),
+            confidence=0.9, authoritative=True))
+
+    # Attach both people's merged, chronological timeline as the visualization, so
+    # "show me events involving both of them" actually shows the events, not just
+    # the yes/no connection statement above.
+    events: list[dict] = []
+    for pid, name in ((pid_a, masked_a), (pid_b, masked_b)):
+        t = timeline_agent.person_timeline(pid, role, _officer_ps(state.officer_id))
+        events += t["events"]
+    events.sort(key=lambda e: e["date"])
+    state.prediction_results["timeline"] = {
+        "anchor": "connection",
+        "entities": [{"entity_type": "person", "entity_id": pid_a, "entity_name": masked_a},
+                    {"entity_type": "person", "entity_id": pid_b, "entity_name": masked_b}],
+        "events": events, "total": len(events),
+        "connection": conn,
+    }
+    state.evidence_items += [_timeline_evidence(e) for e in events]
+    _trace(state, "Timeline (connection)",
+           f"{'direct connection found' if conn['direct'] else 'no direct connection'} "
+           f"between {masked_a} and {masked_b}; {len(events)} merged event(s)", t0)
+
+
 def _reasoning_explanation(prior) -> str:
     """'Why are you showing me these people?' — re-describe the previous turn's own
     agent trace, which is already the plain-language explainability surface the
@@ -886,22 +1079,59 @@ def _pin_evidence_from_context(state: InvestigationState, fir_id: str, role: str
     (`active_evidence_id`, sent by apps/web's own `activeEvidence` state) or, absent
     a selection, the previous turn's top citation. Reads the PREVIOUS turn's own
     evidence/citations (the same source EXPLAIN_REASONING/EVIDENCE_FOR already read),
-    never the current turn's — a board action gathers no evidence of its own."""
+    never the current turn's — a board action gathers no evidence of its own.
+
+    A genuine selection (`target` below) must be tried against every source before
+    ever falling back to "whatever the previous turn showed" — found live: with a
+    target set but absent from the previous turn's own pool (e.g. an event picked
+    from the Copilot overlay's Timeline tab, which fetches over REST and so was
+    never part of any chat turn), the old code fell through to `pool[0]` anyway and
+    silently pinned the wrong thing with no indication a substitution had happened.
+    """
     prior = _last_turn(state.session_id)
+    target = state.active_evidence_id
     ev: Optional[dict] = None
-    if prior:
+
+    if prior and target:
         pool = prior.evidence_items or []
-        if state.active_evidence_id:
-            ev = next((e for e in pool if e.get("evidence_id") == state.active_evidence_id), None)
-        if not ev and pool:
+        ev = next((e for e in pool if e.get("evidence_id") == target), None)
+        if not ev:
+            c = next((c for c in prior.citations if c.get("evidence_id") == target), None)
+            if c:
+                ev = {"evidence_id": c["evidence_id"], "source_type": "FIR_RECORD",
+                     "source_id": c["evidence_id"], "content": c["label"],
+                     "confidence": None, "authoritative": False, "source_query": None}
+
+    if not ev and target and target.startswith("timeline:"):
+        # The Copilot overlay's own Timeline tab (Copilot.tsx) fetches the case
+        # timeline over REST, not through /chat — so "pin this event" from there has
+        # no prior CONVERSATION turn to read. The event ids are deterministic (see
+        # _timeline_evidence), so it is re-derived directly from the same case
+        # timeline the tab is showing, rather than requiring a priming chat turn
+        # first the way opening the board from the case index used to.
+        result = timeline_agent.case_timeline(fir_id, role, ps)
+        for e in result["events"]:
+            if f"timeline:{e['event_type']}:{e['entity_id']}:{e['date']}" == target:
+                item = _timeline_evidence(e)
+                ev = {"evidence_id": item.evidence_id, "source_type": item.source_type,
+                     "source_id": item.source_id, "content": item.content,
+                     "confidence": item.confidence, "authoritative": item.authoritative,
+                     "source_query": item.source_query}
+                break
+
+    if not ev and prior and not target:
+        # No specific card was selected — "pin this" meaning "whatever you just
+        # showed me". Only reached with no target at all; a target that failed to
+        # resolve above must never silently fall back to a different item.
+        pool = prior.evidence_items or []
+        if pool:
             ev = pool[0]
-        if not ev and prior.citations:
-            target = state.active_evidence_id
-            candidates = [c for c in prior.citations if not target or c.get("evidence_id") == target]
-            c = (candidates or prior.citations)[0]
+        elif prior.citations:
+            c = prior.citations[0]
             ev = {"evidence_id": c["evidence_id"], "source_type": "FIR_RECORD",
                  "source_id": c["evidence_id"], "content": c["label"],
                  "confidence": None, "authoritative": False, "source_query": None}
+
     if not ev:
         raise _NoEvidenceInContext()
     item_type = "finding" if ev.get("authoritative") else "evidence"
@@ -1257,6 +1487,10 @@ _INTENT_ANSWERS_WITH = {
 def _rank_evidence(state: InvestigationState) -> list[EvidenceItem]:
     """Citation [1] should be the best support for THIS question, not merely the
     most confident thing retrieved."""
+    if state.intent in ("TIMELINE", "TIMELINE_CONNECTION"):
+        # Already chronological (see _handle_timeline/_handle_timeline_connection) —
+        # resorting by confidence would scramble the order that IS the answer.
+        return list(state.evidence_items)
     preferred = _INTENT_ANSWERS_WITH.get(state.intent)
     alias = state.intent == "ALIAS_CHECK"
 

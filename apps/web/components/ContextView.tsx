@@ -9,12 +9,14 @@ const NetworkView = dynamic(() => import("./viz/NetworkView"), { ssr: false });
 const SankeyView = dynamic(() => import("./viz/SankeyView"), { ssr: false });
 const TrendView = dynamic(() => import("./viz/TrendView"), { ssr: false });
 const MapView = dynamic(() => import("./viz/MapView"), { ssr: false });
+const TimelineView = dynamic(() => import("./viz/TimelineView"), { ssr: false });
 
 const TITLES: Record<string, string> = {
   map: "Geospatial — hotspot density",
   network: "Criminal network",
   sankey: "Financial flow",
   trend: "Forecast",
+  timeline: "Investigation timeline",
   none: "Case index",
 };
 
@@ -24,12 +26,15 @@ const TITLES: Record<string, string> = {
  *  With no answer on screen yet it shows the case index rather than a placeholder —
  *  see CaseExplorer for why an empty console is an unusable one. */
 export default function ContextView({
-  viz, onAsk, onCopilot, onBoard,
+  viz, onAsk, onCopilot, onBoard, activeEvidence, onSelectEvidence, onPinEvidence,
 }: {
   viz: Visualization;
   onAsk: (q: string) => void;
   onCopilot: (firId: string) => void;
   onBoard: (firId: string) => void;
+  activeEvidence?: string | null;
+  onSelectEvidence?: (id: string) => void;
+  onPinEvidence?: (id: string) => void;
 }) {
   const vizKind = viz?.kind ?? "none";
 
@@ -73,6 +78,10 @@ export default function ContextView({
               {kind === "sankey" && <SankeyView data={viz.data} />}
               {kind === "trend" && <TrendView data={viz.data} />}
               {kind === "map" && <MapView data={viz.data} />}
+              {kind === "timeline" && (
+                <TimelineView data={viz.data} activeEvidenceId={activeEvidence}
+                  onSelect={onSelectEvidence} onPin={onPinEvidence} />
+              )}
             </div>
           )}
         </div>

@@ -222,6 +222,15 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "will not guess which one you mean — please say more (a case, a district, or "
         "which one) to tell them apart."
     ),
+    "no_timeline_subject": (
+        "A timeline needs a case or a person to build it around: open a case, name "
+        "someone, or ask this right after I've shown you one."
+    ),
+    "timeline_connection_no_subjects": (
+        "I need two people to check for a connection between them — name them both, "
+        "or ask this right after I've listed several people on a case so 'both of "
+        "them' has someone to mean."
+    ),
 }
 
 

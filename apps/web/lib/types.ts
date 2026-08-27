@@ -24,8 +24,46 @@ export type TraceEntry = {
   confidence: number | null;
 };
 
-export type VizKind = "map" | "network" | "sankey" | "trend" | "none";
+export type VizKind = "map" | "network" | "sankey" | "trend" | "timeline" | "none";
 export type Visualization = { kind: VizKind; data: any };
+
+export type TimelineEvent = {
+  date: string;
+  entity_type: "case" | "person" | "transaction";
+  entity_id: string | null;
+  entity_name: string | null;
+  event_type: string;
+  description: string;
+  // "authoritative": a directly stated ER/vx_ fact. "derived": a relationship this
+  // system inferred (currently only a person's OTHER cases, linked by Fellegi-
+  // Sunter's probabilistic identity match, not a directly stated fact) — never
+  // render the two the same way.
+  kind: "authoritative" | "derived";
+  ref_type: string | null;
+  ref_id: string | null;
+  source_query: string | null;
+};
+
+export type TimelineEntity = { entity_type: string; entity_id: string; entity_name: string };
+
+export type TimelineConnection = {
+  person_a: { id: string; name: string };
+  person_b: { id: string; name: string };
+  direct: { type: string; kind: string; description: string }[];
+  has_direct_connection: boolean;
+};
+
+export type TimelineResult = {
+  anchor: "case" | "person" | "connection";
+  fir_id?: string;
+  fir_number?: string;
+  person_id?: string;
+  name?: string;
+  entities: TimelineEntity[];
+  events: TimelineEvent[];
+  total: number;
+  connection?: TimelineConnection;
+};
 
 export type FinalEvent = {
   type: "final";

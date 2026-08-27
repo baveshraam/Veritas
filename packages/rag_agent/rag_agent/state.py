@@ -61,7 +61,7 @@ class AgentTraceEntry(BaseModel):
 
 
 class VisualizationPayload(BaseModel):
-    kind: Literal["map", "network", "sankey", "trend", "none"] = "none"
+    kind: Literal["map", "network", "sankey", "trend", "timeline", "none"] = "none"
     data: dict = Field(default_factory=dict)
 
 

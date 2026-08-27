@@ -194,6 +194,39 @@ _CASE_REFERENCE_UNSUPPORTED = re.compile(
     r"|\bthe\s+case\s+(we|i|you)\s+(started|began|opened)(\s+with)?\b",
     re.I)
 
+# Cross-entity timeline (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 3) — checked as a
+# shape, not a keyword-scored topic, for the same reason CASE_LOCATIONS/EXPLAIN_
+# REASONING are: "what happened before this incident" and "what happened around
+# the time he was involved" both contain "what happened", which would otherwise
+# tie CASE_CONTEXT's own "what happened" keyword and lose on dict-order tie-break.
+_TIMELINE = re.compile(
+    r"\btimelines?\b|\bchronology\b|\bsequence of events\b|\baround the time\b"
+    r"|\bwhat happened before (this|that)\b|\bwhat happened after (this|that)\b"
+    r"|\bbefore (this|that) (incident|event|transaction|case|arrest)\b"
+    r"|\bafter (this|that) (incident|event|transaction|case|arrest)\b",
+    re.I)
+
+# "Show me events involving both of them" / "are there events connecting these two
+# people" / "why are these events connected" — a request to compare TWO entities'
+# timelines, not to read one. Checked before CAUSAL's bare "why" keyword can steal
+# "why are these events connected" (see classify()'s existing EXPLAIN_REASONING
+# precedent for the same class of collision).
+_TIMELINE_CONNECTION = re.compile(
+    r"\bevents?\s+(connecting|involving both|linking)\b"
+    r"|\bconnect(ing)?\s+these\s+(two|people)\b"
+    r"|\bwhat\s+connects\s+(these|those|them)\b"
+    r"|\bhow\s+(are|is)\s+(these|those|they)\s+(connected|linked)\b"
+    r"|\bwhy\s+(are|is)\s+(these|those|this|that)\s+(events?|connections?|links?)\s+connected\b"
+    r"|\bare there (any )?events? connecting\b",
+    re.I)
+
+# "Add this event to the investigation board" contains "investigation board" —
+# a bare BOARD_VIEW keyword — so without this pre-check it misroutes to a board
+# summary instead of pinning, the same collision class BOARD_VIEW's own keyword
+# list already documents for "case board" (found live testing this exact spec
+# example: v16's fix only covered "case board", not "investigation board").
+_BOARD_PIN_EVENT = re.compile(r"\b(add|pin|save)\s+(this|that)\s+event\b", re.I)
+
 # Third-person pronouns that must resolve against the session focus stack. Bare
 # "this"/"that" are ambiguous between a personal pronoun ("does *this* have priors" —
 # rare, but "tell me about this person" is common) and a determiner in front of an
@@ -238,6 +271,12 @@ def classify(query: str) -> str:
         return "CASE_LOCATIONS"
     if _CASE_REFERENCE_UNSUPPORTED.search(query or ""):
         return "CASE_REFERENCE_UNSUPPORTED"
+    if _BOARD_PIN_EVENT.search(query or ""):
+        return "BOARD_PIN_EVIDENCE"
+    if _TIMELINE_CONNECTION.search(query or ""):
+        return "TIMELINE_CONNECTION"
+    if _TIMELINE.search(query or ""):
+        return "TIMELINE"
     scores: dict[str, int] = {}
     for intent, (keywords, _) in INTENTS.items():
         hits = sum(1 for k in keywords if _KEYWORD_RE[k].search(q))
@@ -258,9 +297,10 @@ def classify(query: str) -> str:
     return "CRIME_SEARCH"
 
 
-# Not in INTENTS: these three are matched by regex before keyword scoring runs
-# (see classify()), so they carry no keyword tuple to read a visualization kind from.
-_EXTRA_VISUALIZATION = {"CASE_LOCATIONS": "map"}
+# Not in INTENTS: these are matched by regex before keyword scoring runs (see
+# classify()), so they carry no keyword tuple to read a visualization kind from.
+_EXTRA_VISUALIZATION = {"CASE_LOCATIONS": "map", "TIMELINE": "timeline",
+                        "TIMELINE_CONNECTION": "timeline"}
 
 
 def visualization_for(intent: str) -> str:

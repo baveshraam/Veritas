@@ -127,6 +127,11 @@ def build_visualization(intent: str, state) -> VisualizationPayload:
             return VisualizationPayload(kind="map",
                                         data={"polygons": polygons, "fir_points": points})
 
+    if kind == "timeline":
+        t = state.prediction_results.get("timeline")
+        if t:
+            return VisualizationPayload(kind="timeline", data=t)
+
     if kind == "trend":
         fc = state.prediction_results.get("forecast_crime")
         if fc is not None:

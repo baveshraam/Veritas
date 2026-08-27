@@ -1,6 +1,6 @@
 import type {
   BoardItem, BoardItemType, CaseBoard, CaseIndex, CopilotBrief, EvidenceItem, FinalEvent,
-  Officer, TraceEntry,
+  Officer, TimelineEvent, TimelineResult, TraceEntry,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -232,6 +232,33 @@ export async function updateBoardItem(firId: string, itemId: string, body: {
   });
   if (!r.ok) throw new Error("Could not update that board item");
   return r.json();
+}
+
+/** The cross-entity timeline (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 3), reachable
+ *  directly (this) as well as via /chat's TIMELINE/TIMELINE_CONNECTION intents —
+ *  the Copilot overlay's Timeline tab always wants the FULL case timeline, not
+ *  whatever a chat turn happened to filter. */
+export async function getCaseTimeline(firId: string): Promise<TimelineResult> {
+  const r = await fetch(`${BASE}/timeline/case/${firId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(
+    r.status === 404 ? "Case not found"
+    : r.status === 403 ? "This case's timeline is outside your access scope"
+    : "Timeline unavailable");
+  return r.json();
+}
+
+export async function getPersonTimeline(personId: string): Promise<TimelineResult> {
+  const r = await fetch(`${BASE}/timeline/person/${personId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(r.status === 404 ? "Person not found" : "Timeline unavailable");
+  return r.json();
+}
+
+/** The exact evidence_id a chat-driven timeline event was cited under
+ *  (rag_agent/orchestrator.py:_timeline_evidence) — reconstructed client-side so a
+ *  click on an event card can select/pin it through the same EvidenceRail
+ *  mechanism every other evidence item already uses, with no server round trip. */
+export function timelineEvidenceId(e: TimelineEvent): string {
+  return `timeline:${e.event_type}:${e.entity_id}:${e.date}`;
 }
 
 export async function deleteBoardItem(firId: string, itemId: string): Promise<void> {
