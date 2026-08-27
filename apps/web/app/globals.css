@@ -746,16 +746,20 @@ body::after {
 .dim { color: var(--text-faint); font-size: 13px; }
 
 /* Alert toasts ---------------------------------------------------------- */
-/* Anchored under the topbar, not the viewport's bottom-right corner — that
-   corner is also where the Evidence rail's citation cards end up, and a live
-   anomaly toast stacking on top of a citation an officer is trying to read
-   (found live: an evidence card's confidence chip and body text obscured by a
-   toast) undermines exactly the "every claim traces to a record" pitch this
-   panel exists to prove. The header is a fixed, predictable height; the rail's
-   content is not. */
+/* Rendered in normal document flow inside the Evidence rail pane, between its
+   header and its scrollable body — not `position: fixed` over the viewport.
+   A fixed overlay was tried first (anchored under the topbar instead of the
+   bottom-right corner) and only reduced the overlap: with 3 alerts active it
+   could still cover the rail's header/first card, since a floating layer
+   necessarily sits on top of whatever is beneath it regardless of where that
+   is. Living in the pane's own flexbox flow instead means a toast displaces
+   the evidence list downward — the rail's `.pane-body` already scrolls
+   independently (`flex: 1 1 auto; overflow-y: auto`) — so no citation card is
+   ever hidden behind a toast, not just less often. */
 .toast-stack {
-  position: fixed; right: 18px; top: 78px; z-index: 50;
-  display: flex; flex-direction: column; gap: 8px; width: 290px;
+  flex: 0 0 auto;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 15px 0;
 }
 .toast { padding: 11px 13px; animation: rise 0.35s var(--ease) both; }
 .toast-head {

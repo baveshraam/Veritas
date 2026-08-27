@@ -131,6 +131,7 @@ export default function Console() {
               <span className="chip chip-low">{evidence.length} cited</span>
             )}
           </div>
+          <AlertToasts />
           <div className="pane-body">
             <EvidenceRail
               evidence={evidence}
@@ -143,7 +144,6 @@ export default function Console() {
       </main>
 
       <EvidenceThread evidenceId={activeEvidence} />
-      <AlertToasts />
       {copilotFir && <Copilot firId={copilotFir} onClose={() => setCopilotFir(null)} />}
     </div>
   );
