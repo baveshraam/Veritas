@@ -135,7 +135,19 @@ _CASE_REFERENCE_UNSUPPORTED = re.compile(
     r"earlier|last|original|other)\s+case\b"
     r"|\b(return|switch)\s+to\s+(the\s+)?(first|previous|prior|earlier|last|original|"
     r"other)\s+case\b"
-    r"|\bthe\s+(first|previous|prior|earlier|original)\s+case\s+(again|once more)\b",
+    r"|\bthe\s+(first|previous|prior|earlier|original)\s+case\s+(again|once more)\b"
+    # The pattern above only fires when an ORDINAL sits directly before "case" — but
+    # "go back to the CASE WE STARTED WITH" names the same thing (a case by its
+    # position in this session, not an ID) with the qualifier trailing "case" instead
+    # of leading it. Found live: this exact phrasing skipped the refusal entirely and
+    # fell to a real semantic search, which had enough confidence to pass CRAG and
+    # returned 5 confidently-cited but completely unrelated records — worse than a
+    # refusal, because nothing on screen signalled the mismatch. Two more shapes of
+    # the same underlying reference: "back to that case" (a bare demonstrative, no
+    # ordinal at all) and "the case we started/began/opened with" (no "back to").
+    r"|\b(go|switch|return|come|head)\s+back\s+to\s+(the\s+)?case\s+(we|i|you)\b"
+    r"|\b(go|switch|return|come|head)\s+back\s+to\s+(that|this|the\s+other)\s+case\b"
+    r"|\bthe\s+case\s+(we|i|you)\s+(started|began|opened)(\s+with)?\b",
     re.I)
 
 # Third-person pronouns that must resolve against the session focus stack. Bare

@@ -827,12 +827,19 @@ def _fir_evidence(r: dict) -> EvidenceItem:
 
 
 def _network_evidence(r: dict) -> EvidenceItem:
+    # CLAUDE.md §4: the ER records no gang, so the derived Louvain grouping is
+    # labelled honestly as what it is — "network community 6", never "gang" — the
+    # same discipline copilot/brief.py already follows. This rendering was the one
+    # place still printing the literal word "gang" in front of an officer.
     return EvidenceItem(
         evidence_id=f"assoc:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
         source_id=str(r["person_id"]),
         source_query="MATCH (p)-[:CO_ACCUSED_WITH*]-(o)",
         content=(f"{r['name_en']} is a known associate ({r['hops']} hop(s) away"
-                 + (f", gang: {r['gang']}" if r.get("gang") else "") + ")."),
+                 # r['gang'] is already formatted "Community 47" (data/gds.py); lower-
+                 # cased to match the "network community 6" phrasing used everywhere
+                 # else this same derived grouping is shown (copilot/brief.py's leads).
+                 + (f", network {r['gang'].lower()}" if r.get("gang") else "") + ")."),
         confidence=1.0 / max(1, int(r.get("hops") or 1)))
 
 
@@ -935,7 +942,18 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
         if note:
             answer = f"{answer}\n\n{note}"
         state.final_answer = answer
+        # Every other refusal branch in this function clears both fields together
+        # (see CAPABILITY and "nothing_prior" above). This one only cleared citations,
+        # so a widened search that came back with low-confidence neighbours the
+        # evaluator correctly REJECTed still shipped those neighbours in evidence_items
+        # — the Evidence rail rendered 8 unrelated FIRs, each with its own "X% text
+        # similarity" chip, right next to a message saying nothing was found. Found
+        # live: asking about a subject with no records at all ("Tell me about the
+        # flying saucer incident on the moon") still populated the rail with unrelated
+        # robbery cases at ~40% similarity. A refusal that already knows it has
+        # nothing to cite must not keep the evidence it rejected.
         state.citations = []
+        state.evidence_items = []
         _trace(state, "Synthesis", f"Refused to answer — {reason}", t0)
         return state
 

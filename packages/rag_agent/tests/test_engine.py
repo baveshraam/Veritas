@@ -142,6 +142,20 @@ def test_go_back_to_an_earlier_case_refuses_instead_of_guessing():
     assert classify("Can we return to the previous case?") == "CASE_REFERENCE_UNSUPPORTED"
 
 
+def test_a_case_reference_with_no_ordinal_still_refuses():
+    """The original fix only matched an ORDINAL sitting directly before 'case' (the
+    first/previous/original case). 'The case we started with' names the same thing —
+    a case by its position in this session, not by FIR number — with the qualifier
+    trailing 'case' instead of leading it. Found live 2026-08-27 (final judge pass):
+    this exact phrasing skipped the refusal and fell to a real semantic search, which
+    had enough confidence to pass CRAG and returned 5 confidently-cited but completely
+    unrelated records (an Attempt to Murder case in Ballari/Kolar) — worse than a
+    refusal, since nothing on screen signalled the mismatch."""
+    assert classify("Go back to the case we started with.") == "CASE_REFERENCE_UNSUPPORTED"
+    assert classify("Let's return to the case we began with") == "CASE_REFERENCE_UNSUPPORTED"
+    assert classify("Go back to that case") == "CASE_REFERENCE_UNSUPPORTED"
+
+
 # --- citations ---------------------------------------------------------------
 
 def test_citations_are_1_based_and_aligned_to_evidence():
@@ -1545,6 +1559,44 @@ def test_the_ambiguous_person_answer_names_the_candidates():
 
     assert "Ramesh Gowda" in state.final_answer and "Ramesh Kumar" in state.final_answer
     assert state.citations == []
+
+
+def test_a_no_evidence_refusal_does_not_keep_the_evidence_it_rejected():
+    """Found live 2026-08-27 (final judge pass): 'Tell me about the flying saucer
+    incident on the moon' correctly refused in the chat text ('I could not find this
+    in the available records') but the Evidence rail still rendered 8 unrelated
+    robbery FIRs at ~40% text similarity — the exact widened search CRAG had just
+    REJECTed. Root cause: this refusal branch (requires_escalation, reason
+    'no_evidence') cleared state.citations but not state.evidence_items, unlike every
+    other refusal branch in node_synthesize (CAPABILITY, 'nothing_prior',
+    'ambiguous_person' all clear both). A refusal that already knows it has nothing
+    to cite must not still ship the evidence it rejected to the client."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Tell me about the flying saucer incident on the moon.")
+    state.refusal_reason = "no_evidence"
+    state.requires_escalation = True
+    state.evidence_items = [_ev(0.40, eid="vec:fir_narrative:1")]
+
+    orch.node_synthesize(state)
+
+    assert state.citations == []
+    assert state.evidence_items == []
+
+
+def test_network_evidence_never_says_gang():
+    """CLAUDE.md §4: the ER records no gang, so the Louvain grouping is labelled
+    honestly as what it is — 'network community 6' — everywhere else it's shown
+    (copilot/brief.py's leads). This rendering was the one place still printing the
+    literal word 'gang' in front of an officer, contradicting that documented rule."""
+    import rag_agent.orchestrator as orch
+
+    ev = orch._network_evidence({"person_id": "41", "name_en": "Usha Naika",
+                                 "hops": 1, "gang": "Community 6"})
+    assert "gang" not in ev.content.lower()
+    assert "network community 6" in ev.content
 
 
 def test_a_bare_pronoun_after_case_people_asks_which_of_the_named_candidates():
