@@ -24,9 +24,17 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
       roam: true,
       draggable: true,
       force: { repulsion: 190, edgeLength: [45, 130], gravity: 0.08 },
+      // Labelling every node keeps a large expanded network legible (a 40%-of-max
+      // cutoff already thins ~30 nodes down to the real hubs). But on a SMALL,
+      // high-variance graph — e.g. a bare "who is involved" case-accused view with
+      // 4 nodes and one clear organiser — that same cutoff zeroed out everyone but
+      // the top node: 3 of 4 accused rendered as an unlabelled dot, unreadable to
+      // an investigator. Below a small node count there is no clutter to justify
+      // hiding a name, so every node keeps its label.
       label: {
         show: true, position: "right", color: TEXT_DIM, fontSize: 11,
-        formatter: (p: any) => (p.data.value > max * 0.4 ? p.data.name : ""),
+        formatter: (p: any) =>
+          nodes.length <= 15 || p.data.value > max * 0.4 ? p.data.name : "",
       },
       emphasis: { focus: "adjacency", label: { show: true } },
       lineStyle: { color: "source", opacity: 0.35, curveness: 0.12 },

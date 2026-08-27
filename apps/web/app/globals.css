@@ -746,8 +746,15 @@ body::after {
 .dim { color: var(--text-faint); font-size: 13px; }
 
 /* Alert toasts ---------------------------------------------------------- */
+/* Anchored under the topbar, not the viewport's bottom-right corner — that
+   corner is also where the Evidence rail's citation cards end up, and a live
+   anomaly toast stacking on top of a citation an officer is trying to read
+   (found live: an evidence card's confidence chip and body text obscured by a
+   toast) undermines exactly the "every claim traces to a record" pitch this
+   panel exists to prove. The header is a fixed, predictable height; the rail's
+   content is not. */
 .toast-stack {
-  position: fixed; right: 18px; bottom: 18px; z-index: 50;
+  position: fixed; right: 18px; top: 78px; z-index: 50;
   display: flex; flex-direction: column; gap: 8px; width: 290px;
 }
 .toast { padding: 11px 13px; animation: rise 0.35s var(--ease) both; }
