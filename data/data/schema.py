@@ -360,6 +360,40 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("AgentTrace", "text"),                   # JSON
         Col("CreatedAt", "datetime"),
     ],
+    # The persistent per-case investigation board (industry-gap #1: every mature
+    # platform researched — Gotham, i2 Analyst's Notebook, Maltego — treats a
+    # durable, editable case artifact as the analyst's core object; Veritas had none
+    # that survived past one chat session). One row per pinned/authored item, not one
+    # table per category: ItemType distinguishes an investigator's own note from a
+    # pinned record from a derived finding from a lead, which the UI and the
+    # conversational layer must never blur together (see docs/VERITAS_HANDOFF.md).
+    # References the authoritative record by (RefType, RefID) rather than copying it —
+    # Content/Confidence/SourceQuery are a snapshot of what the officer saw *at pin
+    # time*, for a board that must still render even if the retrieval layer's own
+    # transient evidence_items have since rotated out of the conversation store.
+    "vx_case_board_item": [
+        Col("BoardItemID", "int", unique=True, mandatory=True),
+        Col("CaseMasterID", "int", mandatory=True),      # -> CaseMaster.CaseMasterID
+        # "evidence" | "person" | "lead" | "note" | "question" | "finding"
+        Col("ItemType", "varchar", mandatory=True),
+        # Provenance of a pinned/derived item: the EvidenceItem.source_type it came
+        # from (FIR_RECORD, GRAPH_RELATIONSHIP, ...) or "vx_person" for a pinned
+        # person. NULL for a note/lead/question authored directly by the officer —
+        # that absence IS the "this is a human note, not a record" signal the UI reads.
+        Col("RefType", "varchar"),
+        Col("RefID", "varchar"),                         # the fir_id/person_id/evidence_id
+        Col("Content", "text", mandatory=True),           # the text the board renders
+        Col("Confidence", "double"),                      # snapshot of EvidenceItem.confidence, if any
+        Col("SourceQuery", "text"),                       # snapshot of EvidenceItem.source_query, if any
+        # Lead lifecycle: "open" | "pursued" | "dismissed". Also reused for a
+        # question's "open" | "resolved". Unused (NULL) for evidence/person/note/finding.
+        Col("Status", "varchar"),
+        Col("Reason", "text"),                            # disposition rationale, officer-entered
+        Col("CreatedBy", "int", mandatory=True),          # -> Employee.EmployeeID
+        Col("CreatedAt", "datetime", mandatory=True),
+        Col("UpdatedBy", "int"),
+        Col("UpdatedAt", "datetime"),
+    ],
     # Real Census/NSSO ground truth, keyed to the ER's District.DistrictID.
     # The one table here that is not synthetic: Census of India 2011, PCA, verbatim.
     # Every column is a ratio of two real published counts. `unemployment` and

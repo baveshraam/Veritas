@@ -474,6 +474,7 @@ body::after {
   font-size: 10px; color: var(--text-faint);
   word-break: break-all;
 }
+.ev-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
 /* Confidence + severity chips — always FILLED, so they never read as brass. */
 .chip {
@@ -744,6 +745,52 @@ body::after {
   border-radius: var(--radius-sm); padding: 13px;
 }
 .dim { color: var(--text-faint); font-size: 13px; }
+
+/* Investigation board (inside the Copilot overlay's Board tab) --------- */
+/* The kind badge is the load-bearing thing here — an investigator note must never
+ * read like a database fact, and a derived finding must never read like a note the
+ * officer wrote. Four distinct treatments, not four shades of the same chip:
+ * record-backed items get the accent (this system's "grounded" color everywhere
+ * else), a derived finding gets a cooler tone (a model/graph inference, not a raw
+ * record), and a note gets a plain neutral tag with no evidentiary color at all. */
+.board-summary {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.board-item {
+  padding: 10px 12px; margin-bottom: 8px;
+  background: var(--tint);
+  border: 1px solid var(--glass-line);
+  border-radius: var(--radius-sm);
+}
+.board-item-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+.board-item-body { font-size: 13px; line-height: 1.55; color: var(--text-dim); }
+.board-reason { margin-top: 4px; font-size: 12px; }
+.board-confidence { margin-left: auto; font-size: 11px; }
+.board-item-actions { display: flex; gap: 6px; margin-top: 9px; }
+.board-add-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.board-add-row .search { flex: 1 1 auto; }
+
+.board-kind {
+  font-family: var(--font-label);
+  font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 999px;
+}
+.board-kind-evidence, .board-kind-person {
+  color: var(--accent); background: var(--accent-soft); border: 1px solid var(--accent-line);
+}
+.board-kind-finding {
+  color: #8fb8e6; background: rgba(143, 184, 230, 0.13); border: 1px solid rgba(143, 184, 230, 0.35);
+}
+.board-kind-lead {
+  color: var(--sev-med); background: rgba(238, 139, 75, 0.13); border: 1px solid rgba(238, 139, 75, 0.35);
+}
+.board-kind-question {
+  color: var(--text-dim); background: rgba(255, 255, 255, 0.06); border: 1px solid var(--glass-line);
+}
+.board-kind-note {
+  color: var(--text-faint); background: transparent; border: 1px dashed var(--glass-line);
+}
 
 /* Alert toasts ---------------------------------------------------------- */
 /* Rendered in normal document flow inside the Evidence rail pane, between its

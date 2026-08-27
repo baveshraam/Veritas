@@ -11,9 +11,11 @@ handed the evidence list — it has no other input.
 """
 import re
 import time
+from typing import Optional
 
 from data import ds, upsert_session_focus
 
+from . import board as board_agent
 from . import intents
 from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
@@ -23,6 +25,12 @@ from .copilot import brief as copilot_brief
 from .evidence.evaluator import evaluate, refusal_message, supporting
 from .retrieval import hipporag, tog
 from .state import AgentTraceEntry, Citation, EvidenceItem, InvestigationState
+
+
+class _NoEvidenceInContext(Exception):
+    """'Pin this' with nothing pinnable in the previous turn — distinct from
+    board_agent.NotPermitted/KeyError (a case-access problem), so it must not be
+    caught by the same except clause and misreported as one."""
 
 # The two forms a FIR number takes in this system.
 #
@@ -267,6 +275,15 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         state.refusal_reason = "no_subject"
         _trace(state, "Orchestrator",
                f"{state.intent} needs a named subject; none given", t0)
+        return state
+
+    # The persistent case board (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 1) — a
+    # mutation or a read of investigator-authored state, not a retrieval. Handled
+    # entirely here and in node_synthesize's matching branch; node_evaluate and
+    # _after_evaluate both skip CRAG scoring for these intents below, the same way
+    # they already skip it for a refusal decided before retrieval ran.
+    if state.intent.startswith("BOARD_"):
+        _handle_board_intent(state, t0)
         return state
 
     # 1. HippoRAG: seed personalized PageRank from the query's entities
@@ -817,6 +834,213 @@ def _fir_content(r: dict) -> str:
     return text
 
 
+_NOTE_RE = re.compile(r"\bnote(?:\s+that)?\s*:?\s*(.+)$", re.I)
+_LEAD_CONTENT_RE = re.compile(r"\bas\s+a?\s*lead\s*:?\s*(.+)$", re.I)
+
+
+def _person_name(pid: Optional[str]) -> Optional[str]:
+    if not pid:
+        return None
+    row = ds.one('SELECT "CanonicalName" FROM "vx_person" WHERE "PersonUID" = :p',
+                {"p": int(pid)})
+    return row["CanonicalName"] if row else None
+
+
+def _extract_note_text(query: str) -> str:
+    m = _NOTE_RE.search(query or "")
+    return m.group(1).strip(" :,-—") if m else ""
+
+
+def _extract_lead_content(query: str) -> str:
+    m = _LEAD_CONTENT_RE.search(query or "")
+    return m.group(1).strip(" :,-—") if m else ""
+
+
+def _parse_lead_status(query: str) -> str:
+    ql = (query or "").lower()
+    if re.search(r"\b(dismiss|remove|drop|cancel)\b", ql):
+        return "dismissed"
+    if re.search(r"\bpursu", ql):
+        return "pursued"
+    return "open"
+
+
+def _resolve_target_lead(leads: list[dict], state: InvestigationState) -> Optional[dict]:
+    """Which saved lead 'that lead' means: prefer one naming the person currently in
+    view, else the most recently created OPEN lead — 'that' reads most naturally as
+    the thing just discussed, not an arbitrary dismissed one from days ago."""
+    open_leads = [l for l in leads if l.get("status") == "open"]
+    pool = open_leads or leads
+    if not pool:
+        return None
+    name = _person_name(state.active_entities.active_person)
+    if name:
+        named = [l for l in pool if name.lower() in (l.get("content") or "").lower()]
+        if named:
+            pool = named
+    return sorted(pool, key=lambda l: l.get("created_at") or "", reverse=True)[0]
+
+
+def _pin_evidence_from_context(state: InvestigationState, fir_id: str, role: str, ps: str) -> dict:
+    """'Pin this' — resolves to the evidence card the console had selected
+    (`active_evidence_id`, sent by apps/web's own `activeEvidence` state) or, absent
+    a selection, the previous turn's top citation. Reads the PREVIOUS turn's own
+    evidence/citations (the same source EXPLAIN_REASONING/EVIDENCE_FOR already read),
+    never the current turn's — a board action gathers no evidence of its own."""
+    prior = _last_turn(state.session_id)
+    ev: Optional[dict] = None
+    if prior:
+        pool = prior.evidence_items or []
+        if state.active_evidence_id:
+            ev = next((e for e in pool if e.get("evidence_id") == state.active_evidence_id), None)
+        if not ev and pool:
+            ev = pool[0]
+        if not ev and prior.citations:
+            target = state.active_evidence_id
+            candidates = [c for c in prior.citations if not target or c.get("evidence_id") == target]
+            c = (candidates or prior.citations)[0]
+            ev = {"evidence_id": c["evidence_id"], "source_type": "FIR_RECORD",
+                 "source_id": c["evidence_id"], "content": c["label"],
+                 "confidence": None, "authoritative": False, "source_query": None}
+    if not ev:
+        raise _NoEvidenceInContext()
+    item_type = "finding" if ev.get("authoritative") else "evidence"
+    return board_agent.create_item(
+        fir_id, role, ps, state.officer_id, item_type,
+        ev.get("content") or "", ref_type=ev.get("source_type"),
+        ref_id=ev.get("source_id") or ev.get("evidence_id"),
+        confidence=ev.get("confidence"), source_query=ev.get("source_query"))
+
+
+def _handle_board_intent(state: InvestigationState, t0: float) -> None:
+    fir_id = state.active_entities.active_fir
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    try:
+        if state.intent == "BOARD_VIEW":
+            b = board_agent.get_board(fir_id, role, ps)
+            state.board_result = {"ok": True, "kind": "view", "board": b}
+            _trace(state, "Case Board", f"{b['total']} item(s) on the board", t0)
+            return
+
+        if state.intent == "BOARD_PIN_EVIDENCE":
+            try:
+                item = _pin_evidence_from_context(state, fir_id, role, ps)
+            except _NoEvidenceInContext:
+                state.board_result = {"ok": False, "kind": "error",
+                                      "message": "There's nothing in view to pin yet — "
+                                                 "ask a question first, then pin what it finds."}
+                _trace(state, "Case Board", "Nothing to pin", t0)
+                return
+            state.board_result = {"ok": True, "kind": "pinned", "item": item}
+            _trace(state, "Case Board", f"Pinned: {item['content'][:60]}", t0)
+            return
+
+        if state.intent == "BOARD_PIN_PERSON":
+            pid = state.active_entities.active_person
+            if not pid:
+                state.board_result = {"ok": False, "kind": "error",
+                                      "message": "No person is currently in view to add — "
+                                                 "name someone first, or open their record."}
+                _trace(state, "Case Board", "No person to add", t0)
+                return
+            name = _person_name(pid) or f"person {pid}"
+            item = board_agent.create_item(fir_id, role, ps, state.officer_id, "person",
+                                           name, ref_type="vx_person", ref_id=pid)
+            state.board_result = {"ok": True, "kind": "pinned", "item": item, "label": name}
+            _trace(state, "Case Board", f"Added {name} to the investigation", t0)
+            return
+
+        if state.intent == "BOARD_ADD_LEAD":
+            pid = state.active_entities.active_person
+            name = _person_name(pid) if pid else None
+            content = _extract_lead_content(state.original_query or "")
+            if not content:
+                content = f"Follow up on {name}." if name else \
+                    "Follow up — flagged from conversation."
+            item = board_agent.create_item(fir_id, role, ps, state.officer_id, "lead",
+                                           content, ref_type="vx_person" if pid else None,
+                                           ref_id=pid, status="open")
+            state.board_result = {"ok": True, "kind": "lead_added", "item": item}
+            _trace(state, "Case Board", f"Lead saved: {content[:60]}", t0)
+            return
+
+        if state.intent == "BOARD_ADD_NOTE":
+            text = _extract_note_text(state.original_query or "")
+            if not text:
+                state.board_result = {"ok": False, "kind": "error",
+                                      "message": "Say what the note should record — e.g. "
+                                                 "\"add a note that this connection needs "
+                                                 "verification\"."}
+                _trace(state, "Case Board", "No note text given", t0)
+                return
+            item = board_agent.create_item(fir_id, role, ps, state.officer_id, "note", text)
+            state.board_result = {"ok": True, "kind": "note_added", "item": item}
+            _trace(state, "Case Board", f"Note recorded: {text[:60]}", t0)
+            return
+
+        if state.intent == "BOARD_LEAD_STATUS":
+            new_status = _parse_lead_status(state.original_query or "")
+            b = board_agent.get_board(fir_id, role, ps)
+            target = _resolve_target_lead(b["by_type"]["lead"], state)
+            if not target:
+                state.board_result = {"ok": False, "kind": "error",
+                                      "message": "No matching saved lead found to update — "
+                                                 "open the board to see the current leads."}
+                _trace(state, "Case Board", "No matching lead", t0)
+                return
+            item = board_agent.update_item(fir_id, role, ps, state.officer_id,
+                                           target["item_id"], status=new_status)
+            state.board_result = {"ok": True, "kind": "lead_status", "item": item}
+            _trace(state, "Case Board", f"Lead -> {new_status}: {item['content'][:60]}", t0)
+            return
+    except board_agent.NotPermitted:
+        state.refusal_reason = "board_forbidden"
+        _trace(state, "Case Board", "Case is outside this officer's station scope", t0)
+    except KeyError:
+        state.refusal_reason = "board_not_found"
+        _trace(state, "Case Board", "Case not found", t0)
+
+
+def _board_answer(intent: str, result: dict) -> str:
+    if not result.get("ok", True):
+        return result.get("message", "That could not be completed.")
+    if intent == "BOARD_VIEW":
+        b = result["board"]
+        if not b["total"]:
+            return (f"The investigation board for FIR {b['fir_number']} is empty — "
+                    f"nothing has been pinned, noted or saved as a lead yet.")
+        labels = [("evidence", "pinned evidence"), ("finding", "findings"),
+                 ("person", "people added"), ("lead", "leads"),
+                 ("note", "notes"), ("question", "open questions")]
+        lines = [f"Board for FIR {b['fir_number']} ({b['total']} item(s)):"]
+        for key, label in labels:
+            items = b["by_type"].get(key) or []
+            if not items:
+                continue
+            if key == "lead":
+                open_n = sum(1 for i in items if i.get("status") == "open")
+                lines.append(f"- {len(items)} {label} ({open_n} open, "
+                             f"{len(items) - open_n} closed)")
+            else:
+                lines.append(f"- {len(items)} {label}")
+        lines.append("Ask to see any section, or say what to add next.")
+        return "\n".join(lines)
+    if intent == "BOARD_PIN_EVIDENCE":
+        item = result["item"]
+        kind = "finding" if item["item_type"] == "finding" else "evidence"
+        return f'Pinned this {kind} to the case board: "{item["content"][:200]}"'
+    if intent == "BOARD_PIN_PERSON":
+        return f"Added {result.get('label') or 'this person'} to the investigation board."
+    if intent == "BOARD_ADD_LEAD":
+        return f'Saved as a lead: "{result["item"]["content"]}" (status: open).'
+    if intent == "BOARD_ADD_NOTE":
+        return f'Note recorded on the case board: "{result["item"]["content"]}"'
+    if intent == "BOARD_LEAD_STATUS":
+        item = result["item"]
+        return f'Lead marked {item["status"]}: "{item["content"][:200]}"'
+    return "Done."
+
+
 def _fir_evidence(r: dict) -> EvidenceItem:
     return EvidenceItem(
         evidence_id=f"fir:{r['fir_id']}", source_type="CRIMINAL_RECORD",
@@ -871,6 +1095,13 @@ def node_evaluate(state: InvestigationState) -> InvestigationState:
         state.requires_escalation = True
         state.confidence_score = 0.0
         return state
+    if state.intent.startswith("BOARD_"):
+        # A board action is a mutation/read of investigator state, not retrieval —
+        # nothing here for CRAG to score, and scoring an empty batch would relabel a
+        # successful pin as "no supporting records found".
+        state.requires_escalation = False
+        state.confidence_score = 1.0
+        return state
 
     verdict, confidence, detail = evaluate(state.evidence_items, state.retrieval_attempts - 1,
                                            state.exact_lookup_missed)
@@ -899,6 +1130,22 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
         state.evidence_items = []
         _trace(state, "Synthesis",
                "Described this system's scope — no records were consulted", t0)
+        return state
+
+    # The case board (see node_retrieve's BOARD_* short circuit) — the answer is the
+    # outcome of the mutation/read itself, not evidence synthesis. No citations: a
+    # note/lead the officer just wrote is not a record the record layer produced.
+    if state.intent.startswith("BOARD_") and state.board_result is not None:
+        answer = _board_answer(state.intent, state.board_result)
+        note = None
+        if state.language != "en":
+            answer, note = translation_agent.to_language(answer, state.language)
+        if note:
+            answer = f"{answer}\n\n{note}"
+        state.final_answer = answer
+        state.citations = []
+        state.evidence_items = []
+        _trace(state, "Synthesis", "Case board action", t0)
         return state
 
     # Meta-questions about the PREVIOUS turn — see node_retrieve's "meta" short
@@ -1035,7 +1282,7 @@ def _after_evaluate(state: InvestigationState) -> str:
     # Widening is for a batch that came back too thin. It is not a remedy for a question
     # that named no subject, asked for an inference, or asked about the tool itself —
     # retrying those searches the index twice and refuses on the second pass anyway.
-    if state.refusal_reason:
+    if state.refusal_reason or state.intent.startswith("BOARD_"):
         return "synthesize"
     verdict, _, _ = evaluate(state.evidence_items, state.retrieval_attempts - 1,
                              state.exact_lookup_missed)

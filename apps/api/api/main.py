@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 from .routers import (  # noqa: E402
-    alerts, auth_routes, chat, copilot, export, jobs, records,
+    alerts, auth_routes, board, chat, copilot, export, jobs, records,
 )
 
 app = FastAPI(
@@ -104,6 +104,7 @@ app.include_router(auth_routes.router, tags=["auth"])
 app.include_router(chat.router, tags=["chat"])
 app.include_router(records.router, tags=["records"])
 app.include_router(copilot.router, tags=["copilot"])
+app.include_router(board.router, tags=["board"])
 app.include_router(export.router, tags=["export"])
 app.include_router(alerts.router, tags=["alerts"])
 app.include_router(jobs.router, tags=["jobs"])       # driven by Catalyst Cron, not by a user

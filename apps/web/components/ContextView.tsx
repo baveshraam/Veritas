@@ -24,11 +24,12 @@ const TITLES: Record<string, string> = {
  *  With no answer on screen yet it shows the case index rather than a placeholder —
  *  see CaseExplorer for why an empty console is an unusable one. */
 export default function ContextView({
-  viz, onAsk, onCopilot,
+  viz, onAsk, onCopilot, onBoard,
 }: {
   viz: Visualization;
   onAsk: (q: string) => void;
   onCopilot: (firId: string) => void;
+  onBoard: (firId: string) => void;
 }) {
   const vizKind = viz?.kind ?? "none";
 
@@ -65,7 +66,7 @@ export default function ContextView({
       <div className="pane-body" style={{ padding: kind === "none" ? 16 : 10 }}>
         <div className="viz">
           {kind === "none" ? (
-            <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} />
+            <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} onBoard={onBoard} />
           ) : (
             <div className="viz-fade" key={kind + JSON.stringify(viz.data).length}>
               {kind === "network" && <NetworkView data={viz.data} />}

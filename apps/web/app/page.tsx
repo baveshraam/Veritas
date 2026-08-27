@@ -19,6 +19,7 @@ export default function Console() {
   const [voiceOut, setVoiceOut] = useState(false);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [copilotFir, setCopilotFir] = useState<string | null>(null);
+  const [copilotTab, setCopilotTab] = useState<"brief" | "board">("brief");
   const [exportNote, setExportNote] = useState<string | null>(null);
 
   // One session for the whole conversation — this is what makes "does HE have
@@ -30,10 +31,12 @@ export default function Console() {
   const evidence = latest?.evidence ?? [];
 
   const send = useCallback(
-    async (input: { query?: string; audio?: string }) => {
+    async (input: { query?: string; audio?: string; activeEvidenceId?: string }) => {
       const id = crypto.randomUUID();
       setBusy(true);
-      setActiveEvidence(null);
+      // A board action ("pin this") targets whatever evidence card is already
+      // selected — don't clear it out from under the request that is about to use it.
+      if (!input.activeEvidenceId) setActiveEvidence(null);
       setTurns((t) => [
         ...t,
         { id, query: input.query ?? "🎤 Voice message", answer: "", streaming: true, trace: [],
@@ -45,7 +48,10 @@ export default function Console() {
 
       try {
         await streamChat(
-          sessionId, { ...input, respondWithVoice: voiceOut }, language,
+          sessionId,
+          { ...input, respondWithVoice: voiceOut,
+            activeEvidenceId: input.activeEvidenceId ?? activeEvidence },
+          language,
           (tr) => patch((t) => ({ ...t, trace: [...t.trace, tr] })),
           (f) =>
             patch((t) => ({
@@ -70,7 +76,7 @@ export default function Console() {
         setBusy(false);
       }
     },
-    [sessionId, language, voiceOut],
+    [sessionId, language, voiceOut, activeEvidence],
   );
 
   const revealEvidence = useCallback((evidenceId: string) => {
@@ -121,7 +127,8 @@ export default function Console() {
         <ContextView
           viz={viz}
           onAsk={(query) => send({ query })}
-          onCopilot={setCopilotFir}
+          onCopilot={(fir) => { setCopilotTab("brief"); setCopilotFir(fir); }}
+          onBoard={(fir) => { setCopilotTab("board"); setCopilotFir(fir); }}
         />
 
         <div className="pane glass rail">
@@ -137,14 +144,24 @@ export default function Console() {
               evidence={evidence}
               active={activeEvidence}
               onSelect={setActiveEvidence}
-              onOpenCopilot={setCopilotFir}
+              onOpenCopilot={(fir) => { setCopilotTab("brief"); setCopilotFir(fir); }}
+              onOpenBoard={(fir) => { setCopilotTab("board"); setCopilotFir(fir); }}
+              onPin={(evidenceId) => send({ query: "Pin this to the case board", activeEvidenceId: evidenceId })}
             />
           </div>
         </div>
       </main>
 
       <EvidenceThread evidenceId={activeEvidence} />
-      {copilotFir && <Copilot firId={copilotFir} onClose={() => setCopilotFir(null)} />}
+      {copilotFir && (
+        <Copilot
+          firId={copilotFir}
+          onClose={() => setCopilotFir(null)}
+          onAsk={(query) => send({ query })}
+          turnsVersion={turns.length}
+          initialTab={copilotTab}
+        />
+      )}
     </div>
   );
 }

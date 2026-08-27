@@ -53,6 +53,36 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "BRIEFING":          (("prepare the briefing", "prepare a briefing", "case diary",
                            "draft summary", "draft the summary", "prepare the report",
                            "prepare a report"), "none"),
+    # The persistent investigation board (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 1) —
+    # the conversational surface over data.board/rag_agent.board. All six are
+    # case-scoped (NEEDS_CASE, below), the same way CASE_CONTEXT/CASE_PEOPLE/etc. are:
+    # "pin this", "save this lead" and "what's on the board" only mean something once
+    # a case is open. Deliberately distinctive phrasing (not bare "pin"/"note"/"lead")
+    # so these do not silently absorb an unrelated question that happens to share one
+    # short word — see intents.classify's own discipline on this.
+    "BOARD_VIEW":        (("investigation board", "case board", "on the board",
+                           "board for this case", "what have we established",
+                           "what have i established", "have we pinned", "have i pinned",
+                           "unresolved questions", "still unresolved", "saved leads",
+                           "leads on the board", "leads for this case",
+                           "open the investigation board", "open the board"), "none"),
+    "BOARD_PIN_EVIDENCE": (("pin this", "pin that", "pin this evidence", "pin that evidence",
+                            "save this evidence", "add this to the board",
+                            "add that to the case board", "add this to the investigation board",
+                            "add to the board"), "none"),
+    "BOARD_PIN_PERSON":  (("add this person to the investigation", "add him to the investigation",
+                           "add her to the investigation", "add them to the investigation",
+                           "add this person to the case"), "none"),
+    "BOARD_ADD_LEAD":    (("save this as a lead", "save as a lead", "add him as a lead",
+                           "add her as a lead", "add this as a lead", "mark this as a lead",
+                           "flag this as a lead", "flag as a lead"), "none"),
+    "BOARD_ADD_NOTE":    (("add a note", "add a note that", "make a note", "note that this",
+                           "add note"), "none"),
+    "BOARD_LEAD_STATUS": (("mark that lead", "mark this lead", "mark the lead",
+                           "dismiss that lead", "dismiss the lead", "dismiss lead",
+                           "remove that lead", "remove the lead", "remove lead",
+                           "pursue that lead", "pursue the lead", "lead as pursued",
+                           "lead pursued"), "none"),
 }
 
 # Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
@@ -69,12 +99,20 @@ _KEYWORD_RE = {
 # "check whether the record exists in the system" — which is not why it failed. The
 # orchestrator short-circuits these instead, and says which subject is missing.
 NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK"}
+# BOARD_PIN_PERSON also needs a resolved person, but is NOT in NEEDS_SUBJECT: it is
+# also in NEEDS_CASE (a board belongs to a case), and the no_case gate runs first —
+# adding it here as well would make "no case, no person" report the wrong missing
+# thing. Its own missing-person message is produced locally in
+# orchestrator._handle_board_intent, once a case is confirmed open.
 
 # Intents that talk ABOUT the open case rather than a named person — meaningless
 # without one. "What happened", "who's involved", "what should I investigate next"
 # and "prepare the briefing" all assume a case is already in view (SessionFocus.
-# active_fir); asked cold, they'd have nothing to read and nothing to say.
-NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING"}
+# active_fir); asked cold, they'd have nothing to read and nothing to say. Every
+# BOARD_* intent joins this set for the same reason: a board belongs to a case.
+NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
+             "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
+             "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS"}
 
 # Questions asking the system to nominate a suspect. The records hold who was accused,
 # arrested and charged; they do not hold who "could be" guilty, and inferring it is the

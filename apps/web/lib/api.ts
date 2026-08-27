@@ -1,5 +1,6 @@
 import type {
-  CaseIndex, CopilotBrief, EvidenceItem, FinalEvent, Officer, TraceEntry,
+  BoardItem, BoardItemType, CaseBoard, CaseIndex, CopilotBrief, EvidenceItem, FinalEvent,
+  Officer, TraceEntry,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -62,7 +63,7 @@ export async function login(badge_no: string): Promise<{ officer: Officer }> {
  */
 export async function streamChat(
   sessionId: string,
-  input: { query?: string; audio?: string; respondWithVoice?: boolean },
+  input: { query?: string; audio?: string; respondWithVoice?: boolean; activeEvidenceId?: string | null },
   language: "en" | "kn",
   onTrace: (t: TraceEntry) => void,
   onFinal: (f: FinalEvent) => void,
@@ -77,6 +78,10 @@ export async function streamChat(
       ...(input.audio
         ? { audio: input.audio, respond_with_voice: !!input.respondWithVoice }
         : { query: input.query }),
+      // Which evidence card was selected when the officer said "pin this" — lets
+      // BOARD_PIN_EVIDENCE pin exactly what was in view instead of guessing at the
+      // previous turn's top citation.
+      ...(input.activeEvidenceId ? { active_evidence_id: input.activeEvidenceId } : {}),
     }),
   });
   if (!res.ok || !res.body) throw new Error(`Chat failed (${res.status})`);
@@ -189,6 +194,52 @@ export async function getCopilotBrief(firId: string): Promise<CopilotBrief> {
   const r = await fetch(`${BASE}/copilot/${firId}`, { headers: authHeaders() });
   if (!r.ok) throw new Error(r.status === 404 ? "FIR not found" : "Copilot brief failed");
   return r.json();
+}
+
+/** The persistent per-case investigation board. Reads and precise per-item actions
+ *  (a lead's status button, a delete) go through these — free-text board commands
+ *  ("pin this", "add a note that…") go through /chat instead, so both paths share
+ *  exactly one server-side implementation (rag_agent.board). */
+export async function getBoard(firId: string): Promise<CaseBoard> {
+  const r = await fetch(`${BASE}/board/${firId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(
+    r.status === 404 ? "Case not found"
+    : r.status === 403 ? "This case's board is outside your access scope"
+    : "Board unavailable");
+  return r.json();
+}
+
+export async function createBoardItem(firId: string, body: {
+  item_type: BoardItemType; content: string; ref_type?: string | null; ref_id?: string | null;
+  confidence?: number | null; status?: string | null;
+}): Promise<BoardItem> {
+  const r = await fetch(`${BASE}/board/${firId}/items`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error("Could not add to the board");
+  return r.json();
+}
+
+export async function updateBoardItem(firId: string, itemId: string, body: {
+  status?: string | null; reason?: string | null; content?: string | null;
+}): Promise<BoardItem> {
+  const r = await fetch(`${BASE}/board/${firId}/items/${itemId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", ...authHeaders() },
+    body: JSON.stringify(body),
+  });
+  if (!r.ok) throw new Error("Could not update that board item");
+  return r.json();
+}
+
+export async function deleteBoardItem(firId: string, itemId: string): Promise<void> {
+  const r = await fetch(`${BASE}/board/${firId}/items/${itemId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  if (!r.ok) throw new Error("Could not remove that board item");
 }
 
 /** Returns whether a real PDF was produced — a 200 with an HTML body (the

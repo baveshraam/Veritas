@@ -209,6 +209,14 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "case records first (an FIR lookup, a crime search, similar cases), then ask "
         "where they're concentrated."
     ),
+    "board_forbidden": (
+        "This case's investigation board is outside your access scope — it was filed "
+        "at another police station, the same rule that governs the case record itself."
+    ),
+    "board_not_found": (
+        "No case matches the FIR this board action targets — it may have been "
+        "re-scoped since it was opened this session."
+    ),
     "ambiguous_person": (
         "More than one person in the records matches that name equally well, and I "
         "will not guess which one you mean — please say more (a case, a district, or "

@@ -78,6 +78,15 @@ class InvestigationState(BaseModel):
 
     active_entities: SessionFocus = Field(default_factory=SessionFocus)
     decomposed_subqueries: list[str] = Field(default_factory=list)
+    # Which evidence card the officer had selected in the console when they said
+    # "pin this" — an ephemeral per-turn UI hint (apps/web tracks it as `activeEvidence`
+    # already), not identity focus, so it does not belong in SessionFocus/vx_session.
+    active_evidence_id: Optional[str] = None
+    # Set only by a BOARD_* intent (see orchestrator._handle_board_intent) — the
+    # outcome of a board mutation/read, which node_synthesize turns into the answer
+    # instead of running the normal evidence-citation path (a board action is not a
+    # retrieval, and has nothing for CRAG to score).
+    board_result: Optional[dict[str, Any]] = None
 
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     graph_query_results: list[dict] = Field(default_factory=list)

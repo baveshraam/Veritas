@@ -38,6 +38,10 @@ class ChatRequest(BaseModel):
     query: Optional[str] = None
     audio: Optional[str] = None            # base64
     respond_with_voice: bool = False
+    # Which evidence card the console had selected when the officer said "pin this" —
+    # apps/web already tracks this as `activeEvidence`; threading it through lets
+    # BOARD_PIN_EVIDENCE pin exactly what was in view instead of guessing.
+    active_evidence_id: Optional[str] = None
 
 
 def _next_turn_index(session_id: str) -> int:
@@ -61,6 +65,7 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
         respond_with_voice=req.respond_with_voice,
         language=req.language,
         active_entities=focus,
+        active_evidence_id=req.active_evidence_id,
     )
 
     async def stream():

@@ -79,6 +79,36 @@ export type CaseIndex = {
   statuses: Facet[];
 };
 
+export type BoardItemType = "evidence" | "person" | "lead" | "note" | "question" | "finding";
+
+export type BoardItem = {
+  item_id: string;
+  case_id: string;
+  item_type: BoardItemType;
+  ref_type: string | null;
+  ref_id: string | null;
+  content: string;
+  confidence: number | null;
+  source_query: string | null;
+  status: string | null;
+  reason: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_by: string | null;
+  updated_at: string | null;
+};
+
+export type CaseBoard = {
+  fir_id: string;
+  fir_number: string;
+  crime_type: string | null;
+  district: string | null;
+  case_status: string | null;
+  items: BoardItem[];
+  by_type: Record<BoardItemType, BoardItem[]>;
+  total: number;
+};
+
 export type AnomalyAlert = {
   alert_id: string;
   district_code: string;

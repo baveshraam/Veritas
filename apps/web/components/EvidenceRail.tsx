@@ -6,12 +6,14 @@ import { confidenceBand, confidenceLabel } from "@/lib/api";
  *  FULL content, not just the label — a citation you cannot inspect is a citation
  *  you cannot check, which defeats the point of having one. */
 export default function EvidenceRail({
-  evidence, active, onSelect, onOpenCopilot,
+  evidence, active, onSelect, onOpenCopilot, onOpenBoard, onPin,
 }: {
   evidence: EvidenceItem[];
   active: string | null;
   onSelect: (id: string | null) => void;
   onOpenCopilot: (firId: string) => void;
+  onOpenBoard: (firId: string) => void;
+  onPin: (evidenceId: string) => void;
 }) {
   if (!evidence.length) {
     return (
@@ -56,15 +58,36 @@ export default function EvidenceRail({
             {active === e.evidence_id && e.source_query && (
               <div className="ev-src">{e.source_query}</div>
             )}
-            {active === e.evidence_id && e.source_type === "FIR_RECORD"
-              && /^\d+$/.test(e.source_id) && (
-              <button
-                className="btn"
-                style={{ marginTop: 8 }}
-                onClick={(ev) => { ev.stopPropagation(); onOpenCopilot(e.source_id); }}
-              >
-                Open Investigation Copilot
-              </button>
+            {active === e.evidence_id && (
+              <div className="ev-actions">
+                {/* Pinning writes to the currently open case's board (resolved
+                    server-side from session focus) — this evidence card need not be
+                    a FIR record itself to be pinned, e.g. an associate relationship
+                    or a risk finding are just as pinnable. */}
+                <button
+                  className="btn btn-sm"
+                  onClick={(ev) => { ev.stopPropagation(); onPin(e.evidence_id); }}
+                  title="Save this to the case's investigation board"
+                >
+                  Pin to board
+                </button>
+                {e.source_type === "FIR_RECORD" && /^\d+$/.test(e.source_id) && (
+                  <>
+                    <button
+                      className="btn btn-sm"
+                      onClick={(ev) => { ev.stopPropagation(); onOpenCopilot(e.source_id); }}
+                    >
+                      Open Investigation Copilot
+                    </button>
+                    <button
+                      className="btn btn-sm"
+                      onClick={(ev) => { ev.stopPropagation(); onOpenBoard(e.source_id); }}
+                    >
+                      Open Case Board
+                    </button>
+                  </>
+                )}
+              </div>
             )}
           </div>
         );

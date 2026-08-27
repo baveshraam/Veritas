@@ -30,9 +30,11 @@ function fmt(d: string): string {
 export default function CaseExplorer({
   onAsk,
   onCopilot,
+  onBoard,
 }: {
   onAsk: (q: string) => void;
   onCopilot: (firId: string) => void;
+  onBoard: (firId: string) => void;
 }) {
   const [q, setQ] = useState("");
   const [crimeType, setCrimeType] = useState<string | null>(null);
@@ -137,6 +139,9 @@ export default function CaseExplorer({
               </button>
               <button className="btn btn-sm" onClick={() => onCopilot(c.fir_id)}>
                 Copilot brief
+              </button>
+              <button className="btn btn-sm" onClick={() => onBoard(c.fir_id)}>
+                Investigation board
               </button>
             </div>
           </div>
