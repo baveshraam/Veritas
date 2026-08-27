@@ -305,6 +305,20 @@ about translation quality is only as good as the model call that backs it:
   identical construction. This reads as a genuine model-quality gap — a less common
   Kannada place name losing to a more common phonetic neighbour under this specific
   grammatical pressure — not something a pre-translation substitution fixes.
+  **Confirmed live, post-deploy, and worse than the local finding suggested**: this is
+  not merely a wrong word in the answer — it breaks the turn completely. "Mandi" is not
+  a real district, so `entities.py`'s NER tier-2 fallback reads it as an unresolved
+  PERSON name; `node_orchestrate` then reports `"no person matching 'Mandi' exists in
+  the records"` and refuses the whole query with `person_not_on_file` — **even though
+  the FIR number itself survived perfectly and `FIR_LOOKUP` was correctly identified as
+  the intent**. An officer asking about a real, specific Mandya FIR by number, in
+  exactly the natural code-switched phrasing this product's own mission statement names
+  as a target case, gets a flat refusal. A control query with the district name removed
+  (`"FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ?"`) was run against the same live deployment
+  immediately after and answered correctly (FIR 9992, confidence 0.97, fully grounded
+  Kannada answer) — confirming the deployed identifier-protection fix genuinely works
+  end to end in production, and isolating this refusal to the Mandya-specific
+  translation defect alone, not a regression from this pass's own change.
 
 **What this pass built** (§16): protected-span translation. FIR numbers, IPC codes and
 vehicle plates are now removed before the string reaches NLLB and spliced back verbatim
@@ -395,12 +409,28 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   today** — §8/§5.3.
 - *"ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?"* → **works today**, verified directly
   against the real model, §10.
-- *"Usha Naika ಗೆ priors ಇದ್ಯಾ?"* → **does not work today** — translates to
-  "priorities," misses the keyword. Verified directly, §10. This is the sharpest,
+- *"Usha Naika ಗೆ priors ಇದ್ಯಾ?"* → **does not work today** — confirmed live,
+  post-deploy: translates to "Does Usha Naika have priorities?", intent falls to
+  `UNKNOWN` (not `PERSON_HISTORY`), and the turn degrades to generic vector search
+  instead of the authoritative record lookup. The consequence is worse than a bare
+  miss: the person-name resolver still finds "Usha Naika" (19 records) and the
+  fallback search surfaces five *different* similarly-named people (Usha Naika, Usha
+  Naik, Usha Naek, Usha, Usha Udupa) blended into one answer at confidence 0.66 — an
+  officer asking about one specific person gets a confusing multi-person answer
+  instead of either the right answer or a clean refusal. This is the sharpest,
   most concrete open acceptance-test failure in the system right now, and the honest
   next place to look once §12's LLM path is reachable (a semantic interpreter reading
   the mistranslated English, or better, reading the Kannada directly, would both
   close it; a keyword patch would not be the right fix).
+- *"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ?"* → **does not work
+  today** — confirmed live, post-deploy: refuses outright (`person_not_on_file`) on
+  the mistranslated "Mandi," despite the FIR number and intent both resolving
+  correctly. See §10 for the full mechanism. This is arguably the more urgent of the
+  two open bugs, precisely because it fails **completely** rather than just
+  unhelpfully, and because the deployed fix in this pass makes it *more* visible, not
+  less: the FIR number now reliably survives translation, so this failure mode is the
+  next thing standing between an officer and a correct answer on exactly this class
+  of query, not a second, independent problem behind it.
 - *"go deeper"* after a NEXT_STEPS answer → not evaluated this pass; flag as unverified
   rather than assumed working.
 - A refusal ("tell me about the flying saucer incident on the moon") → clean refusal,
@@ -438,7 +468,21 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   grammatical construction) — both ruled out as fixable by this technique through
   direct ablation against the real model, both left for the §12 migration or an
   IndicTrans2 backend swap respectively, not papered over with a keyword patch. 4 new
-  tests (`data/tests/test_nlp.py`), full suite green (437 collected). Not live-verified
-  — this session has no `catalyst` CLI session; the fix is self-hosted (does not
-  depend on QuickML) and was instead verified against the real `nllb-200-distilled-
-  600M` weights running locally, which is the same model the deployed image runs.
+  tests (`data/tests/test_nlp.py`), full suite green (437 collected).
+  **Deployed and live-verified** (`catalyst` CLI is available via its full npm path,
+  not on the sandbox's default `PATH` — corrected after initially reporting no deploy
+  access): commit `cd59797` pushed to `main`, relayed through `relay-deploy.yml`
+  (deployment `52852000000345002`), confirmed live at `/health`. Three real `/chat`
+  calls against production, not curl-to-`/health` alone: (1) the exact Mandya+FIR
+  landmine query, which surfaced a **more severe live consequence than the local
+  finding predicted** — "Mandi" isn't a real district, so NER reads it as an
+  unresolved person and the whole turn refuses (`person_not_on_file`), even though the
+  FIR number and intent both resolved correctly; (2) the same query with the district
+  name removed, which answered correctly end to end (FIR 9992, confidence 0.97) —
+  proving the deployed identifier-protection fix works in production, and isolating
+  bug (1) as pre-existing and unrelated to this pass's change, not a regression; (3)
+  the "priors"→"priorities" query, reproduced live identically to the local finding,
+  with a previously-unobserved consequence: the fallback search blends five different
+  similarly-named people into one answer instead of the authoritative single-person
+  lookup. §10 and §14 above were updated with these live findings before this
+  changelog entry was written.
