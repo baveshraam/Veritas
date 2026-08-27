@@ -140,7 +140,18 @@ export default function CaseExplorer({
               <button className="btn btn-sm" onClick={() => onCopilot(c.fir_id)}>
                 Copilot brief
               </button>
-              <button className="btn btn-sm" onClick={() => onBoard(c.fir_id)}>
+              <button
+                className="btn btn-sm"
+                onClick={() => {
+                  // Opening the board straight from the case index has no prior chat
+                  // turn, so the session never learned which case is "open" — the
+                  // board's own note/lead forms (which operate through chat) would
+                  // refuse with "no case is open" the moment they're used. Asking
+                  // about the case first is also just what an investigator would do.
+                  onAsk(`What is the status of FIR ${c.fir_number}?`);
+                  onBoard(c.fir_id);
+                }}
+              >
                 Investigation board
               </button>
             </div>

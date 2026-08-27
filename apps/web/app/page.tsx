@@ -39,8 +39,8 @@ export default function Console() {
       if (!input.activeEvidenceId) setActiveEvidence(null);
       setTurns((t) => [
         ...t,
-        { id, query: input.query ?? "🎤 Voice message", answer: "", streaming: true, trace: [],
-          citations: [], evidence: [], visualization: { kind: "none", data: {} } },
+        { id, query: input.query ?? "🎤 Voice message", answer: "", streaming: true, refused: false,
+          trace: [], citations: [], evidence: [], visualization: { kind: "none", data: {} } },
       ]);
 
       const patch = (fn: (t: Turn) => Turn) =>
@@ -58,6 +58,7 @@ export default function Console() {
               ...t,
               streaming: false,
               answer: f.final_answer,
+              refused: f.refused,
               citations: f.citations,
               evidence: f.evidence_items,
               visualization: f.visualization,
@@ -70,6 +71,7 @@ export default function Console() {
         patch((t) => ({
           ...t,
           streaming: false,
+          refused: true,
           answer: e?.message ?? "The investigation could not be completed.",
         }));
       } finally {
@@ -158,7 +160,15 @@ export default function Console() {
           firId={copilotFir}
           onClose={() => setCopilotFir(null)}
           onAsk={(query) => send({ query })}
-          turnsVersion={turns.length}
+          // The Board panel refetches when this changes — it must count turns that
+          // have actually FINISHED, not turns.length: a turn is appended to `turns`
+          // the instant it's sent (so the answer can stream in), well before a board
+          // mutation it triggers has actually landed server-side. Counting on
+          // turns.length reloaded the board immediately on submit and read stale
+          // (pre-mutation) state, then never reloaded again once the real answer
+          // arrived — a lead saved via the panel's own form silently failed to
+          // appear until something else happened to remount the panel.
+          turnsVersion={turns.filter((t) => !t.streaming).length}
           initialTab={copilotTab}
         />
       )}

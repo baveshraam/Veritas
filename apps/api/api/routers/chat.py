@@ -112,6 +112,13 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
             "citations": [c.model_dump() for c in result.citations],
             "evidence_items": [e.model_dump(mode="json") for e in result.evidence_items],
             "visualization": result.visualization.model_dump(),
+            # Whether this is a genuine refusal, distinct from "no citations": a
+            # CAPABILITY answer or a successful case-board confirmation also carries
+            # zero citations (there is no record behind either) but is not a refusal
+            # — the console used to infer "refusal" from an empty citation list
+            # alone, which rendered every successful board action in the same red
+            # styling as "I could not find this in the records."
+            "refused": result.answer_is_refusal,
         }
         yield {"data": json.dumps(final)}
 

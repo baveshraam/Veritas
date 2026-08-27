@@ -60,7 +60,14 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     # a case is open. Deliberately distinctive phrasing (not bare "pin"/"note"/"lead")
     # so these do not silently absorb an unrelated question that happens to share one
     # short word — see intents.classify's own discipline on this.
-    "BOARD_VIEW":        (("investigation board", "case board", "on the board",
+    # "case board"/"investigation board" are deliberately NOT bare BOARD_VIEW
+    # keywords: "pin this to the case board" and "add that to the case board" both
+    # contain "case board" as a substring, so a bare keyword here would outscore or
+    # tie BOARD_PIN_EVIDENCE on exactly the spec's own example phrasing and every
+    # successful pin would render as a board summary instead — found live testing
+    # "Pin this to the case board." The remaining phrases below are still specific
+    # enough to cover real viewing requests without swallowing an action phrase.
+    "BOARD_VIEW":        (("investigation board", "on the board",
                            "board for this case", "what have we established",
                            "what have i established", "have we pinned", "have i pinned",
                            "unresolved questions", "still unresolved", "saved leads",
@@ -68,8 +75,7 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
                            "open the investigation board", "open the board"), "none"),
     "BOARD_PIN_EVIDENCE": (("pin this", "pin that", "pin this evidence", "pin that evidence",
                             "save this evidence", "add this to the board",
-                            "add that to the case board", "add this to the investigation board",
-                            "add to the board"), "none"),
+                            "add that to the case board", "add to the board"), "none"),
     "BOARD_PIN_PERSON":  (("add this person to the investigation", "add him to the investigation",
                            "add her to the investigation", "add them to the investigation",
                            "add this person to the case"), "none"),

@@ -94,6 +94,90 @@ def test_money_trail_never_walks_a_payment_backwards(monkeypatch):
     assert reached == {"1", "2", "3", "4"}      # never back to acct:0, never to the person
 
 
+# --- the case board's own intents --------------------------------------------
+
+def test_board_action_phrases_are_not_swallowed_by_the_view_intent():
+    """Found live: 'Pin this to the case board' and 'Add that to the case board'
+    (the spec's own literal example phrasing) both contain the substring 'case
+    board', which was also a bare BOARD_VIEW keyword — classify() picks the
+    earliest-registered intent on a score tie, so every successful pin answered
+    with a board SUMMARY instead of a pin confirmation. BOARD_VIEW's keyword list
+    no longer contains a bare 'case board'/'investigation board' fragment that a
+    pin/add phrase can contain as a substring."""
+    assert classify("Pin this to the case board.") == "BOARD_PIN_EVIDENCE"
+    assert classify("Add that to the case board.") == "BOARD_PIN_EVIDENCE"
+    assert classify("Pin this evidence.") == "BOARD_PIN_EVIDENCE"
+    assert classify("Save this as a lead: check his alibi") == "BOARD_ADD_LEAD"
+    assert classify("Add a note that this needs verification") == "BOARD_ADD_NOTE"
+    assert classify("Dismiss that lead") == "BOARD_LEAD_STATUS"
+
+
+def test_board_view_phrases_still_route_correctly():
+    assert classify("Open the investigation board.") == "BOARD_VIEW"
+    assert classify("What is on the board for this case?") == "BOARD_VIEW"
+    assert classify("What have we established so far?") == "BOARD_VIEW"
+
+
+def test_answer_is_refusal_distinguishes_genuine_refusals_from_citationless_success():
+    """The console colors a refusal differently from a normal answer, keyed off
+    this flag (not citation count — CAPABILITY and a successful board action both
+    carry zero citations without being refusals). Found live: before this field
+    existed, every successful board confirmation rendered in the same red styling
+    as 'I could not find this in the records.'"""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    capability = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                    original_query="what can you do", intent="CAPABILITY")
+    orch.node_synthesize(capability)
+    assert capability.citations == [] and capability.answer_is_refusal is False
+
+    pinned = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                original_query="pin this", intent="BOARD_PIN_EVIDENCE")
+    pinned.board_result = {"ok": True, "kind": "pinned",
+                           "item": {"item_type": "evidence", "content": "x"}}
+    orch.node_synthesize(pinned)
+    assert pinned.citations == [] and pinned.answer_is_refusal is False
+
+    board_error = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                     original_query="pin this", intent="BOARD_PIN_EVIDENCE")
+    board_error.board_result = {"ok": False, "kind": "error", "message": "nothing to pin"}
+    orch.node_synthesize(board_error)
+    assert board_error.answer_is_refusal is True
+
+    refused = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                 original_query="show me the money trail",
+                                 intent="FINANCIAL", requires_escalation=True,
+                                 refusal_reason="no_subject")
+    orch.node_synthesize(refused)
+    assert refused.citations == [] and refused.answer_is_refusal is True
+
+
+def test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_expected():
+    """A systematic guard against the exact class of bug the two tests above
+    caught by hand: any keyword phrase that is a plain substring of a DIFFERENT
+    intent's keyword phrase will always win or tie that intent's own score on any
+    query containing it. A handful of these are pre-existing and deliberate
+    (CRIME_SEARCH is the scored-last fallback, see intents.classify's own
+    docstring) — this only guards against a NEW one being introduced silently."""
+    _KNOWN = {
+        ("PERSON_HISTORY", "previous cases", "CRIME_SEARCH", "cases"),
+        ("FINANCIAL", "account", "CRIME_SEARCH", "count"),
+        ("SIMILAR_CASES", "matching cases", "CRIME_SEARCH", "cases"),
+        ("CRIME_SEARCH", "firs", "FIR_LOOKUP", "fir"),
+    }
+    found = set()
+    for name_a, (kws_a, _) in intents_mod.INTENTS.items():
+        for name_b, (kws_b, _) in intents_mod.INTENTS.items():
+            if name_a == name_b:
+                continue
+            for ka in kws_a:
+                for kb in kws_b:
+                    if ka != kb and ka in kb:
+                        found.add((name_b, kb, name_a, ka))
+    assert found == _KNOWN, f"new keyword collision(s): {found - _KNOWN}"
+
+
 # --- intents ----------------------------------------------------------------
 
 def test_intent_classification():

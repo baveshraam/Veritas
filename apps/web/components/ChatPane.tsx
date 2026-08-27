@@ -164,7 +164,7 @@ export default function ChatPane({
             <div className="msg-q">{t.query}</div>
             <ReasoningTrace trace={t.trace} streaming={t.streaming} />
             {t.answer && (
-              <div className={`msg-a ${t.citations.length === 0 ? "refusal" : ""}`}>
+              <div className={`msg-a ${t.refused ? "refusal" : ""}`}>
                 {withCitations(t.answer, onCite, t.citations, activeEvidence)}
               </div>
             )}

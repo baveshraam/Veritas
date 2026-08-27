@@ -87,6 +87,18 @@ class InvestigationState(BaseModel):
     # instead of running the normal evidence-citation path (a board action is not a
     # retrieval, and has nothing for CRAG to score).
     board_result: Optional[dict[str, Any]] = None
+    # Whether the FINAL rendered answer is a genuine refusal — set explicitly, by
+    # node_synthesize, at the exact point a refusal-shaped answer is produced.
+    # Deliberately NOT derived from requires_escalation or "citations is empty":
+    # requires_escalation is set generically whenever a refusal_reason existed
+    # BEFORE synthesis even when synthesis goes on to answer successfully (a found
+    # EXPLAIN_REASONING/EVIDENCE_FOR prior turn), and CAPABILITY/BOARD_* answers
+    # carry no citations while still being real, successful answers. The console
+    # colors a refusal differently from a normal answer (apps/web ChatPane.tsx), and
+    # inferring that from citation count alone painted every successful
+    # citation-free answer — including a board confirmation like "Pinned this
+    # evidence..." — in the same red as "I could not find this in the records."
+    answer_is_refusal: bool = False
 
     evidence_items: list[EvidenceItem] = Field(default_factory=list)
     graph_query_results: list[dict] = Field(default_factory=list)

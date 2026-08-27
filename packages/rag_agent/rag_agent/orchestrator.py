@@ -1145,6 +1145,10 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
         state.final_answer = answer
         state.citations = []
         state.evidence_items = []
+        # A board action's own local "couldn't do that" (nothing to pin, no
+        # matching lead) reads as a refusal and should be styled like one; a
+        # successful pin/note/lead/view should not.
+        state.answer_is_refusal = not state.board_result.get("ok", True)
         _trace(state, "Synthesis", "Case board action", t0)
         return state
 
@@ -1163,6 +1167,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
             state.final_answer = answer
             state.citations = []
             state.evidence_items = []
+            state.answer_is_refusal = True
             _trace(state, "Synthesis", "Refused to answer — nothing_prior", t0)
             return state
 
@@ -1211,6 +1216,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
         # nothing to cite must not keep the evidence it rejected.
         state.citations = []
         state.evidence_items = []
+        state.answer_is_refusal = True
         _trace(state, "Synthesis", f"Refused to answer — {reason}", t0)
         return state
 

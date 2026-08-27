@@ -33,6 +33,10 @@ export type FinalEvent = {
   citations: Citation[];
   evidence_items: EvidenceItem[];
   visualization: Visualization;
+  // The engine's own true/false answer to "did this turn refuse" — NOT derivable
+  // from citations.length alone (a CAPABILITY answer or a successful board
+  // confirmation also carries zero citations without being a refusal).
+  refused: boolean;
 };
 
 export type Turn = {
@@ -40,6 +44,7 @@ export type Turn = {
   query: string;
   answer: string;
   streaming: boolean;
+  refused: boolean;
   trace: TraceEntry[];
   citations: Citation[];
   evidence: EvidenceItem[];
