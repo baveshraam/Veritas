@@ -142,6 +142,7 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
             evidence_items=[e.model_dump(mode="json") for e in result.evidence_items],
             visualization=result.visualization.model_dump(),
             agent_trace=trace,
+            result_context=result.result_context,
         )
         record(officer.officer_id, req.session_id, "/chat",
                req.model_dump(exclude={"audio"}), final, trace)

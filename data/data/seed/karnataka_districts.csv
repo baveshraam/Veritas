@@ -1,32 +1,32 @@
-district_code,canonical_name,aliases
-KA01,Bagalkot,Bagalkote
-KA02,Ballari,Bellary
-KA03,Belagavi,Belgaum|Belagaum
-KA04,Bengaluru Rural,Bangalore Rural|Bengaluru(Rural)|Bangalore(Rural)
-KA05,Bengaluru Urban,Bangalore Urban|Bengaluru(Urban)|Bangalore(Urban)|Bengaluru|Bangalore
-KA06,Bidar,
-KA07,Vijayapura,Bijapur|Vijayapur
-KA08,Chamarajanagar,Chamrajnagar|Chamarajanagara
-KA09,Chikkaballapura,Chikballapur|Chikballapura|Chikkaballapur
-KA10,Chikkamagaluru,Chikmagalur|Chickmagalur|Chikkamagalur
-KA11,Chitradurga,
-KA12,Dakshina Kannada,Dakshin Kannada|South Kanara|Mangalore
-KA13,Davanagere,Davangere
-KA14,Dharwad,Dharwar
-KA15,Gadag,
-KA16,Kalaburagi,Gulbarga
-KA17,Hassan,
-KA18,Haveri,
-KA19,Kodagu,Coorg|Madikeri
-KA20,Kolar,
-KA21,Koppal,
-KA22,Mandya,
-KA23,Mysuru,Mysore
-KA24,Raichur,
-KA25,Ramanagara,Ramanagaram
-KA26,Shivamogga,Shimoga
-KA27,Tumakuru,Tumkur
-KA28,Udupi,
-KA29,Uttara Kannada,Uttar Kannada|North Kanara|Karwar
-KA30,Yadgir,Yadagiri
-KA31,Vijayanagara,Vijayanagar
+district_code,canonical_name,aliases,kannada_names
+KA01,Bagalkot,Bagalkote,ಬಾಗಲಕೋಟ|ಬಾಗಲಕೋಟೆ
+KA02,Ballari,Bellary,ಬಳ್ಳಾರಿ
+KA03,Belagavi,Belgaum|Belagaum,ಬೆಳಗಾವಿ
+KA04,Bengaluru Rural,Bangalore Rural|Bengaluru(Rural)|Bangalore(Rural),ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ
+KA05,Bengaluru Urban,Bangalore Urban|Bengaluru(Urban)|Bangalore(Urban)|Bengaluru|Bangalore,ಬೆಂಗಳೂರು ನಗರ|ಬೆಂಗಳೂರು
+KA06,Bidar,,ಬೀದರ್|ಬೀದರ
+KA07,Vijayapura,Bijapur|Vijayapur,ವಿಜಯಪುರ
+KA08,Chamarajanagar,Chamrajnagar|Chamarajanagara,ಚಾಮರಾಜನಗರ
+KA09,Chikkaballapura,Chikballapur|Chikballapura|Chikkaballapur,ಚಿಕ್ಕಬಳ್ಳಾಪುರ
+KA10,Chikkamagaluru,Chikmagalur|Chickmagalur|Chikkamagalur,ಚಿಕ್ಕಮಗಳೂರು
+KA11,Chitradurga,,ಚಿತ್ರದುರ್ಗ
+KA12,Dakshina Kannada,Dakshin Kannada|South Kanara|Mangalore,ದಕ್ಷಿಣ ಕನ್ನಡ
+KA13,Davanagere,Davangere,ದಾವಣಗೆರೆ
+KA14,Dharwad,Dharwar,ಧಾರವಾಡ
+KA15,Gadag,,ಗದಗ
+KA16,Kalaburagi,Gulbarga,ಕಲಬುರಗಿ|ಕಲಬುರ್ಗಿ|ಗುಲ್ಬರ್ಗಾ
+KA17,Hassan,,ಹಾಸನ
+KA18,Haveri,,ಹಾವೇರಿ
+KA19,Kodagu,Coorg|Madikeri,ಕೊಡಗು
+KA20,Kolar,,ಕೋಲಾರ
+KA21,Koppal,,ಕೊಪ್ಪಳ
+KA22,Mandya,,ಮಂಡ್ಯ
+KA23,Mysuru,Mysore,ಮೈಸೂರು
+KA24,Raichur,,ರಾಯಚೂರು
+KA25,Ramanagara,Ramanagaram,ರಾಮನಗರ
+KA26,Shivamogga,Shimoga,ಶಿವಮೊಗ್ಗ
+KA27,Tumakuru,Tumkur,ತುಮಕೂರು
+KA28,Udupi,,ಉಡುಪಿ
+KA29,Uttara Kannada,Uttar Kannada|North Kanara|Karwar,ಉತ್ತರ ಕನ್ನಡ
+KA30,Yadgir,Yadagiri,ಯಾದಗಿರಿ
+KA31,Vijayanagara,Vijayanagar,ವಿಜಯನಗರ

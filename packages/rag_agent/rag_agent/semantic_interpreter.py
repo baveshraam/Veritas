@@ -8,6 +8,7 @@ runs always and produces identical SemanticRequest shape.
 The 30 current intents become the values `operation` is allowed to take —
 an implementation compatibility layer, not something removed.
 """
+import re
 from datetime import date
 from typing import Any, Literal, Optional
 
@@ -32,7 +33,8 @@ class SemanticRequest:
         subject_type: Literal["person", "case", "location", "account", "none"] = "none",
         subject_id: Optional[str] = None,
         subject_text: Optional[str] = None,
-        reference_kind: Literal["explicit", "pronoun", "positional", "implicit_from_focus"] = "implicit_from_focus",
+        reference_kind: Literal["explicit", "pronoun", "positional", "implicit_from_focus",
+                                "exhaustiveness_check", "exploration", "constraint_change"] = "implicit_from_focus",
         constraints: Optional[dict[str, Any]] = None,
         previous_result_context: Optional[dict[str, Any]] = None,
         comparison_entities: Optional[list[str]] = None,
@@ -194,18 +196,271 @@ Never invent information. If the query is unclear, set operation="unknown"."""
     )
 
 
+# --- Structural reference / result-set / exploration patterns -------------------
+#
+# Each of these matches the SHAPE of a follow-up relative to the previous turn, not
+# a specific sentence. They compose with any prior operation/subject/result-set —
+# "the fourth transaction" needs no new pattern once "the second one" works, the
+# same way intents.py's own EXPLAIN_REASONING/CASE_LOCATIONS shape-checks already
+# generalize across topics. None of these fires without a prior_turn (or, for
+# pronoun/positional resolution, an active focus) to resolve against — a fresh
+# query that happens to contain one of these words with no antecedent falls through
+# to the ordinary classify() path unchanged, exactly as it does today.
+
+_ORDINAL_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+}
+_ORDINAL_RE = re.compile(
+    r"\bthe\s+(" + "|".join(_ORDINAL_WORDS) + r"|\d+(?:st|nd|rd|th))\s+"
+    r"(?:one|case|person|fir|associate|record|account|transaction|item)\b"
+    r"|\b(?:item|number|record)\s*#?\s*(\d+)\b",
+    re.I,
+)
+_OTHER_RE = re.compile(r"\bthe\s+other\s+(?:one|person)\b", re.I)
+
+# "only these?" / "is that all?" / "what else?" — genuinely ambiguous in English
+# between "is this the whole result set" and "tell me more about the subject".
+# Disambiguated by context in _interpret_deterministic: a bounded result set from
+# the prior turn wins that reading; a subject in focus with no bounded set wins the
+# "elaborate" reading. Neither present -> falls through, honestly unresolved.
+_AMBIGUOUS_MORE_RE = re.compile(
+    r"\bonly\s+these\??\b|\bis\s+that\s+all\??\b|\bare\s+there\s+more\??\b"
+    r"|\bany(?:thing)?\s+else\b|\bwhat\s+else\b|\bthat'?s\s+it\??\b"
+    r"|\bjust\s+these\??\b|\bmore\s+than\s+(?:this|these|that|those)\??\b",
+    re.I,
+)
+# Unambiguous elaboration cues — never mean "more items of the same list".
+_EXPLORATION_ONLY_RE = re.compile(
+    r"\bgo\s+deeper\b|\bdig\s+deeper\b|\btell\s+me\s+more\b"
+    r"|\bexpand\s+on\s+(?:this|that)\b|\bshow\s+more\b",
+    re.I,
+)
+# A bare "why" / "why this?" / "why those?" with nothing else in the sentence is a
+# meta-question about the PREVIOUS answer (EXPLAIN_REASONING already handles this
+# fully — orchestrator.py:959ff reads the stored trace, not a fresh search). Whole-
+# query anchored so it never steals a real CAUSAL question ("why do more crimes
+# happen in poorer districts") that just happens to start with "why".
+_BARE_WHY_RE = re.compile(
+    r"^\s*(?:but\s+)?why\s*(?:this|that|these|those)?\s*\??\s*$", re.I)
+# "yeah but before this?" / "and after that?" — a temporal relation with no noun to
+# anchor it beyond "this"/"that". TIMELINE already resolves "before"/"after" from
+# the raw query text (orchestrator._TIMELINE_BEFORE_RE/_AFTER_RE); this only widens
+# which utterances REACH that handling — same anchoring discipline as _BARE_WHY_RE,
+# so "murders before 2020" (a real, fully-specified query) is untouched.
+_TEMPORAL_BARE_RE = re.compile(
+    r"^\s*(?:yeah,?\s*)?(?:but\s+)?(?:before|after)\s+(?:this|that)\s*\??\s*$", re.I)
+# "same thing for Bengaluru" / "what about Mysuru" / "and for Kolar" — repeats the
+# PREVIOUS operation with a new constraint, most commonly a district (which
+# resolve_focus() already extracts for free via the LOCATION gazetteer). Anchored
+# near the start of the query so it doesn't fire mid-sentence on unrelated "what
+# about" phrasing.
+_REPEAT_CUE_RE = re.compile(
+    r"^\s*(?:same\s+(?:thing|query|question)?\s*(?:for|in)\b"
+    r"|what\s+about\b|and\s+for\b|and\s+in\b)", re.I)
+
+# Bounded deterministic multi-step composition (design spec §3): "check whether
+# EITHER of those people had a prior case in Bengaluru" / "does she have a record
+# AS WELL" / "show me BOTH of their networks". Two-entity comparisons only — three
+# or more names is exactly the open-ended planning this deliberately does not
+# attempt (needs the LLM path, see ENGINEERING_BRIEF.md §12).
+_COORDINATION_RE = re.compile(
+    r"\beither of\b|\beither\b.*\bor\b|\bboth of\b|\bboth\b|\band also\b|\bas well\b", re.I)
+_BACK_REFERENCE_PAIR_RE = re.compile(
+    r"\b(?:those|them|these)\s+(?:people|persons|two)\b|\bboth\s+of\s+them\b", re.I)
+
+# evidence_id prefix -> subject_type, for resolving a positional/'other' reference
+# against the previous turn's own numbered citation list (orchestrator.py:1274,
+# :359, :465 — assoc:<person_id>, same_as:<person_id>, fir:<fir_id>).
+_EVIDENCE_PREFIX_SUBJECT = {"fir": "case", "assoc": "person", "same_as": "person"}
+
+
+def _ordinal_index(query: str) -> Optional[int]:
+    """1-based position named by an ordinal reference ('the second one', 'item 3')."""
+    m = _ORDINAL_RE.search(query or "")
+    if not m:
+        return None
+    word = (m.group(1) or "").lower()
+    if word in _ORDINAL_WORDS:
+        return _ORDINAL_WORDS[word]
+    if word[:-2].isdigit():                 # "3rd", "21st"
+        return int(word[:-2])
+    if m.group(2):
+        return int(m.group(2))
+    return None
+
+
+def _citation_subject(citation: dict) -> Optional[tuple[str, str]]:
+    """(subject_type, subject_id_or_name) from one of the prior turn's own citations."""
+    eid = citation.get("evidence_id") or ""
+    prefix, sep, rest = eid.partition(":")
+    if not sep or not rest:
+        return None
+    subject_type = _EVIDENCE_PREFIX_SUBJECT.get(prefix)
+    if subject_type:
+        return subject_type, rest
+    if prefix == "accused":
+        # CASE_PEOPLE's citations carry a per-case AccusedID here, not a resolved
+        # PersonUID — same reason _recent_person_candidates_from_prior parses the
+        # label instead. Returns a NAME, resolved like any other named subject.
+        label = citation.get("label") or ""
+        if " is accused on this case" in label:
+            name = label.split(" is accused on this case")[0].strip()
+            if name:
+                return "person_name", name
+    return None
+
+
+def _resolve_other_candidate(focus: SessionFocus,
+                             prior_turn: Optional[ConversationTurn]) -> Optional[str]:
+    """'the other one'/'the other person': among exactly two named candidates from
+    the prior turn, the one that is NOT the person currently in focus. Three or
+    more candidates makes "the other one" genuinely ambiguous, so this only fires
+    on exactly two — the same discipline the tied-name ambiguity check already
+    applies elsewhere rather than guessing."""
+    candidates = _recent_person_candidates_from_prior(prior_turn)
+    if len(candidates) != 2:
+        return None
+    resolved = [(name, str(hits[0]["person_id"]))
+                for name in candidates if (hits := sql_agent.person_by_name(name))]
+    others = [name for name, pid in resolved if pid != focus.active_person]
+    return others[0] if len(others) == 1 else None
+
+
+def _default_operation_for_subject(subject_type: str) -> str:
+    """What a bare selection ('the second one', with no verb of its own) should
+    do once a subject is resolved — the richest single-call profile for that
+    subject type, the way an investigator would pull up a file on request."""
+    return "CASE_CONTEXT" if subject_type == "case" else "PERSON_HISTORY"
+
+
+def crime_type_from_query(query: str) -> Optional[str]:
+    """Which of the 20 canonical crime types (if any) a question names — the longest
+    match wins so "Motor Vehicle Theft" is not shadowed by the bare "Theft" it
+    contains. Moved here (from orchestrator.py) so _extract_constraints can reuse
+    it without a circular import — orchestrator already imports this module."""
+    from data.generator.refdata import crime_type_names
+    q = (query or "").lower()
+    matches = [ct for ct in crime_type_names() if ct.lower() in q]
+    return max(matches, key=len) if matches else None
+
+
 def _interpret_deterministic(
     query: str,
     language: str,
     focus: SessionFocus,
     prior_turn: Optional[ConversationTurn] = None,
 ) -> SemanticRequest:
-    """Deterministic path: reuses intents.classify() + resolve_focus() + constraint extraction.
+    """Deterministic path: reuses intents.classify() + resolve_focus() + constraint
+    extraction, widened by the structural follow-up patterns above.
 
     This is the always-available fallback, and must produce output shape identical to
     the LLM path so no downstream changes are needed.
     """
     q = query or ""
+    prior_result = (prior_turn.result_context if prior_turn else None) or {}
+
+    # --- Structural follow-ups, checked before topic classification -------------
+    # Same precedence discipline as intents.classify()'s own regex "shape" checks:
+    # these are about what KIND of follow-up this is relative to the last turn, not
+    # what topic it names, so they must not lose to an accidental keyword hit.
+
+    if prior_turn and _BARE_WHY_RE.search(q):
+        return SemanticRequest(
+            operation="EXPLAIN_REASONING", reference_kind="explicit",
+            confidence=0.9)
+
+    if prior_turn and _TEMPORAL_BARE_RE.search(q):
+        return SemanticRequest(
+            operation="TIMELINE", reference_kind="implicit_from_focus",
+            confidence=0.85)
+
+    if prior_turn and _AMBIGUOUS_MORE_RE.search(q):
+        if prior_result.get("shown_ids") or prior_result.get("total_matched") is not None:
+            return SemanticRequest(
+                operation="RESULT_SET_FOLLOWUP", reference_kind="exhaustiveness_check",
+                previous_result_context=prior_result, confidence=0.9)
+        if focus.active_person or focus.active_fir:
+            return SemanticRequest(
+                operation=_default_operation_for_subject(
+                    "case" if focus.active_fir and not focus.active_person else "person"),
+                subject_type="person" if focus.active_person else "case",
+                subject_id=focus.active_person or focus.active_fir,
+                reference_kind="exploration", exploration_direction="wider",
+                confidence=0.75)
+        # No bounded result and no subject to elaborate on — genuinely nothing to
+        # widen. Falls through rather than guessing.
+
+    if prior_turn and _EXPLORATION_ONLY_RE.search(q) and (focus.active_person or focus.active_fir):
+        return SemanticRequest(
+            operation=_default_operation_for_subject(
+                "case" if focus.active_fir and not focus.active_person else "person"),
+            subject_type="person" if focus.active_person else "case",
+            subject_id=focus.active_person or focus.active_fir,
+            reference_kind="exploration", exploration_direction="deeper",
+            confidence=0.75)
+
+    if prior_turn:
+        idx = _ordinal_index(q)
+        resolved_positional = None
+        if idx is not None:
+            for c in prior_turn.citations:
+                if c.get("index") == idx:
+                    resolved_positional = _citation_subject(c)
+                    break
+        elif _OTHER_RE.search(q):
+            other_name = _resolve_other_candidate(focus, prior_turn)
+            if other_name:
+                resolved_positional = ("person_name", other_name)
+        if resolved_positional:
+            kind, ident = resolved_positional
+            base_op = intents.classify(q)          # "does the second one have priors" etc.
+            if kind == "person_name":
+                hits = sql_agent.person_by_name(ident)
+                if hits:
+                    op = base_op if base_op != "UNKNOWN" else "PERSON_HISTORY"
+                    return SemanticRequest(
+                        operation=op, subject_type="person", subject_id=str(hits[0]["person_id"]),
+                        subject_text=ident, reference_kind="positional", confidence=0.85)
+            elif kind == "person":
+                op = base_op if base_op != "UNKNOWN" else "PERSON_HISTORY"
+                return SemanticRequest(
+                    operation=op, subject_type="person", subject_id=ident,
+                    reference_kind="positional", confidence=0.9)
+            elif kind == "case":
+                op = base_op if base_op != "UNKNOWN" else "CASE_CONTEXT"
+                return SemanticRequest(
+                    operation=op, subject_type="case", subject_id=ident,
+                    reference_kind="positional", confidence=0.9)
+
+    if prior_turn and prior_result.get("operation") and _REPEAT_CUE_RE.search(q):
+        # "same thing for Bengaluru": reuse the prior turn's own operation, and
+        # overlay the new constraint(s) named in THIS turn's text on top of the
+        # prior turn's own constraints — _extract_constraints already finds
+        # "Bengaluru" via the same LOCATION gazetteer NER uses elsewhere. Anything
+        # not restated (e.g. a crime type from the prior turn) carries forward.
+        merged_constraints = {**prior_result.get("constraints", {}), **_extract_constraints(q)}
+        return SemanticRequest(
+            operation=prior_result["operation"], reference_kind="constraint_change",
+            constraints=merged_constraints, previous_result_context=prior_result,
+            confidence=0.8)
+
+    # Bounded deterministic multi-step composition (design spec §3): "check
+    # whether either of those people had a prior case in Bengaluru" — two-entity
+    # only, explicitly not open-ended planning (see the module docstring above
+    # _COORDINATION_RE). orchestrator._handle_comparison sequences the SAME
+    # single-subject retrieval path once per resolved id, unchanged RBAC/CRAG.
+    if _COORDINATION_RE.search(q):
+        pair = _resolve_comparison_pair(q, prior_turn)
+        if len(pair) == 2:
+            base_op = intents.classify(q)
+            return SemanticRequest(
+                operation=base_op if base_op != "UNKNOWN" else "PERSON_HISTORY",
+                subject_type="person", comparison_entities=[pid for _, pid in pair],
+                constraints=_extract_constraints(q), reference_kind="explicit",
+                confidence=0.75)
+
+    # --- Ordinary path (unchanged from the §5.1 migration) -----------------------
 
     # Classify intent (existing keywords + regex shapes)
     operation = intents.classify(q)
@@ -263,10 +518,8 @@ def _interpret_deterministic(
     # Extract constraints
     constraints = _extract_constraints(q)
 
-    # Read previous-result context if prior turn exists and operation matches expected types
-    previous_result_context = {}
-    if prior_turn:
-        previous_result_context = _extract_previous_result_context(prior_turn, operation)
+    # Read previous-result context if prior turn exists
+    previous_result_context = prior_result
 
     # Assign confidence: regex shapes are more confident than keyword matches
     confidence = 0.9 if operation != "UNKNOWN" else 0.3
@@ -296,44 +549,21 @@ def _interpret_deterministic(
 
 
 def _extract_constraints(query: str) -> dict[str, Any]:
-    """Extract explicit constraints from query: date range, crime type, district, etc.
-
-    Existing orchestrator has _crime_type_from_query, _district_code, _date_range_from_query
-    scattered through _run_specialists. Consolidate them here.
-    """
-    constraints = {}
-
-    # TODO: integrate existing constraint extractors if they're worth reusing.
-    # For now, leave empty — orchestrator's existing per-intent constraint extraction
-    # can continue inline. This field is here for future enrichment.
-
+    """Explicit constraints named IN this query: crime type (keyword match against
+    the 20 canonical types) and district (via the same LOCATION gazetteer NER
+    already uses elsewhere). Consolidates what used to be scattered per-intent
+    extraction in orchestrator.py into one place the interpreter can read before
+    retrieval runs — used directly by constraint-change follow-ups ("same thing for
+    Bengaluru"), and available to every operation via SemanticRequest.constraints."""
+    constraints: dict[str, Any] = {}
+    ct = crime_type_from_query(query)
+    if ct:
+        constraints["crime_type"] = ct
+    for e in ner_extract(query or "", "en"):
+        if e.label == "LOCATION":
+            constraints["district"] = e.text
+            break
     return constraints
-
-
-def _extract_previous_result_context(turn: ConversationTurn, current_operation: str) -> dict[str, Any]:
-    """Extract context about what the previous turn returned.
-
-    Used to handle follow-ups like "only these?", "the second one", "go deeper".
-    Reads the stored citations and evidence from the prior turn.
-    """
-    context = {}
-
-    if not turn or not turn.citations:
-        return context
-
-    # Store the previous operation and citation count
-    # (operation is not stored on ConversationTurn today, but citations are)
-    context["previous_citation_count"] = len(turn.citations)
-    context["previous_citations"] = turn.citations  # Full list for positional lookup
-
-    # If this is a follow-up to a result-set operation, store more context
-    if current_operation in ["CRIME_SEARCH", "PERSON_NETWORK", "ALIAS_CHECK"]:
-        # The orchestrator knows whether the result was a sample or exhaustive.
-        # That information is not persisted on ConversationTurn yet (future work),
-        # so we can't reconstruct it here. Note it as a gap.
-        pass
-
-    return context
 
 
 def _recent_person_candidates_from_prior(prior_turn: Optional[ConversationTurn]) -> list[str]:
@@ -363,3 +593,23 @@ def _recent_person_candidates_from_prior(prior_turn: Optional[ConversationTurn])
                 seen.add(name)
                 names.append(name)
     return names
+
+
+def _resolve_comparison_pair(query: str, prior_turn: Optional[ConversationTurn]
+                             ) -> list[tuple[str, str]]:
+    """Two resolved (name, person_id) pairs for a bounded comparison, or [] if the
+    query doesn't name/reference exactly two people. Either named explicitly in
+    THIS query ("check Ramesh and Suresh for...") or referred back to the prior
+    turn's own candidate list ("either of those people") — reuses the exact
+    mechanism pronoun resolution already relies on for the latter."""
+    names = [e.text for e in ner_extract(query or "", "en") if e.label == "PERSON"]
+    if len(names) < 2 and _BACK_REFERENCE_PAIR_RE.search(query or ""):
+        names = _recent_person_candidates_from_prior(prior_turn)
+    if len(dict.fromkeys(names)) != 2:
+        return []
+    resolved = []
+    for name in dict.fromkeys(names):
+        hits = sql_agent.person_by_name(name)
+        if hits:
+            resolved.append((hits[0]["name_en"], hits[0]["person_id"]))
+    return resolved if len(resolved) == 2 else []

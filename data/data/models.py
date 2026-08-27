@@ -7,9 +7,9 @@ mapping of the `session` table's active_* columns, so data is its natural home;
 rag_agent imports it from here. ConversationTurn was already data-owned.
 """
 from datetime import date, datetime
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SessionFocus(BaseModel):
@@ -29,3 +29,9 @@ class ConversationTurn(BaseModel):
     visualization: dict
     agent_trace: list[dict]
     created_at: datetime
+    # What this turn's answer actually was as a bounded result set, if it was one —
+    # {"operation": str, "total_matched": int|None, "shown": int, "is_sample": bool,
+    #  "shown_ids": list[str]}. Lets a follow-up ("only these?", "the second one",
+    # "same thing for Bengaluru") read a real fact instead of the interpreter
+    # re-guessing from scratch. Empty for turns that weren't a bounded result set.
+    result_context: dict[str, Any] = Field(default_factory=dict)

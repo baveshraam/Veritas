@@ -184,6 +184,14 @@ def person_record(person_id: str) -> list[dict]:
     return cases_by_ids(ids)
 
 
+def person_name(person_id: str) -> Optional[str]:
+    """The reverse of person_by_name — a display label for an already-resolved id,
+    e.g. tagging each half of a bounded multi-step comparison's evidence."""
+    row = ds.one('SELECT "CanonicalName" FROM "vx_person" WHERE "PersonUID" = :pid',
+                 {"pid": int(person_id)})
+    return row["CanonicalName"] if row else None
+
+
 def person_by_name(name: str) -> list[dict]:
     """Name matches, ranked by how much record there is behind them.
 

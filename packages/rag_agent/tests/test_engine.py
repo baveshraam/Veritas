@@ -927,11 +927,13 @@ def test_crime_search_states_zero_plainly_rather_than_going_silent():
 
 
 def test_crime_type_extraction_prefers_the_longer_specific_match():
-    from rag_agent.orchestrator import _crime_type_from_query
+    # Moved to semantic_interpreter.py (§ compositional semantic layer) so
+    # _extract_constraints can reuse it without a circular import.
+    from rag_agent.semantic_interpreter import crime_type_from_query
 
-    assert _crime_type_from_query("how many motor vehicle theft cases") == "Motor Vehicle Theft"
-    assert _crime_type_from_query("how many theft cases") == "Theft"
-    assert _crime_type_from_query("show me all cases") is None
+    assert crime_type_from_query("how many motor vehicle theft cases") == "Motor Vehicle Theft"
+    assert crime_type_from_query("how many theft cases") == "Theft"
+    assert crime_type_from_query("show me all cases") is None
 
 
 # --- BUG-011: vector similarity displayed as evidential confidence -----------

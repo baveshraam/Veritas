@@ -143,33 +143,51 @@ keyword, is the limit.
    pronouns, code-switching, reference resolution, edge cases) + full regression suite
    (202 tests pass, 2 skipped).
 2. **Reference resolution is general for one thing (a person pronoun) and hand-built
-   for everything else.** `SessionFocus`/`resolve_focus()` genuinely generalizes across
-   any intent that reads `active_person` (`intents.py:340-352`,
-   `orchestrator.py:161-190`). But "this case," "why," "only these," "go back to the
-   first case," "both of them" each required their own regex specifically because the
-   generic path doesn't cover them (`intents.py:143-221`). A *new* kind of reference —
-   "the other one," "same district as before," "compare these two" — gets nothing for
-   free; it needs its own hand-built branch, discovered by someone actually typing it.
-3. **No result-set awareness at the state level.** `CRIME_SEARCH` computes an exact
-   count and separately samples up to 5 FIRs for citation
-   (`orchestrator.py:468-495`) — genuinely correct, not padded — but nothing in
-   `InvestigationState` records "N matched, M shown, this is a sample" as a queryable
-   fact the *next* turn can read. "Only these?" / "are there more?" as a literal
-   follow-up to a crime-count answer has no handler; it would fall through to whatever
-   the 30-intent classifier happens to score it as. `CASE_LOCATIONS` is the one place
-   this pattern exists correctly (it re-reads the previous turn's own cited FIR ids —
-   `orchestrator.py:750-783`) and is the template for what a generalized version should
-   look like, not yet generalized past geography.
+   for everything else — ADDRESSED in the compositional semantic layer milestone
+   (§16, 2026-08-27).** `semantic_interpreter.py` now has a small set of *structural*
+   extractors — ordinal/positional (`_ordinal_index`), "the other one"
+   (`_resolve_other_candidate`), exhaustiveness ("only these?"/"are there more?",
+   context-disambiguated from "tell me more about the subject" via
+   `_AMBIGUOUS_MORE_RE`), unambiguous exploration cues ("go deeper", `_EXPLORATION_ONLY_RE`),
+   bare "why" (`_BARE_WHY_RE`), a bare temporal relation ("before this?",
+   `_TEMPORAL_BARE_RE`), and a constraint-change repeat ("same thing for Bengaluru",
+   `_REPEAT_CUE_RE`) — each matched against *any* prior operation/subject, not
+   hand-built per phrase. A genuinely new phrasing of any of these composes for free;
+   what still needs its own extractor is a genuinely new *category* of reference (see
+   the adversarial battery, §14, for what was and wasn't tested). "Compare these two"
+   is now covered too, as a bounded two-entity case — see point 3a below.
+3. **No result-set awareness at the state level — ADDRESSED.**
+   `InvestigationState.result_context` / `ConversationTurn.result_context` (a new,
+   additive field, `data/models.py`) now records `{operation, total_matched, shown,
+   is_sample, shown_ids, constraints}` at the exact point `CRIME_SEARCH` (and
+   `PERSON_NETWORK`/`ALIAS_CHECK`/`SIMILAR_CASES`) already compute their count/sample
+   (`orchestrator.py`'s `_run_specialists`). `_handle_more_results` generalizes
+   `_handle_case_locations`' own "read the previous turn, not a new query" pattern:
+   an honest "that was everything" when `is_sample` is `False`, or a genuinely wider
+   re-query (deduped against `shown_ids`) when it's `True`. Chained follow-ups work —
+   "only these?" then "what about Mysuru?" correctly carries the crime type forward
+   and only overrides the district, verified against the real 10k-case dataset.
+   3a. **Bounded deterministic multi-step composition — NEW, not previously named as a
+   bottleneck.** "check whether either of those people had a prior case in Bengaluru"
+   resolves two person ids (`semantic_interpreter._resolve_comparison_pair`) and
+   `orchestrator._handle_comparison` sequences the *existing* single-subject retrieval
+   path once per subject — same RBAC, merged evidence scored by the same CRAG
+   evaluator as one batch (not independently per subject — a named, deliberate
+   simplification, not silently assumed). Explicitly not a general N-step planner;
+   three-plus named entities falls through rather than guessing a pair.
 4. **Kannada/English code-switching is handled by the translation layer as an
-   afterthought, not a first-class case** — see §10. This is the most concrete,
-   immediately-fixable instance of bottleneck #1: garbled understanding of code-switched
-   input isn't really an "intent" problem, it's an "the classifier never saw clean
-   English" problem one layer upstream.
+   afterthought — PARTIALLY ADDRESSED.** See §10: the "Mandya → Mandi" class of
+   mistranslation is now structurally closed via a 31-entry Kannada-district
+   gazetteer lookup-substitution, the same protected-span mechanism FIR/IPC/plate
+   identifiers already used. The "priorities" desync (§10) remains open — correctly,
+   per the reasoning already in this document: no deterministic fix exists that isn't
+   the keyword-patch this whole section argues against.
 
-None of these four are "add another regex" problems. Bottleneck #1 is the one the
-target architecture in §12 is aimed at; #2 and #3 are consequences of the same root
-cause (no shared structured representation of a turn); #4 is fixable independently and
-is where this pass's own milestone (§16) was spent.
+None of these are "add another regex per sentence" fixes — each extractor above is a
+*shape*, not a phrase, matched against structured prior-turn state rather than string
+content. What remains bottlenecked on the LLM path (§12): native Kannada
+understanding without translation as an intermediate step, and open-ended (3+ clause,
+3+ entity) planning.
 
 ## 6. Conversational architecture — target semantic concepts
 
@@ -231,16 +249,20 @@ role/station, not an estimate, and separately samples for citation
 the previous turn cited, re-checked against current policy scope, not a fresh
 unscoped query (`orchestrator.py:761-767`).
 
-Where it's missing: no field on `InvestigationState`/`ConversationTurn` records "N
-existed, M were shown, this was/wasn't exhaustive." A literal "only these?" or "are
-there more?" has no handler and would be scored by the flat classifier like any other
-string — most likely `UNKNOWN` or a wrong topic match, not a correct "yes, N-M more
-exist, here are the next 5." Fixing this the *right* way is the same fix as §6's
-`previous_result` concept: store `(total_matched, shown, is_sample)` on every turn that
-produces a bounded result set, and give the semantic interpreter (or, today, a small
-set of new regex shapes exactly like `CASE_LOCATIONS`'s own) a path that reads it. Not
-built this pass — named here as the concrete next step after §12, not a vague "improve
-UX" gap.
+**Built (2026-08-27, §16).** `InvestigationState.result_context` /
+`ConversationTurn.result_context` now stores exactly `(operation, total_matched,
+shown, is_sample, shown_ids, constraints)` on every turn that produces a bounded
+result set — `CRIME_SEARCH`, `PERSON_NETWORK`, `ALIAS_CHECK`, `SIMILAR_CASES`. "Only
+these?" / "are there more?" (`semantic_interpreter._AMBIGUOUS_MORE_RE`, context-
+disambiguated against an unbounded "tell me more about the subject" reading) routes
+to a new `RESULT_SET_FOLLOWUP` operation, handled by `orchestrator._handle_more_results`
+— the generalized version of `_handle_case_locations`'s own pattern this section
+previously named as the template. `PERSON_NETWORK`/`ALIAS_CHECK` are recorded as
+`is_sample=False` (exhaustive within the policy depth cap, not a sample of a larger
+population) so a follow-up gets an honest "yes, that's everything" rather than a
+pointless re-search; `SIMILAR_CASES` is recorded `total_matched=None,
+is_sample=True` — a ranked top-N has no honest "total exists" number, and saying so
+(rather than inventing one) is itself the correct behavior.
 
 ## 9. Investigation memory — three tiers, kept genuinely distinct
 
@@ -318,27 +340,38 @@ about translation quality is only as good as the model call that backs it:
   end to end in production, and isolating this refusal to the Mandya-specific
   translation defect alone, not a regression from this pass's own change.
 
-**What this pass built** (§16): protected-span translation. FIR numbers, IPC codes and
-vehicle plates are now removed before the string reaches NLLB and spliced back verbatim
-after (`data/nlp/translate.py:_protect_spans/_restore_spans`, wired into `translate()`
-at `data/nlp/translate.py:118-127`). This makes identifier fidelity a **structural
-guarantee** — provably true regardless of what the model does with the rest of the
-sentence (tested with a hostile stand-in backend, `data/tests/test_nlp.py`) — rather
-than a "the model happened to get it right in every test we ran" hope. It does **not**
-fix the two bugs above: "priorities" isn't a numeric span, and "Mandya→Mandi" was
-ablated and shown *not* to be caused by the unprotected number.
+**What the identifier-protection pass built**: protected-span translation. FIR numbers,
+IPC codes and vehicle plates are now removed before the string reaches NLLB and spliced
+back verbatim after (`data/nlp/translate.py:_protect_spans/_restore_spans`, wired into
+`translate()`). This makes identifier fidelity a **structural guarantee** — provably
+true regardless of what the model does with the rest of the sentence (tested with a
+hostile stand-in backend, `data/tests/test_nlp.py`) — rather than a "the model happened
+to get it right in every test we ran" hope. At the time, it did not fix either bug
+above: "priorities" isn't a numeric span, and "Mandya→Mandi" was ablated and shown not
+to be caused by the unprotected number specifically.
 
-**Why those two are correctly left open rather than patched here**: fixing "priorities"
-by adding it as a `PERSON_HISTORY` keyword alias would be exactly the reflexive
-keyword-patch this brief argues against in §5 — it treats a translation-quality symptom
-as an intent-layer problem. The principled fix is the §12 migration: a semantic
-interpreter reading "Does Usha Naika have priorities?" (or the untranslated Kannada
-directly, if QuickML is ever given native Kannada understanding) infers `PERSON_HISTORY`
-from meaning, not from one exact English noun surviving machine translation intact.
-"Mandya→Mandi" is a translation-model quality issue with no principled fix available at
-the application layer at all (IndicTrans2, the licensed, higher-quality alternative
-`translate.py` already supports as a preferred backend, is the real fix — see
-`CLAUDE.md`'s translation module docstring).
+**"Mandya→Mandi" — FIXED (2026-08-27, §16), correcting this document's own earlier
+claim that no application-layer fix existed.** That claim was true for protecting the
+*number* beside the district name; it did not consider protecting the district name
+*itself*. `_protect_spans` now takes a `src` parameter and, when translating from
+Kannada, runs a second pass against a closed, 31-entry Kannada-script district
+gazetteer (`data.districts.kannada_name_map`, sourced from kn.wikipedia.org's district
+list and cross-checked 2026-08-27 — flagged in code for a native-speaker QA pass before
+being extended beyond the districts this fix was verified against) — a **lookup
+substitution**, not a translation: the district name never reaches NLLB at all, so the
+model cannot mistranslate what it never sees. Verified with a hostile backend that
+actively corrupts any Kannada district name it's shown (`data/tests/test_nlp.py`) —
+the correct English name comes back regardless. This closes the whole class (any of
+the 31 districts), not just the one reported instance.
+
+**"priorities" stays correctly open.** Fixing it by adding a `PERSON_HISTORY` keyword
+alias would be exactly the reflexive keyword-patch this brief argues against in §5 — it
+treats a translation-quality symptom as an intent-layer problem. Blind suffix-stemming
+of intent keywords (checked this pass) was considered and rejected: it would make "this
+is a high priority case" spuriously score `PERSON_HISTORY`. The principled fix is still
+the §12 LLM path: a semantic interpreter reading "Does Usha Naika have priorities?" (or
+the untranslated Kannada directly) infers `PERSON_HISTORY` from meaning, not from one
+exact English noun surviving machine translation intact.
 
 ## 11. Voice
 
@@ -399,8 +432,11 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   against `SessionFocus.active_person`, returns full case history. **Works today**
   (`intents.py:340`, verified in `CLAUDE.md` BUG-028's live check).
 - *"only these?"* right after a crime-count answer → should read the stored total vs.
-  shown count and either list more or say the count was exhaustive. **Does not work
-  today** — §8/§5.3.
+  shown count and either list more or say the count was exhaustive. **Works today**
+  (2026-08-27, §8/§5.3) — verified against the real dataset: "How many theft cases
+  in Bengaluru Urban?" (646 total, 5 shown) → "Only these?" correctly lists 5 more
+  and states the 646 total; a second follow-up ("what about Mysuru?") correctly
+  carries the crime type forward and re-scopes only the district.
 - *"ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?"* → **works today**, verified directly
   against the real model, §10.
 - *"Usha Naika ಗೆ priors ಇದ್ಯಾ?"* → **does not work today** — confirmed live,
@@ -416,17 +452,16 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   next place to look once §12's LLM path is reachable (a semantic interpreter reading
   the mistranslated English, or better, reading the Kannada directly, would both
   close it; a keyword patch would not be the right fix).
-- *"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ?"* → **does not work
-  today** — confirmed live, post-deploy: refuses outright (`person_not_on_file`) on
-  the mistranslated "Mandi," despite the FIR number and intent both resolving
-  correctly. See §10 for the full mechanism. This is arguably the more urgent of the
-  two open bugs, precisely because it fails **completely** rather than just
-  unhelpfully, and because the deployed fix in this pass makes it *more* visible, not
-  less: the FIR number now reliably survives translation, so this failure mode is the
-  next thing standing between an officer and a correct answer on exactly this class
-  of query, not a second, independent problem behind it.
-- *"go deeper"* after a NEXT_STEPS answer → not evaluated this pass; flag as unverified
-  rather than assumed working.
+- *"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ?"* → **works today**
+  (2026-08-27, §10) — the district-gazetteer lookup-substitution fix means "ಮಂಡ್ಯ"
+  never reaches NLLB at all, closing the refusal this bullet used to document.
+- *"the second one"* after a network/associate listing → resolves against the
+  previous turn's own numbered citation list. **Works today** (2026-08-27, §5.2),
+  verified against the real dataset: "Who are the associates of Usha Naika?" → "Tell
+  me about the second one" correctly opens that specific associate's case history.
+- *"go deeper"* / *"what else"* after a subject-scoped answer → **works today**
+  (2026-08-27, §5.2) when a subject is in focus and no bounded result set exists to
+  disambiguate against; falls through honestly (not a guess) when neither applies.
 - A refusal ("tell me about the flying saucer incident on the moon") → clean refusal,
   no padded citations. **Works today**, and was a real regression once
   (`orchestrator.py:1437-1449`'s comment documents the exact failure it fixed).
@@ -448,6 +483,107 @@ Not keyword tests. Representative of what an officer would actually say, and wha
 
 ## 16. Changelog (append here; do not create a new file)
 
+- **2026-08-27 — compositional semantic layer milestone.** The next slice of the §5.1
+  migration, per its own "future phases" note: §5.2 (generic reference resolution),
+  §5.3 (result-set awareness), a new bounded deterministic multi-step composition
+  capability, and the §5.4/§10 half of code-switching that has a real deterministic
+  fix. Brainstormed and spec'd first (architectural path,
+  `docs/superpowers/specs/2026-08-27-compositional-semantic-layer-design.md`), then
+  implemented directly per an explicit instruction not to produce a second design
+  document.
+  - **Baseline captured before any change** (spec §1): git `83b8695`; live AppSail
+    deployment `52852000000360005` (Aug 27 16:30 IST, success); `/health` —
+    `llm: quickml (glm-4.7-flash) — configured, not yet contacted`, `firs: 10000`,
+    `graph: 16918n/87120e`, `vector_index: 13835 docs`; `QUICKML_ENDPOINT_KEY`
+    confirmed absent from the live app's own `configuration` object (direct check,
+    not carried forward). Live-reproduced the exact target defect: a `CRIME_SEARCH`
+    turn followed by "Only these?" scored `Intent: UNKNOWN` and refused with
+    `no_evidence` — §5.3 confirmed, not assumed.
+  - **§5.2/§5.3 — reference + result-set layer.** `ConversationTurn.result_context`
+    / `InvestigationState.result_context` (new, additive field) records
+    `{operation, total_matched, shown, is_sample, shown_ids, constraints}` at the
+    exact point `CRIME_SEARCH`/`PERSON_NETWORK`/`ALIAS_CHECK`/`SIMILAR_CASES` already
+    sample. `semantic_interpreter.py` gained structural extractors — ordinal/
+    positional (`_ordinal_index`), "the other one" (`_resolve_other_candidate`),
+    context-disambiguated exhaustiveness vs. exploration (`_AMBIGUOUS_MORE_RE` vs.
+    `_EXPLORATION_ONLY_RE`), bare "why" (`_BARE_WHY_RE`, reuses `EXPLAIN_REASONING`
+    unchanged), a bare temporal relation (`_TEMPORAL_BARE_RE`, reuses `TIMELINE`
+    unchanged), and a constraint-change repeat (`_REPEAT_CUE_RE`, carries a prior
+    turn's crime type forward while overriding only the newly-named district). New
+    `orchestrator._handle_more_results` (routes via a new `RESULT_SET_FOLLOWUP`
+    operation) generalizes `_handle_case_locations`'s own pattern: an honest "that
+    was everything" or a genuinely wider re-query, deduped against `shown_ids`, with
+    `result_context` propagated forward so a SECOND follow-up in the same chain
+    still has a real fact to read (found and fixed during manual verification — the
+    first version left `result_context` empty after a follow-up turn). `_extract_constraints`
+    (a stub since §5.1) now does real work; `orchestrator._crime_type_from_query`
+    moved to `semantic_interpreter.crime_type_from_query` so both share one
+    implementation.
+  - **New: bounded deterministic multi-step composition**, not previously named as
+    a bottleneck. `_COORDINATION_RE`/`_resolve_comparison_pair` detect a two-entity
+    comparison ("either of those people", "both of them... as well") and populate
+    `SemanticRequest.comparison_entities` (a field that existed, unused, since
+    §5.1). `orchestrator._handle_comparison` sequences the *existing*
+    single-subject retrieval path once per subject — unchanged RBAC, merged
+    evidence scored by the same CRAG evaluator as one batch. Explicitly documented
+    as NOT a general N-step planner: three-plus named entities falls through rather
+    than guessing a pair, and the merge does not filter each subject's history down
+    to the named constraint (e.g. "in Bengaluru") — the constraint shows up in each
+    cited record's own content, same as an ordinary single-subject `PERSON_HISTORY`
+    answer. Structured so the LLM path (§12) can extend or replace this exact seam
+    without touching retrieval/RBAC/CRAG/synthesis.
+  - **§10 — "Mandya→Mandi" fixed, correcting this document's own prior claim that no
+    application-layer fix existed.** That claim (2026-08-27, earlier pass) was about
+    protecting the *number* beside the district name; it never considered
+    protecting the district name itself. New `data.districts.kannada_name_map` (a
+    31-entry Kannada-script gazetteer added as a `kannada_names` column on
+    `karnataka_districts.csv`, sourced from kn.wikipedia.org and cross-checked —
+    flagged in code for a native-speaker QA pass before extending past what this
+    fix was verified against) feeds a second `_protect_spans` pass in
+    `translate.py`, active only for `src=="kn"`: a matched Kannada district span is
+    replaced with a placeholder that restores to the *correct English name* — a
+    lookup substitution, never a translation, so NLLB is never asked to translate
+    the district name at all. Found and fixed a real ordering bug during
+    implementation: identifier placeholders are themselves digit runs, and the
+    identifier `_PROTECT` regex matches any 2+ digit run — protecting districts
+    BEFORE identifiers let the identifier pass re-protect the district's own
+    placeholder, which `_restore_spans` then failed to fully unwind (caught by this
+    pass's own round-trip test, `test_district_and_identifier_protection_compose_without_collision`,
+    failing first). Fixed by running identifiers first. Verified with a hostile
+    stand-in backend that actively corrupts any Kannada district name it's shown —
+    the correct English name comes back regardless (`data/tests/test_nlp.py`).
+    "priorities" (the other §10 bug) stays open, correctly — blind keyword
+    stemming was considered and rejected this pass (would spuriously score
+    `PERSON_HISTORY` on "high priority case"); no deterministic fix exists that
+    isn't the keyword-patch this document argues against.
+  - **§4.2 (dual-text entity extraction) — largely subsumed by the §10 fix,
+    not separately built.** The plan called for downstream code to also read the
+    raw pre-translation Kannada text so closed-format entities (district/FIR/IPC/
+    plate) wouldn't depend on translation quality. The §10 fix already achieves
+    that guarantee at the translation layer itself (lookup-substitution, not
+    probabilistic translation) for districts, and FIR/IPC/plate were already
+    verbatim-protected before this pass. Building a second, downstream NER pass
+    over `state.original_query_kn` (kept on `InvestigationState`, wired from
+    `node_translate_in`, and available for a future consumer — e.g. a native-
+    Kannada LLM path) to re-solve an already-solved problem would have been
+    exactly the unnecessary-code this milestone's own discipline argues against.
+    Not silently skipped: named here as a scope decision, not an oversight.
+  - **Adversarial conversational evaluation** (spec §4-§5): new
+    `scripts/adversarial_eval.py` (`--target local|live`), 15 genuinely unseen
+    scenarios (paraphrases of every category the originating request listed:
+    result-set follow-ups, positional/other reference, constraint-change, bare
+    why/exploration/temporal, the two-entity comparison, colloquial phrasing,
+    Kannada code-switching, an honest-refusal case, a nonexistent-person refusal).
+    New `scripts/verify_live_deployment.py` makes "did the deploy actually change
+    live behavior" a checkable, automated gate — re-runs the exact baseline defect
+    reproduction plus the full adversarial battery against a live base URL and
+    exits non-zero on any regression, rather than a manually-repeated curl.
+  - **Test suite**: 487 collected (32 new — 20 in `test_reference_resolution.py`
+    covering §5.2/§5.3/multi-step, 3 in `test_nlp.py` covering the district fix,
+    plus a moved-function test update), 483 passed, 2 skipped (pre-existing), 2
+    pre-existing failures confirmed unrelated (identical on `main` before this
+    pass — `apps/api/tests/test_acceptance.py`'s two acceptance tests, not
+    investigated further as out of this milestone's scope).
 - **2026-08-28 — semantic interpreter milestone.** §5.1 (Understanding bottleneck)
   now addressed: replaced 30-flat-intent classifier with structured `SemanticRequest`
   decomposition. New `rag_agent/semantic_interpreter.py` module (`interpret()` +

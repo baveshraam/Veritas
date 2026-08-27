@@ -85,27 +85,34 @@ def upsert_session_focus(session_id: str, officer_id: str, focus: SessionFocus,
 
 
 def _pack(citations: list[dict], evidence_items: list[dict], visualization: dict,
-          agent_trace: list[dict]) -> str:
+          agent_trace: list[dict], result_context: Optional[dict] = None) -> str:
     """The turn's side-car, small enough for a `text` column.
 
     Citations and the agent trace are what the PDF export and the reasoning panel are
-    made of, so they are never dropped. Evidence bodies and the visualization payload
-    (which can be thousands of map points) are re-derivable from the citations, so they
-    are what gives way when a turn is too big to store whole.
+    made of, so they are never dropped. result_context is a handful of scalars plus an
+    id list already capped at the same 5 ids a turn samples for citation, so it never
+    meaningfully contributes to the size that triggers truncation — it survives
+    truncation in the same tier as citations/trace, for the same reason: a follow-up
+    ("only these?") needs it exactly when the turn it came from was too big to store
+    whole. Evidence bodies and the visualization payload (which can be thousands of map
+    points) are re-derivable from the citations, so they are what gives way instead.
     """
     full = {"citations": citations, "evidence_items": evidence_items,
-            "visualization": visualization, "agent_trace": agent_trace}
+            "visualization": visualization, "agent_trace": agent_trace,
+            "result_context": result_context or {}}
     blob = json.dumps(full, default=str)
     if len(blob) <= _PAYLOAD_BUDGET:
         return blob
     return json.dumps({"citations": citations, "evidence_items": [], "visualization": {},
-                       "agent_trace": agent_trace, "truncated": True}, default=str)
+                       "agent_trace": agent_trace, "result_context": result_context or {},
+                       "truncated": True}, default=str)
 
 
 def write_conversation_turn(session_id: str, turn_index: int, query: str, language: str,
                             final_answer: str, citations: list[dict],
                             evidence_items: list[dict], visualization: dict,
-                            agent_trace: list[dict]) -> None:
+                            agent_trace: list[dict],
+                            result_context: Optional[dict] = None) -> None:
     ds.insert("vx_conversation_turn", [{
         "TurnID": ds.next_id("vx_conversation_turn", "TurnID"),
         "SessionID": session_id,
@@ -113,7 +120,7 @@ def write_conversation_turn(session_id: str, turn_index: int, query: str, langua
         "Query": query[:_TEXT_CAP],
         "Language": language,
         "FinalAnswer": final_answer[:_TEXT_CAP],
-        "Payload": _pack(citations, evidence_items, visualization, agent_trace),
+        "Payload": _pack(citations, evidence_items, visualization, agent_trace, result_context),
         "CreatedAt": datetime.now(timezone.utc),
     }])
 
@@ -135,6 +142,7 @@ def get_conversation_history(session_id: str) -> list[ConversationTurn]:
             visualization=p.get("visualization") or {},
             agent_trace=p.get("agent_trace") or [],
             created_at=r["CreatedAt"],
+            result_context=p.get("result_context") or {},
         ))
     return out
 

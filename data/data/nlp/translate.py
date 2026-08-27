@@ -59,21 +59,28 @@ _KANNADA = re.compile(r"[ಀ-೿]")
 # they cannot be altered by the model no matter what it does with the rest of the
 # sentence.
 #
-# What this does NOT fix, found and left open by the same experiments (see
-# ENGINEERING_BRIEF.md §10): NLLB-200-distilled-600M mistranslates the district name
-# "ಮಂಡ್ಯ" (Mandya) to "Mandi" — a real but wrong, more common Indian place name —
-# specifically when "FIR" and a number sit in the same sentence, independent of
-# whether that number is the raw 18-digit value or a short placeholder; "ಬೆಂಗಳೂರು"
-# (Bengaluru) in the identical construction translates correctly. This looks like a
-# genuine model-quality gap (a less common name losing to a more common phonetic
-# neighbour), not something a pre-translation substitution can paper over — ruled out
-# by testing the placeholder swap against exactly this sentence before writing it off.
-# Blanket-protecting every Latin-script word (not just identifiers) was also tried and
-# rejected: it swallows the English loanwords ("FIR", "case") that anchor the model's
-# translation of the surrounding Kannada grammar, and produced visibly worse output
-# ("Is that 10001 to 10002 another 10003?"). So only numeric/identifier-shaped spans
-# are protected — vehicle plates and any run of 2+ digits (FIR numbers in both forms,
-# IPC codes) — never ordinary words.
+# A second, separate class this fixes (compositional semantic layer pass):
+# NLLB-200-distilled-600M mistranslated the district name "ಮಂಡ್ಯ" (Mandya) to
+# "Mandi" — a real but wrong, more common Indian place name — specifically when
+# "FIR" and a number sat in the same sentence; "ಬೆಂಗಳೂರು" (Bengaluru) in the
+# identical construction translated correctly. Earlier investigation (see
+# ENGINEERING_BRIEF.md §10) ruled out protecting the NUMBER sitting beside the
+# district name — a placeholder swap there made no difference, because the root
+# cause was never the digits, it was the model guessing wrong on the Kannada WORD
+# itself. That is a different span than what _PROTECT below covers, so it needed
+# its own fix: a closed, 31-entry Kannada-district gazetteer
+# (data.districts.kannada_name_map) that removes the district name from the
+# model's job entirely — looked up and substituted with the correct English name
+# directly, never translated at all. This closes the whole class (any of the 31
+# districts, not just the one reported instance), structurally rather than by
+# hoping the model gets a specific name right.
+#
+# Blanket-protecting every Latin-script word (not just identifiers) was tried and
+# rejected: it swallows the English loanwords ("FIR", "case") that anchor the
+# model's translation of the surrounding Kannada grammar, and produced visibly
+# worse output ("Is that 10001 to 10002 another 10003?"). So only
+# numeric/identifier-shaped spans and the closed district gazetteer are
+# protected — never ordinary words.
 _PROTECT = re.compile(
     r"\bKA[\s-]?\d{2}[\s-]?[A-Z]{1,2}[\s-]?\d{3,4}\b"     # vehicle plate, e.g. KA 05 MJ 1234
     r"|\d{2,}",                                             # FIR numbers, IPC codes
@@ -81,17 +88,47 @@ _PROTECT = re.compile(
 )
 
 
-def _protect_spans(text: str) -> tuple[str, dict[str, str]]:
+def _protect_spans(text: str, src: str = "en") -> tuple[str, dict[str, str]]:
     """Replace protected spans with digit-shaped placeholders NLLB reliably copies
-    through untouched, and return the mapping needed to restore them verbatim."""
+    through untouched, and return the mapping needed to restore them.
+
+    For FIR numbers/IPC codes/plates the restore value is the ORIGINAL text —
+    verbatim fidelity is the whole point. For a Kannada district name (src=="kn"
+    only) it is instead the CORRECT ENGLISH NAME from a closed, 31-entry gazetteer
+    (data.districts.kannada_name_map) — a lookup substitution, not a translation.
+    This is what makes the "ಮಂಡ್ಯ (Mandya) -> Mandi" class of mistranslation
+    structurally impossible rather than merely usually-correct: the model is never
+    asked to translate the district name at all. See ENGINEERING_BRIEF.md §10 for
+    why this bug has no fix at the model-output level.
+    """
     mapping: dict[str, str] = {}
 
-    def repl(m: "re.Match[str]") -> str:
+    def _placeholder(restore_value: str) -> str:
         placeholder = str(90001 + len(mapping))
-        mapping[placeholder] = m.group(0)
+        mapping[placeholder] = restore_value
         return placeholder
 
-    return _PROTECT.sub(repl, text), mapping
+    # Identifiers FIRST: the placeholder scheme is itself a digit run, and
+    # _PROTECT's own pattern matches any 2+ digit run — so protecting a district
+    # BEFORE this would make this pass re-protect the district's own placeholder
+    # a second time (found by this pass's own round-trip test failing on exactly
+    # that collision). Running identifiers first means their placeholders are the
+    # ONLY digit runs left by the time the district pass (which searches for
+    # Kannada script, never digits) runs, so nothing downstream re-matches them.
+    text = _PROTECT.sub(lambda m: _placeholder(m.group(0)), text)
+
+    if src == "kn":
+        from data.districts import kannada_name_map
+        kn_map = kannada_name_map()
+        if kn_map:
+            # Longest spelling first, so a name that happens to be a substring of
+            # another (none today, but stays correct if one is ever added) is
+            # never clipped mid-match — the same discipline entities.py's own
+            # LOCATION gazetteer match already follows.
+            pattern = "|".join(re.escape(k) for k in sorted(kn_map, key=len, reverse=True))
+            text = re.sub(pattern, lambda m: _placeholder(kn_map[m.group(0)]), text)
+
+    return text, mapping
 
 
 def _restore_spans(text: str, mapping: dict[str, str]) -> str:
@@ -121,7 +158,7 @@ def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise TranslationUnavailable(f"unsupported language pair {src}->{tgt}")
 
-    protected, mapping = _protect_spans(text)
+    protected, mapping = _protect_spans(text, src)
     backend = _load()
     result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
     return _restore_spans(result, mapping) if mapping else result

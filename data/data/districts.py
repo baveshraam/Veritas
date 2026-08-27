@@ -18,6 +18,7 @@ class District(NamedTuple):
     code: str
     name: str
     aliases: tuple[str, ...]
+    kannada_names: tuple[str, ...] = ()
 
 
 def _norm(name: str) -> str:
@@ -31,8 +32,29 @@ def all_districts() -> tuple[District, ...]:
     with _CSV.open(encoding="utf-8") as f:
         for r in csv.DictReader(f):
             aliases = tuple(a for a in (r["aliases"] or "").split("|") if a)
-            rows.append(District(r["district_code"], r["canonical_name"], aliases))
+            kannada = tuple(k.strip() for k in (r.get("kannada_names") or "").split("|")
+                            if k.strip())
+            rows.append(District(r["district_code"], r["canonical_name"], aliases, kannada))
     return tuple(rows)
+
+
+@lru_cache(maxsize=1)
+def kannada_name_map() -> dict[str, str]:
+    """Kannada-script district spelling -> canonical English name.
+
+    A closed, 31-entry gazetteer, not a translation — used by data/nlp/translate.py
+    to structurally close the "ಮಂಡ್ಯ (Mandya) -> Mandi" class of NLLB mistranslation
+    (ENGINEERING_BRIEF.md §10): a Kannada district span is looked up here and
+    replaced with the correct English name directly, never left to the model.
+    Sourced from kn.wikipedia.org's district list, cross-checked 2026-08-27; treat
+    as a starting gazetteer to extend/correct as real officer queries surface gaps,
+    not a final, natively-reviewed reference.
+    """
+    idx: dict[str, str] = {}
+    for d in all_districts():
+        for kn in d.kannada_names:
+            idx[kn] = d.name
+    return idx
 
 
 @lru_cache(maxsize=1)

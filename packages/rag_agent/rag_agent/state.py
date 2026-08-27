@@ -71,6 +71,11 @@ class InvestigationState(BaseModel):
     officer_role: str
     original_query: Optional[str] = None
     language: Literal["en", "kn"] = "en"
+    # The pre-translation Kannada string, set by node_translate_in and never
+    # overwritten. Lets entity extraction reach closed-format entities (district,
+    # FIR number, IPC, plate) directly, instead of depending on translation quality
+    # for anything that has a checkable, script-independent shape.
+    original_query_kn: Optional[str] = None
 
     input_audio: Optional[bytes] = None
     respond_with_voice: bool = False
@@ -105,6 +110,23 @@ class InvestigationState(BaseModel):
     sql_query_results: list[dict] = Field(default_factory=list)
     vector_search_results: list[dict] = Field(default_factory=list)
     prediction_results: dict[str, Any] = Field(default_factory=dict)
+    # Set by _run_specialists at the same point a bounded/sampled result is produced
+    # (CRIME_SEARCH's count+samples, PERSON_NETWORK/ALIAS_CHECK/SIMILAR_CASES' caps).
+    # Persisted onto ConversationTurn.result_context so a follow-up turn ("only
+    # these?", "the second one", "same thing for Bengaluru") can read a real fact
+    # about what was actually shown instead of the interpreter re-guessing.
+    result_context: dict[str, Any] = Field(default_factory=dict)
+    # Constraints named in THIS turn (crime_type, district) or carried forward from
+    # a "same thing for Bengaluru"-shaped constraint-change follow-up (see
+    # semantic_interpreter._REPEAT_CUE_RE). Read by _run_specialists before falling
+    # back to its own per-query extraction, so a carried-forward crime type from the
+    # prior turn survives a follow-up that only names a new district.
+    constraints: dict[str, Any] = Field(default_factory=dict)
+    # Two resolved person_ids for a bounded deterministic comparison ("check
+    # whether either of those people had a prior case in Bengaluru") — see
+    # semantic_interpreter._COORDINATION_RE / orchestrator._handle_comparison.
+    # Empty for every ordinary single-subject turn.
+    comparison_subject_ids: list[str] = Field(default_factory=list)
 
     final_answer: Optional[str] = None
     citations: list[Citation] = Field(default_factory=list)

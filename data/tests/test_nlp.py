@@ -190,8 +190,53 @@ def test_translate_sends_the_backend_a_placeholder_not_the_raw_identifier(monkey
             return text          # NLLB copies a short digit placeholder through as-is
 
     monkeypatch.setattr(translate_mod, '_load', lambda: _RecordingEchoBackend())
-    query = 'ಮಂಡ್ಯದಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ'
+    # Deliberately no district name here — that half is covered separately below
+    # (test_kannada_district_names_are_substituted_not_translated), since a
+    # district match now restores to a DIFFERENT string (the English name), which
+    # would make this test's "round trip is exact" assertion the wrong claim.
+    query = 'ಆ ಬಗ್ಗೆ FIR 100222201202600022 ಏನಿದೆ'
     out = translate(query, 'kn', 'en')
 
     assert '100222201202600022' not in seen['text']   # never shown to the backend
     assert out == query                               # and the round trip is exact
+
+
+def test_kannada_district_names_are_substituted_not_translated(monkeypatch):
+    """The structural fix for the "ಮಂಡ್ಯ (Mandya) -> Mandi" mistranslation class
+    (ENGINEERING_BRIEF.md §10): the district name must never reach the backend at
+    all — a hostile backend that corrupts everything it sees still can't corrupt a
+    span it's never shown, and the correct ENGLISH name comes back regardless."""
+    import importlib
+    translate_mod = importlib.import_module('data.nlp.translate')
+
+    class _HostileBackend:
+        def translate(self, text, src_flores, tgt_flores):
+            return text.replace('ಮಂಡ್ಯ', 'garbled') if 'ಮಂಡ್ಯ' in text else text + ' [translated]'
+
+    monkeypatch.setattr(translate_mod, '_load', lambda: _HostileBackend())
+    out = translate('ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?', 'kn', 'en')
+
+    assert 'ಮಂಡ್ಯ' not in out and 'garbled' not in out
+    assert 'Mandya' in out
+
+
+def test_district_substitution_only_applies_when_translating_from_kannada():
+    """src='en' (or any non-kn source) must not run the district gazetteer pass —
+    there is nothing to protect an English district name FROM."""
+    protected, mapping = _protect_spans('Mandya district, en route', src='en')
+    assert mapping == {}
+    assert protected == 'Mandya district, en route'
+
+
+def test_district_and_identifier_protection_compose_without_collision():
+    """Regression: identifier placeholders are themselves digit runs, and the
+    identifier regex matches ANY 2+ digit run — protecting a district BEFORE
+    identifiers let the identifier pass re-protect the district's own placeholder,
+    which _restore_spans then failed to fully unwind (found by this test failing
+    first, before the fix reordered the two passes)."""
+    protected, mapping = _protect_spans(
+        'ಮಂಡ್ಯದಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ', src='kn')
+    assert 'ಮಂಡ್ಯ' not in protected
+    restored = _restore_spans(protected, mapping)
+    assert restored == 'Mandyaದಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ'
+    assert '90001' not in restored and '90002' not in restored

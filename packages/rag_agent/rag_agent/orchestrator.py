@@ -109,6 +109,7 @@ def node_translate_in(state: InvestigationState) -> InvestigationState:
 
     t0 = time.perf_counter()
     state.language = "kn"          # reply in the language the officer asked in
+    state.original_query_kn = query      # survives translation for §4.2-style extraction
     english, note = translation_agent.to_english(query)
     if english != query:
         state.original_query = english
@@ -142,6 +143,9 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
     # Map to current state contract (no downstream changes needed)
     state.intent = sem_req.operation
     state.decomposed_subqueries = [query]
+    state.constraints = sem_req.constraints
+    state.comparison_subject_ids = (
+        sem_req.comparison_entities if len(sem_req.comparison_entities) == 2 else [])
 
     # Resolve subject if present
     resolved_note = ""
@@ -251,6 +255,13 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _handle_case_locations(state, t0)
         return state
 
+    # "Only these?" / "are there more?" — reads the PREVIOUS turn's own recorded
+    # result_context (total/shown/is_sample), never a fresh unscoped search. See
+    # semantic_interpreter._AMBIGUOUS_MORE_RE for how a turn gets routed here.
+    if state.intent == "RESULT_SET_FOLLOWUP":
+        _handle_more_results(state, t0)
+        return state
+
     # Cross-entity timeline (docs/INDUSTRY_GAP_ANALYSIS.md §7 item 3) — reads dated
     # records across a case/person's related entities, not a fresh retrieval, so it
     # short-circuits here the same way CASE_LOCATIONS and BOARD_* do.
@@ -266,7 +277,8 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _trace(state, "Orchestrator",
                f"{state.intent} needs an open case; none given", t0)
         return state
-    if state.intent in intents.NEEDS_SUBJECT and not pid and not state.refusal_reason:
+    if (state.intent in intents.NEEDS_SUBJECT and not pid
+            and not state.comparison_subject_ids and not state.refusal_reason):
         state.refusal_reason = "no_subject"
         _trace(state, "Orchestrator",
                f"{state.intent} needs a named subject; none given", t0)
@@ -279,6 +291,13 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     # they already skip it for a refusal decided before retrieval ran.
     if state.intent.startswith("BOARD_"):
         _handle_board_intent(state, t0)
+        return state
+
+    # Bounded deterministic multi-step composition (design spec §3) — sequences
+    # the SAME single-subject retrieval below once per compared subject, so it
+    # short-circuits here rather than replacing the pid-based flow.
+    if state.comparison_subject_ids:
+        _handle_comparison(state, widen, t0)
         return state
 
     # 1. HippoRAG: seed personalized PageRank from the query's entities
@@ -349,6 +368,13 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         rows = graph_agent.person_network(pid, role)
         state.graph_query_results += rows
         out += [_network_evidence(r, rows) for r in rows]
+        # Exhaustive within the policy depth cap — not a sample of a larger
+        # population, so "only these?" gets an honest "yes, that's the complete
+        # network" rather than a re-search.
+        state.result_context = {
+            "operation": "PERSON_NETWORK", "total_matched": len(rows), "shown": len(rows),
+            "is_sample": False, "shown_ids": [str(r["person_id"]) for r in rows],
+        }
         _trace(state, "Cypher Agent", f"{len(rows)} associate(s) within policy depth", t0)
 
     elif intent == "ALIAS_CHECK" and pid:
@@ -374,6 +400,10 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                          "person. Entity resolution found no other record matching them "
                          "under a different name or spelling."),
                 confidence=0.9, authoritative=True))
+        state.result_context = {
+            "operation": "ALIAS_CHECK", "total_matched": len(rows), "shown": len(rows),
+            "is_sample": False, "shown_ids": [str(r["person_id"]) for r in rows],
+        }
         _trace(state, "Cypher Agent (SAME_AS)", f"{len(rows)} alias record(s)", t0)
 
     elif intent == "FINANCIAL" and pid:
@@ -446,8 +476,12 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         # in Mandya" got five narrative excerpts and no number anywhere (BUG-008).
         # Counting is a question the structured layer answers exactly; vector search
         # cannot corroborate a count, it can only pad it.
-        ct = _crime_type_from_query(state.original_query or "")
-        district_name = state.active_entities.active_location
+        # state.constraints wins over per-query extraction: a constraint-change
+        # follow-up ("same thing for Bengaluru") carries forward a crime type named
+        # in an EARLIER turn that this turn's own text never restates.
+        ct = state.constraints.get("crime_type") or semantic_interpreter.crime_type_from_query(
+            state.original_query or "")
+        district_name = state.constraints.get("district") or state.active_entities.active_location
         count = sql_agent.count_firs(role, ps, crime_type=ct, district=district_name)
         scope_bits = [x for x in (ct, f"in {district_name}" if district_name else None) if x]
         scope_desc = " ".join(scope_bits) if scope_bits else "within your access scope"
@@ -457,6 +491,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             source_query="COUNT over CaseMaster, scoped by role/station",
             content=f"{count} case(s) {scope_desc} are recorded within your access scope.",
             confidence=0.95, authoritative=True))
+        samples: list[dict] = []
         if count:
             samples = sql_agent.search_firs(role, ps, crime_type=ct, district=district_name,
                                             limit=5)
@@ -465,6 +500,14 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
                 source_id=r["fir_id"], source_query="SELECT ... matching the count above",
                 content=_fir_content(r), confidence=0.9) for r in samples]
+        # Recorded so a follow-up ("only these?", "same thing for Mysuru") can read
+        # a real fact instead of the interpreter re-guessing — see
+        # semantic_interpreter._AMBIGUOUS_MORE_RE / _REPEAT_CUE_RE.
+        state.result_context = {
+            "operation": "CRIME_SEARCH", "total_matched": count, "shown": len(samples),
+            "is_sample": count > len(samples), "shown_ids": [str(r["fir_id"]) for r in samples],
+            "constraints": {"crime_type": ct, "district": district_name},
+        }
         _trace(state, "SQL Agent (crime count)",
                f"{count} matching case(s){f' for {ct}' if ct else ''}"
                f"{f' in {district_name}' if district_name else ''}", t0)
@@ -567,6 +610,14 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 source_query="hybrid_search over fir_narrative, ranked by structured overlap",
                 content=f"{_fir_content(c)} Similar because: {c['explanation']}.",
                 confidence=float(c["similarity"]), confidence_kind="similarity") for c in similar]
+            # A ranked top-N, not a threshold count — there is no honest "total
+            # similar cases exist" number, so total_matched stays None rather than
+            # inventing one. is_sample=True is still correct: raising the limit (see
+            # _handle_more_results) can always surface more, ranked lower.
+            state.result_context = {
+                "operation": "SIMILAR_CASES", "total_matched": None, "shown": len(similar),
+                "is_sample": True, "shown_ids": [str(c["fir_id"]) for c in similar],
+            }
             _trace(state, "Copilot (similar cases)",
                    f"{len(similar)} structurally-explained match(es) for the open case", t0)
 
@@ -756,6 +807,142 @@ def _handle_case_locations(state: InvestigationState, t0: float) -> None:
         confidence=0.9, authoritative=True)]
     _trace(state, "SQL Agent (case locations)",
            f"{len(rows)} case(s) tallied across {len(tally)} district(s)", t0)
+
+
+def _more_result_evidence(op: str, r: dict) -> EvidenceItem:
+    if op == "SIMILAR_CASES":
+        return EvidenceItem(
+            evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
+            source_id=str(r["fir_id"]),
+            source_query="hybrid_search over fir_narrative, ranked by structured overlap "
+                         "— continuation of a previous 'only these?' follow-up",
+            content=f"{_fir_content(r)} Similar because: {r['explanation']}.",
+            confidence=float(r["similarity"]), confidence_kind="similarity")
+    return EvidenceItem(
+        evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD", source_id=r["fir_id"],
+        source_query="SELECT ... continuation of a previous 'only these?' follow-up",
+        content=_fir_content(r), confidence=0.9)
+
+
+def _handle_more_results(state: InvestigationState, t0: float) -> None:
+    """'Only these?' / 'are there more?' — reads the PREVIOUS turn's own recorded
+    result_context and answers from that real fact, never a fresh unscoped search.
+    Generalizes _handle_case_locations' own "read the previous turn, not a new
+    query" discipline to any bounded/sampled result, not just a location tally."""
+    prior = _last_turn(state.session_id)
+    rc = (prior.result_context if prior else None) or {}
+    op = rc.get("operation")
+    total = rc.get("total_matched")
+    shown = rc.get("shown", 0)
+    shown_ids = {str(i) for i in (rc.get("shown_ids") or [])}
+
+    if not op:
+        state.refusal_reason = "nothing_prior_results"
+        _trace(state, "Orchestrator", "No previous bounded result set to check", t0)
+        return
+
+    if not rc.get("is_sample"):
+        # Already exhaustive — the honest answer is "no, that was everything".
+        # result_context carries forward unchanged, so a SECOND "only these?" (or
+        # "same thing for Mysuru") after this one still has a real fact to read.
+        state.result_context = rc
+        state.evidence_items = [EvidenceItem(
+            evidence_id="result_followup:exhaustive", source_type="FIR_RECORD",
+            source_id="none", source_query="re-read of the previous turn's own result_context",
+            content=(f"That was the complete result — "
+                     f"{total if total is not None else shown} record(s) total, "
+                     f"all of them already shown."),
+            confidence=0.95, authoritative=True)]
+        _trace(state, "Orchestrator (result-set follow-up)",
+               "Previous result was already exhaustive", t0)
+        return
+
+    # A genuine sample — re-run the SAME producer with a wider limit and report only
+    # the records not already shown, rather than re-showing the same five.
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    ct = rc.get("constraints", {}).get("crime_type")
+    district = rc.get("constraints", {}).get("district")
+    wider: list[dict] = []
+    if op == "CRIME_SEARCH":
+        wider = sql_agent.search_firs(role, ps, crime_type=ct, district=district, limit=10)
+    elif op == "SIMILAR_CASES" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            wider = copilot_brief.similar_cases_for(case_rows[0], limit=10)
+    more_rows = [r for r in wider if str(r.get("fir_id")) not in shown_ids][:5]
+
+    if not more_rows:
+        # Widening found nothing new -- effectively exhaustive now, so record it as
+        # such rather than leaving is_sample=True to invite an identical re-check.
+        state.result_context = {**rc, "is_sample": False}
+        state.evidence_items = [EvidenceItem(
+            evidence_id="result_followup:no_more", source_type="FIR_RECORD",
+            source_id="none", source_query="re-read of the previous turn's own result_context",
+            content=(f"{shown} of {total if total is not None else 'an unrecorded total'} "
+                     f"were shown before; no further distinct records were found beyond "
+                     f"those within your access scope."),
+            confidence=0.8, authoritative=True)]
+        _trace(state, "Orchestrator (result-set follow-up)",
+               "Widened search found nothing beyond what was already shown", t0)
+        return
+
+    state.sql_query_results += more_rows
+    new_shown_ids = list(shown_ids) + [str(r.get("fir_id")) for r in more_rows]
+    state.result_context = {
+        **rc, "shown": len(new_shown_ids), "shown_ids": new_shown_ids,
+        "is_sample": (total is None) or (total > len(new_shown_ids)),
+    }
+    summary = EvidenceItem(
+        evidence_id="result_followup:summary", source_type="FIR_RECORD", source_id="none",
+        source_query="re-read of the previous turn's own result_context",
+        content=(f"{total if total is not None else f'more than {shown}'} record(s) matched "
+                 f"in total; {shown} were shown before — here are {len(more_rows)} more."),
+        confidence=0.9, authoritative=True)
+    state.evidence_items = [summary] + [_more_result_evidence(op, r) for r in more_rows]
+    _trace(state, "Orchestrator (result-set follow-up)",
+           f"{len(more_rows)} additional record(s) beyond the {shown} already shown", t0)
+
+
+def _handle_comparison(state: InvestigationState, widen: bool, t0: float) -> None:
+    """Bounded deterministic multi-step composition (design spec §3): 'check
+    whether either of those people had a prior case in Bengaluru around the same
+    time'. Sequences the EXISTING single-subject retrieval path (HippoRAG +
+    _run_specialists) once per compared subject — each call is fully RBAC'd the
+    same way any ordinary turn is (role/station scoping is baked into every
+    specialist call, not bypassed here), and the merged evidence still passes
+    through the SAME CRAG evaluator node right after this function returns.
+
+    NOT a general N-step planner, and not claimed to be one: it is bounded to
+    exactly the two-entity comparison the interpreter detected
+    (semantic_interpreter._COORDINATION_RE), evaluates the merged evidence as one
+    CRAG batch rather than accepting/rejecting each subject independently, and
+    does not filter a subject's full history down to just the named constraint
+    (e.g. "in Bengaluru") — the constraint shows up in each cited record's own
+    content, the same honest, unfiltered PERSON_HISTORY answer a single-subject
+    turn already gives. Open-ended multi-clause planning needs the LLM path
+    (ENGINEERING_BRIEF.md §12), which can extend or replace this exact seam
+    without touching retrieval, RBAC, CRAG or synthesis."""
+    original_pid = state.active_entities.active_person
+    all_evidence: list[EvidenceItem] = []
+    labels: list[str] = []
+    for pid in state.comparison_subject_ids:
+        name = sql_agent.person_name(pid) or f"person {pid}"
+        labels.append(name)
+        state.active_entities.active_person = pid
+        sub_evidence: list[EvidenceItem] = []
+        rows, ev = hipporag.retrieve([name], top_k=15)
+        state.graph_query_results += rows
+        sub_evidence += ev
+        sub_evidence += _run_specialists(state, widen)
+        all_evidence += [e.model_copy(update={
+            "evidence_id": f"{e.evidence_id}#cmp:{pid}",
+            "content": f"[{name}] {e.content}",
+        }) for e in sub_evidence]
+    state.active_entities.active_person = original_pid
+    state.evidence_items = _dedupe(state.evidence_items + all_evidence)
+    _trace(state, "Orchestrator (bounded comparison)",
+           f"Compared {len(state.comparison_subject_ids)} subject(s): "
+           f"{', '.join(labels)} — {len(all_evidence)} evidence item(s) total", t0)
 
 
 _TIMELINE_BEFORE_RE = re.compile(r"\bbefore\b", re.I)
@@ -959,19 +1146,13 @@ def _evidence_explanation(prior) -> str:
     return "\n".join(lines)
 
 
-def _crime_type_from_query(query: str) -> str | None:
-    """Which of the 20 canonical crime types (if any) a question names — the longest
-    match wins so "Motor Vehicle Theft" is not shadowed by the bare "Theft" it
-    contains."""
-    from data.generator.refdata import crime_type_names
-    q = (query or "").lower()
-    matches = [ct for ct in crime_type_names() if ct.lower() in q]
-    return max(matches, key=len) if matches else None
-
-
 def _district_code(state: InvestigationState) -> str | None:
     from data.districts import canonical_code
-    loc = state.active_entities.active_location
+    # state.constraints wins over active_location: a constraint-change follow-up
+    # ("same thing for Bengaluru" after a HOTSPOT/FORECAST turn) carries its new
+    # district here without touching session focus — see semantic_interpreter's
+    # _REPEAT_CUE_RE branch, which deliberately does not set active_location.
+    loc = state.constraints.get("district") or state.active_entities.active_location
     if loc:
         return canonical_code(loc)
     rows = sql_agent.crime_counts_by_district(limit=1)
