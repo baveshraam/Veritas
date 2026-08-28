@@ -232,9 +232,25 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
         # name"), and a decided refusal started running the generic search again,
         # which is exactly the Evidence-rail padding the guard in node_retrieve
         # exists to prevent.
+        # ...but only when the turn actually DEPENDS on that person. NER's person tier
+        # is a fallback that labels any unrecognised capitalised token, so a query that
+        # never asked about anybody can still carry a spurious "name". Found live: the
+        # Kannada "ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?" translates to "How many
+        # cases of theft are there in District Mandya?", NER reads "District" as a
+        # person, and an unconditional refusal here killed a CRIME_SEARCH that had a
+        # district, a crime type and no need for a person at all — it answered
+        # correctly the moment this branch stopped refusing for it.
+        #
+        # NEEDS_SUBJECT is the existing, single definition of "this operation is
+        # meaningless without a resolved person". UNKNOWN joins it because a turn that
+        # matched no operation has nothing else to go on: there, the unresolved name IS
+        # the whole question ("Tell me about <someone we have no file on>").
         state.active_entities.active_person = None
-        state.refusal_reason = "person_not_on_file"
         resolved_note = f"no person matching '{sem_req.subject_text}' exists in the records"
+        if sem_req.operation in intents.NEEDS_SUBJECT or sem_req.operation == "UNKNOWN":
+            state.refusal_reason = "person_not_on_file"
+        else:
+            resolved_note += f" — answering the {sem_req.operation} anyway, it needs no person"
 
     # Propagate any ambiguity/refusal from the interpreter
     if sem_req.ambiguous_candidates:

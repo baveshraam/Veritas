@@ -2199,3 +2199,43 @@ def test_person_history_and_hotspot_still_get_vector_corroboration():
     assert "FORECAST" not in _SPECIALIST_SETTLES
     assert "CRIME_SEARCH" in _SPECIALIST_SETTLES
     assert _RELATIONAL_INTENTS <= _SPECIALIST_SETTLES
+
+
+def test_an_unresolvable_name_only_refuses_when_the_turn_needs_that_person(indexed):
+    """BUG found live, and the regression that caused it.
+
+    Restoring `person_not_on_file` (it had been dropped by the semantic-interpreter
+    migration) made a named-but-unknown person refuse the whole turn — correct for
+    "does X have priors", wrong for a question that never asked about anybody.
+
+    NER's person tier labels any unrecognised capitalised token, so a query can carry a
+    spurious name. Live: the Kannada "how many theft cases in Mandya" translates to
+    "...in District Mandya", NER reads "District" as a person, and a CRIME_SEARCH with
+    a district AND a crime type AND no need for a person refused outright.
+    """
+    from rag_agent import intents
+    from rag_agent.orchestrator import node_orchestrate
+    from rag_agent.state import InvestigationState
+
+    def _run(query: str) -> InvestigationState:
+        return node_orchestrate(InvestigationState(
+            session_id=f"nrf-{abs(hash(query))}", officer_id="1", officer_role="IG",
+            original_query=query))
+
+    # The live reproduction: a district-scoped count must survive a spurious name.
+    counted = _run("How many cases of theft are there in District Mandya?")
+    assert counted.intent == "CRIME_SEARCH"
+    assert counted.refusal_reason != "person_not_on_file", (
+        "a CRIME_SEARCH that needs no person refused because NER invented one")
+
+    # ...and the property that restoring the refusal existed for, still holding: when
+    # the unresolved name IS the question, the officer is told exactly that.
+    named = _run("Tell me about Zzyzx Nonexistentperson")
+    assert named.refusal_reason == "person_not_on_file"
+    assert named.active_entities.active_person is None, (
+        "an unresolved name must clear the focus, never inherit the previous subject")
+
+    # A person-scoped operation is the other half of the same rule.
+    asked = _run("Does Zzyzx Nonexistentperson have priors?")
+    assert asked.intent in intents.NEEDS_SUBJECT
+    assert asked.refusal_reason == "person_not_on_file"

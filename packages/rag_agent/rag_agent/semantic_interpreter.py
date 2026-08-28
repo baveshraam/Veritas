@@ -894,6 +894,16 @@ def _interpret_deterministic(
     if operation == "UNKNOWN" and subject_id and subject_type == "person":
         operation = _default_operation_for_subject("person")
         defaulted_to_richest_profile = True
+    # The same rule for the OTHER kind of subject a session can hold. This was a plain
+    # asymmetry: a resolved person got the richest-profile default, an open case got
+    # nothing, so an unclassified question asked WHILE A CASE WAS OPEN refused outright.
+    # Found live: "Any idea who else got roped into this one?" on an open case spent
+    # 30s reaching QuickML's timeout and then refused, when the case in view could have
+    # answered something. `_default_operation_for_subject` already knew the answer for
+    # a case ("CASE_CONTEXT") and had only ever been called for positional references.
+    elif operation == "UNKNOWN" and focus.active_fir:
+        operation = _default_operation_for_subject("case")
+        defaulted_to_richest_profile = True
 
     # Extract constraints
     constraints = _extract_constraints(q)
