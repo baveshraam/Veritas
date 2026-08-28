@@ -451,3 +451,95 @@ def test_a_correction_after_simulated_restart_reads_only_the_persisted_dict(monk
     )
     result = si._interpret_llm("no wait, the other case", "en", _focus(), prior)
     assert result.operation == "CASE_CONTEXT"
+
+
+# --- a real live-found bug: correcting a META turn must correct the request it ---
+# --- was standing in for, not the meta turn itself (BUG found 2026-08-28) --------
+
+def test_a_meta_turns_own_operation_never_becomes_the_correction_target(monkeypatch):
+    """Found live: CRIME_SEARCH ('theft in Bengaluru Urban') -> 'Only these?'
+    (RESULT_SET_FOLLOWUP) -> 'actually Mysuru, not Bengaluru Urban'. The THIRD
+    turn was handed the SECOND turn's own last_request ({"operation":
+    "RESULT_SET_FOLLOWUP", ...}) as "the previous request to correct" — a
+    meta-operation with no district field of its own — and answered with more
+    of the OLD (Bengaluru) results instead of a fresh Mysuru search.
+    last_request must skip past a META operation to the last SUBSTANTIVE one."""
+    from data.models import ConversationTurn
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    # Turn 2's own recorded last_request — this pass's fix (node_orchestrate
+    # carrying a META turn's last_request forward from the PRIOR turn instead of
+    # overwriting it with itself) is what put the real CRIME_SEARCH/Bengaluru
+    # request here rather than turn 2's own RESULT_SET_FOLLOWUP shape. Deliberately
+    # distinguishable from what the OLD (pre-fix) code would have produced for
+    # THIS test's own turn 3, so the assertion below actually discriminates
+    # old vs new behaviour rather than passing either way.
+    turn2 = ConversationTurn(
+        turn_index=1, query="Only these?", language="en", final_answer="...",
+        citations=[], evidence_items=[], visualization={}, agent_trace=[],
+        created_at=datetime.utcnow(),
+        result_context={"last_request": {
+            "operation": "CRIME_SEARCH", "subject_type": "none",
+            "subject_text": None, "subject_id": None,
+            "constraints": {"crime_type": "Theft", "district": "Bengaluru Urban"},
+        }},
+    )
+
+    saved = (orch.semantic_interpreter.interpret, orch._last_turn, orch.upsert_session_focus)
+    orch.semantic_interpreter.interpret = lambda **kw: SemanticRequest(
+        operation="RESULT_SET_FOLLOWUP", confidence=0.9)
+    orch._last_turn = lambda session_id: turn2
+    orch.upsert_session_focus = lambda *a, **k: None
+    try:
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="Only these?")
+        orch.node_orchestrate(state)
+    finally:
+        (orch.semantic_interpreter.interpret, orch._last_turn,
+         orch.upsert_session_focus) = saved
+
+    # This turn is ITSELF another RESULT_SET_FOLLOWUP (meta) — its own last_request
+    # must NOT become {"operation": "RESULT_SET_FOLLOWUP", ...} (what the pre-fix
+    # code always produced, discarding the real request entirely); it must carry
+    # turn 2's own already-substantive last_request (CRIME_SEARCH/Bengaluru)
+    # forward unchanged, so a THIRD turn's correction still has something real to
+    # correct.
+    assert state.last_request == turn2.result_context["last_request"]
+    assert state.last_request["operation"] == "CRIME_SEARCH"
+
+
+def test_a_substantive_operation_after_a_meta_turn_becomes_the_new_correction_target():
+    """The other half of the same fix: once a REAL investigative operation runs
+    (not a meta one), it DOES become the new last_request — meta-carry-forward
+    must not freeze last_request forever."""
+    from data.models import ConversationTurn
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    prior = ConversationTurn(
+        turn_index=1, query="Only these?", language="en", final_answer="...",
+        citations=[], evidence_items=[], visualization={}, agent_trace=[],
+        created_at=datetime.utcnow(),
+        result_context={"last_request": {
+            "operation": "RESULT_SET_FOLLOWUP", "subject_type": "none",
+            "subject_text": None, "subject_id": None, "constraints": {},
+        }},
+    )
+
+    saved = (orch.semantic_interpreter.interpret, orch._last_turn, orch.upsert_session_focus)
+    orch.semantic_interpreter.interpret = lambda **kw: SemanticRequest(
+        operation="CRIME_SEARCH", subject_type="none",
+        constraints={"crime_type": "Theft", "district": "Mysuru"}, confidence=0.9)
+    orch._last_turn = lambda session_id: prior
+    orch.upsert_session_focus = lambda *a, **k: None
+    try:
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="How many theft cases in Mysuru?")
+        orch.node_orchestrate(state)
+    finally:
+        (orch.semantic_interpreter.interpret, orch._last_turn,
+         orch.upsert_session_focus) = saved
+
+    assert state.last_request["operation"] == "CRIME_SEARCH"
+    assert state.last_request["constraints"]["district"] == "Mysuru"

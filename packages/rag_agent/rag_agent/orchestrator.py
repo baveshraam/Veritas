@@ -176,17 +176,26 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
         detail += f"; {resolved_note}"
     _trace(state, "Orchestrator (semantic)", detail, t0, confidence=sem_req.confidence)
 
-    # Snapshot of THIS turn's own structured request — never touched by any
+    # Snapshot of the last SUBSTANTIVE structured request — never touched by any
     # specialist branch below (unlike state.result_context, which several
     # overwrite wholesale). apps/api's chat router persists it so the NEXT turn's
     # interpreter can read what was actually asked, not just the prose answer,
     # when deciding whether a new query is a correction to it. See
     # semantic_interpreter._interpret_llm.
-    state.last_request = {
-        "operation": sem_req.operation, "subject_type": sem_req.subject_type,
-        "subject_text": sem_req.subject_text, "subject_id": sem_req.subject_id,
-        "constraints": sem_req.constraints,
-    }
+    #
+    # A META operation (RESULT_SET_FOLLOWUP, CASE_LOCATIONS, a board action, ...)
+    # is not itself something to correct — see intents.META_OPERATIONS for the
+    # live bug this guards against. It carries the PRIOR turn's last_request
+    # forward unchanged instead of overwriting it with its own meta-shaped one.
+    if sem_req.operation in intents.META_OPERATIONS:
+        state.last_request = (prior_turn.result_context.get("last_request")
+                              if prior_turn else None) or {}
+    else:
+        state.last_request = {
+            "operation": sem_req.operation, "subject_type": sem_req.subject_type,
+            "subject_text": sem_req.subject_text, "subject_id": sem_req.subject_id,
+            "constraints": sem_req.constraints,
+        }
 
     # Persist focus so the *next* turn can resolve against it
     try:

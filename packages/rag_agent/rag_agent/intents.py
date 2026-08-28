@@ -120,6 +120,25 @@ NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
              "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
              "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS"}
 
+# Operations that read or describe the PREVIOUS turn (or the system itself), rather
+# than making a fresh investigative ask of their own — a meta-turn, not a new
+# request. Used by orchestrator.node_orchestrate to decide whether THIS turn's own
+# operation replaces state.last_request, or whether the PRIOR turn's last_request
+# should simply carry forward unchanged. Found live (2026-08-28): a correction
+# ("actually Mysuru, not Bengaluru Urban") typed right after a "Only these?" turn
+# was handed that RESULT_SET_FOLLOWUP turn's own last_request as "the previous
+# request" to correct — a meta-operation with no district field of its own to
+# override — and the model produced a plausible-shaped but wrong answer (more of
+# the OLD district's results) instead of a fresh search for the new one. A
+# correction has to correct the last SUBSTANTIVE request, not whatever meta-turn
+# happened to sit between it and the officer's new question.
+META_OPERATIONS = {
+    "CAPABILITY", "NOT_INFERABLE", "EXPLAIN_REASONING", "EVIDENCE_FOR",
+    "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "RESULT_SET_FOLLOWUP",
+    "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
+    "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS",
+}
+
 # Operations where a woven narrative genuinely adds something the evidence list alone
 # doesn't already say — a financial trail's "what stands out", a network's "who's
 # connected and how", a risk score's "why", a comparison's "here's how these two
