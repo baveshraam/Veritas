@@ -1,7 +1,12 @@
 # Veritas — KSP Datathon 2026, Challenge 01
 
-**The single source of truth for this repo.** There are no other design docs. Keep this
-current; append deltas to the changelog rather than rewriting history.
+**The source of truth for the architecture and design rationale.** Keep this current;
+append deltas to the changelog rather than rewriting history. `docs/WORK_LOG.md` and
+`docs/ENGINEERING_BRIEF.md` carry the pass-by-pass operational detail (every defect
+found, every live verification, every deploy) at a grain this file deliberately does
+not duplicate — this file states what is true now and why; those two state how it got
+that way. If a claim here and in `docs/` conflict, re-derive it from the live system
+and code rather than trusting either document — both have drifted stale before.
 
 A conversational crime-intelligence platform for the Karnataka State Police: ask a question
 in English or Kannada, get an answer where every claim traces to a specific record.
@@ -9,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 403 green (`pytest --collect-only -q` for the current
+- **Tests**: `python -m pytest` — 602 green (`pytest --collect-only -q` for the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -1057,3 +1062,74 @@ volume justifies the training cost.
     a small, purely additive follow-up. QuickML and PDF export remain correctly
     BLOCKED, not re-investigated (no new information since the prior pass's
     from-scratch re-check).
+- **v17 (final completion pass) — closing the gap between this file and ~10 sessions'
+  worth of real work `docs/WORK_LOG.md`/`docs/ENGINEERING_BRIEF.md` had already done
+  and verified live, plus one genuine defect a fresh live audit found.**
+  - **This file had gone stale against reality**, not against intent: the last
+    changelog entry above is v16, but 236 commits and roughly ten further passes had
+    landed on `main` since — cross-entity investigation timeline, protected-span
+    Kannada translation (FIR/IPC/plate identifiers immune to the MT model), a
+    structured semantic-interpreter layer replacing the flat 30-intent classifier, a
+    compositional semantic layer (result-set follow-ups — "only these?" — ordinal/
+    positional reference, bounded two-entity comparison, a Kannada-district-name
+    gazetteer fix in both translation directions), QuickML activation (root-caused
+    down to a platform org-id gap, then a working per-endpoint key, with
+    deterministic-confident queries deliberately routed around it to avoid an
+    unneeded model call), a general N-step investigation planner with semantic
+    correction handling, and a cold-start fix so a cold container answers sign-in
+    with a real 503-and-reason instead of a bare 500. Full detail — findings, live
+    reproductions, exact deploy IDs — lives in `docs/WORK_LOG.md` and
+    `docs/ENGINEERING_BRIEF.md`, not reproduced here; this file's job is to state
+    that it happened and that it is live, not to re-narrate it. The false "no other
+    design docs" claim at the top of this file is corrected to name that split.
+  - **Verified before touching anything**, per this pass's own instruction not to
+    change what wasn't first inspected: full local suite (602 collected, all
+    green — the "403" this file quoted was itself the stale artifact), live
+    `/health` (10,000 FIRs, graph 16,918n/87,120e, 13,835 indexed vectors, QuickML
+    configured), and the repo's own automated live-behavior gates —
+    `scripts/verify_live_deployment.py` (36/36 adversarial conversational
+    scenarios) and `scripts/judge_flows.py` (26/26 realistic officer sessions) —
+    both run fresh against production, not re-quoted from a prior pass's log.
+  - **One real defect found by that audit, not by re-reading old bug reports**:
+    the live Kannada battery's own output showed `"73 ಪ್ರಕರಣಗಳು(s)"` — synthesis
+    writes count-agnostic `case(s)`/`record(s)` markers throughout
+    `orchestrator.py` (a deliberate convention for English readers), and NLLB
+    translates the noun but copies the literal `"(s)"` through untouched. Fixed
+    structurally, the same discipline `_protect_spans` already uses for
+    identifiers and district names: a new `_resolve_plural_markers()`
+    (`data/data/nlp/translate.py`) resolves every such marker to real English
+    singular/plural — reading the actual count already sitting next to it — before
+    the text ever reaches the translation model, so the ambiguity never reaches
+    NLLB rather than being hoped away. One test
+    (`test_resolve_plural_markers_picks_singular_or_plural_from_the_real_count`,
+    `data/tests/test_nlp.py`) — the one that took the real count from 601 to 602.
+  - **Deployed and live-verified**: commit `ddbc4f1` relayed
+    (`get-signature` → `.github/relay-upload.url` → `relay-deploy.yml` → local
+    `appsail/upsert`) to deployment `52852000000346070`. Both automated live
+    gates re-run clean against the fresh container (36/36, 26/26), and the exact
+    live query that surfaced the bug (`"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು
+    ಪ್ರಕರಣಗಳಿವೆ?"`) now renders `"73 ಪ್ರಕರಣಗಳು"` with no residual `"(s)"` and the
+    correct canonical district spelling, confirmed by parsing the raw SSE
+    response, not by re-reading the automated battery's summary line alone.
+  - **One operational finding, not a code defect**: the AppSail `appsail/upsert`
+    callback's own JSON response echoes the app's full environment configuration —
+    including `VERITAS_JWT_SECRET`, `VERITAS_JOB_TOKEN`, and the QuickML OAuth
+    client secret/refresh token — in plaintext. This is the platform API's
+    behavior on every deploy through this pipeline, not something this pass
+    introduced, and `scripts/rotate_secrets.py` already exists for the case
+    where that needs acting on. Left for the operator to decide whether rotation
+    is warranted; not rotated unilaterally, since doing so would invalidate
+    live JWT sessions and the Cron job token without coordination.
+  - **Test suite**: 602 collected, all green.
+  - **Not re-done this pass, named rather than silently skipped**: no dataset
+    regeneration — the live audit found no data-quality defect, and regenerating
+    10,000 seeded cases on spec-compliance grounds alone would be exactly the
+    unrequested rebuild this project's own freeze discipline argues against. No
+    UI zoom-level/browser click-through — the last CDP-verified pass
+    (`docs/screenshots/2026-08-27-investigation-board/` and earlier) stands,
+    unchanged by a backend-and-one-translation-file pass; not re-driven from
+    scratch for lack of a found regression to chase. QuickML endpoint-key
+    status, PDF export's SmartBrowz identity block, and the "priorities"
+    Kannada residual (`\bpriors?\b` vs. "priorities") are unchanged from the
+    prior passes' own from-scratch re-checks — no new information surfaced this
+    pass that would change any of those three findings.
