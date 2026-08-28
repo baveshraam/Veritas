@@ -277,6 +277,25 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _trace(state, "Orchestrator",
                f"{state.intent} needs an open case; none given", t0)
         return state
+    # "Look at the financial trail around this case" / "who are this case's
+    # associates" — a NEEDS_SUBJECT question with a case open but no person named.
+    # The case itself supplies the subject when it has exactly one accused; resolving
+    # it here is the difference between a real multi-step investigation ("this case"
+    # -> its accused -> their money trail) and a refusal that already had the answer
+    # sitting one join away. See _resolve_subject_from_open_case for the ambiguous
+    # (2+ accused) and no-case-in-scope cases, both of which fall through to the
+    # ordinary no_subject refusal below unchanged.
+    if (state.intent in intents.NEEDS_SUBJECT and not pid
+            and not state.comparison_subject_ids and not state.refusal_reason
+            and state.active_entities.active_fir):
+        _resolve_subject_from_open_case(state)
+        pid = state.active_entities.active_person
+        if state.refusal_reason:  # ambiguous_person -- decided, not merely unresolved
+            _trace(state, "Orchestrator",
+                   f"{state.intent}: case has {len(state.ambiguous_candidates)} "
+                   f"accused; asking rather than guessing", t0)
+            return state
+
     if (state.intent in intents.NEEDS_SUBJECT and not pid
             and not state.comparison_subject_ids and not state.refusal_reason):
         state.refusal_reason = "no_subject"
@@ -739,6 +758,36 @@ def _officer_ps(officer_id: str) -> str:
         return str(r["UnitID"]) if r else ""
     except Exception:
         return ""
+
+
+def _resolve_subject_from_open_case(state: InvestigationState) -> None:
+    """A NEEDS_SUBJECT question (financial trail, associates, priors, aliases) asked
+    with a case open but no person named — resolve against that case's own accused,
+    the same resolution discipline `semantic_interpreter._resolve_other_candidate` and
+    the CASE_PEOPLE-citation pronoun fallback already apply elsewhere: don't refuse
+    when the record layer already supplies an unambiguous subject one join away.
+
+    Confirms RBAC scope on the case itself first — `accused_on_case()` is unscoped by
+    station (per its own docstring), so the caller must check access to the case
+    before reading who's on it, exactly as `CASE_PEOPLE`'s own handler already does.
+
+    Leaves state untouched (falls through to the ordinary no_subject refusal) when the
+    case isn't in scope, has no accused on file, or has more than one — the last case
+    sets ambiguous_candidates instead of guessing, the same tied-name discipline a
+    genuinely ambiguous person search already uses.
+    """
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+    if not case_rows:
+        return
+    accused = sql_agent.accused_on_case(state.active_entities.active_fir)
+    if not accused:
+        return
+    if len(accused) == 1:
+        state.active_entities.active_person = str(accused[0]["PersonUID"])
+        return
+    state.refusal_reason = "ambiguous_person"
+    state.ambiguous_candidates = [a["CanonicalName"] or a["AccusedName"] for a in accused]
 
 
 def _last_turn(session_id: str):

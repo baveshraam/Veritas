@@ -702,6 +702,85 @@ def test_every_refusal_reason_has_its_own_message():
     assert len(set(REFUSAL_MESSAGES.values())) == len(REFUSAL_MESSAGES)
 
 
+# --- Case-scoped subject resolution: "the financial trail around this case" ----------
+#
+# A NEEDS_SUBJECT question (FINANCIAL, PERSON_NETWORK, PERSON_HISTORY, ALIAS_CHECK)
+# asked with a case open but no person named used to refuse with no_subject even
+# though the case's own accused was one join away — found via this pass's own reading
+# of the "look at the financial trail around this case" example the product brief
+# gave as a required multi-step flow. Fixed in _resolve_subject_from_open_case.
+
+def test_a_needs_subject_question_resolves_the_sole_accused_on_the_open_case(dataset):
+    """Real dataset, real graph, real retrieval pipeline — a single-accused case found
+    dynamically rather than a hand-picked fixture id, since the generator's own
+    co-offending crews mean not every case has exactly one accused."""
+    from data import ds
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    rows = ds.query(
+        'SELECT "CaseMasterID", COUNT(*) as n FROM "Accused" '
+        'GROUP BY "CaseMasterID" HAVING COUNT(*) = 1 LIMIT 1')
+    if not rows:
+        pytest.skip("no single-accused case in this generated dataset")
+    fir_id = str(rows[0]["CaseMasterID"])
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="What does the financial trail show?")
+    state.intent = "FINANCIAL"
+    state.active_entities.active_fir = fir_id
+
+    saved_ps = orch._officer_ps
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch.node_retrieve(state)
+    finally:
+        orch._officer_ps = saved_ps
+
+    assert out.refusal_reason != "no_subject"
+    assert out.active_entities.active_person  # resolved to *some* real PersonUID
+
+
+def test_a_needs_subject_question_asks_which_accused_when_the_case_has_several():
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Who are this case's associates?")
+    state.intent = "PERSON_NETWORK"
+    state.active_entities.active_fir = "9992"
+
+    saved = (orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case, orch._officer_ps)
+    orch.sql_agent.fir_by_id = lambda *a, **k: [{"fir_id": 9992}]
+    orch.sql_agent.accused_on_case = lambda *a, **k: [
+        {"PersonUID": 803, "CanonicalName": "Usha Naika", "AccusedName": "Usha Naika"},
+        {"PersonUID": 877, "CanonicalName": "Soom Nadkarni", "AccusedName": "Suma Nadkarni"}]
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch.node_retrieve(state)
+    finally:
+        orch.sql_agent.fir_by_id, orch.sql_agent.accused_on_case, orch._officer_ps = saved
+
+    assert out.refusal_reason == "ambiguous_person"
+    assert set(out.ambiguous_candidates) == {"Usha Naika", "Soom Nadkarni"}
+    assert out.active_entities.active_person is None  # never guessed
+
+
+def test_a_needs_subject_question_with_no_case_open_still_refuses_no_subject():
+    """Unchanged behaviour: the case-resolution fallback only fires when there IS an
+    open case to resolve against — asking "show me the money trail" cold still
+    refuses exactly as before."""
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Show me the money trail")
+    state.intent = "FINANCIAL"
+
+    out = orch.node_retrieve(state)
+    assert out.refusal_reason == "no_subject"
+
+
 def test_an_unknown_reason_falls_back_to_the_general_refusal():
     assert refusal_message("something_new") == NOT_FOUND_MESSAGE
 
