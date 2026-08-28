@@ -91,8 +91,10 @@ CLIENT_SECRET = os.getenv("QUICKML_CLIENT_SECRET", "").strip()
 REFRESH_TOKEN = os.getenv("QUICKML_REFRESH_TOKEN", "").strip()
 ACCOUNTS_URL = os.getenv("QUICKML_ACCOUNTS_URL", "https://accounts.zoho.in").rstrip("/")
 API_BASE = os.getenv("QUICKML_API_BASE", "https://api.catalyst.zoho.in").rstrip("/")
-PROJECT_ID = os.getenv("CATALYST_PROJECT_ID", "").strip()
-ORG_ID = os.getenv("CATALYST_ORG", "").strip()
+# CATALYST_* is reserved in AppSail environment variables. Keep the local
+# compatibility fallback, but use QuickML-prefixed names in the deployed runtime.
+PROJECT_ID = os.getenv("QUICKML_PROJECT_ID", os.getenv("CATALYST_PROJECT_ID", "")).strip()
+ORG_ID = os.getenv("QUICKML_ORG_ID", os.getenv("CATALYST_ORG", "")).strip()
 TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
 
 COOLDOWN_SECONDS = 70.0
