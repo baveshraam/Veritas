@@ -641,27 +641,47 @@ questions:
    - Kannada-English code-switching works: "Mandya alli ಎಷ್ಟು theft cases
      ಇವೆ ಈ ವರ್ಷ?" resolved deterministically to `CRIME_SEARCH` (confidence
      0.9, 1ms) with a correct count (73 matching cases).
-   - **A real, live, honestly-unresolved limitation**: a pure-Kannada query
-     ("ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?" — the exact phrase v10's
-     changelog once recorded working) currently fails — the deterministic
-     classifier sees confidence 0.3 (`UNKNOWN`), which only makes sense if
-     `translation_agent.to_english()` is not actually producing English text
-     for this query on the current deployment, silently falling back to the
-     untranslated original; QuickML was then correctly consulted (per the new
-     routing) but could not resolve it either, twice timing out at the 30s
-     ceiling. Root cause not found this pass — `translate.py`/NLLB internals
-     were not instrumented, and this looks pre-existing (not something the
-     routing change could have caused, since routing only changes *whether*
-     the LLM is additionally consulted, not what text reaches either path).
-     Named honestly rather than silently left for someone to rediscover.
+   - **Correction to a claim in this same section, found and fixed within
+     the same pass**: pure-Kannada was first reported here as failing live.
+     That was wrong, and the error was in the test, not the system — the
+     Kannada query had been passed to `curl` as an inline shell string inside
+     a bash heredoc, which does not reliably preserve multi-byte UTF-8 through
+     Git Bash's argument handling on Windows; the bytes that actually reached
+     the API were not valid Kannada. Re-sent the identical query as a
+     UTF-8-encoded JSON file via `curl --data-binary @file` (bypassing shell
+     string interpolation entirely) and it worked correctly: `Translation
+     Agent (kn->en)` fired (518ms) — `"Query understood as: How many cases of
+     theft are there in District Mandya?"` — classified deterministically as
+     `CRIME_SEARCH` (confidence 0.9, 14ms, correctly skipping QuickML per the
+     routing fix), and returned the correct count (73 matching Theft cases in
+     Mandya, 6 citations) — matching the code-switched test directly above
+     almost exactly. Kannada support was never broken; a testing-methodology
+     artifact was. Left in the record rather than silently deleted, because
+     the lesson (verify the actual bytes on the wire before trusting a live
+     negative result, especially through a shell) generalizes past this one
+     bug.
    - **QuickML latency, measured from real production calls this pass (small
-     sample, ~10 calls — deliberately not hundreds, per this project's own
+     sample, ~12 calls — deliberately not hundreds, per this project's own
      standing Catalyst-cost-minimization practice)**: successful semantic
      interpretation calls ranged 5–23s; the hard ceiling is the 30s
-     `VERITAS_LLM_TIMEOUT`, hit twice (both on the untranslated-Kannada case
-     above). This is a real, load-bearing latency cost — exactly why item 8's
-     routing fix (only pay it for genuinely ambiguous queries) matters as
-     much as QuickML working at all.
+     `VERITAS_LLM_TIMEOUT`, hit twice — both on the malformed-bytes Kannada
+     test above (the *test's* garbage input, not a real query the model
+     should ever have been asked to interpret). This is a real, load-bearing
+     latency cost — exactly why item 8's routing fix (only pay it for
+     genuinely ambiguous queries) matters as much as QuickML working at all.
+   - **A related, deliberately-untouched latency fact**: `synthesis_agent.
+     synthesize()` calls `generate()` for fluent prose whenever `available()`
+     is true, on *every* answer — including a fully-resolved, deterministic
+     `CRIME_SEARCH` count that already has a clear extractive template — and
+     one such call was observed taking ~25s live. This is unlike item 8's
+     bug: it is the module's own documented design ("With an LLM the prose is
+     fluent; without one it is extractive"), predates this pass, and was
+     never in scope here — item 8 was specifically about *whether QuickML
+     gets consulted for interpretation at all*, which had no such intentional
+     rationale behind always running. Left as-is rather than changed on this
+     pass's own initiative; worth a deliberate product decision (is 20-30s of
+     extra latency for marginally more fluent phrasing on an already-good
+     extractive answer worth it?), not a silent fix.
 
 The architecture in §6 was correct; it is live via the deterministic path AND,
 for the first time, genuinely via the model path too. `rag_agent/
