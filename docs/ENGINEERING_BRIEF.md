@@ -605,10 +605,68 @@ questions:
    as confident as the deterministic one it is being compared against — a
    second opinion, not an automatic override. 3 new tests in
    `TestLLMRouting` (`test_semantic_interpreter.py`).
+9. **Live-verified end to end against production** (deployment
+   `52852000000346035`, real `/chat` traffic, not a probe script):
+   - Exact FIR lookup: `Orchestrator (semantic)` step dropped from 16,820ms
+     (item 8's bug) to **9ms** — the routing fix, confirmed on the live path.
+   - **The full target vertical slice, genuinely working**: "Any idea who
+     else was tangled up in it?" (deliberately unseen colloquial phrasing, no
+     keyword overlap with any `INTENTS` entry) → QuickML correctly interpreted
+     it as `CASE_PEOPLE` (confidence 0.9) against the open case in focus →
+     deterministic SQL retrieval → real accused persons (Usha Naika, Soom
+     Nadkarni — the same romanisation-variant pair BUG-026 already documented)
+     → CRAG confidence 0.95 → grounded citations → network visualization.
+   - Multi-turn continuity and cross-instance state persistence in one test:
+     a session opened *before* this pass's redeploy ("What is the status of
+     FIR ...") was continued *after* the container was fully replaced — "Tell
+     me about this case" on the same `session_id` correctly resolved
+     `active_fir` from `vx_session` (Data Store), not process memory, and
+     answered about the right FIR. This is the restart/scale-out survival
+     property, proven by a real deploy rather than a synthetic kill test.
+   - RBAC still holds: an IO (station 101) querying a Mandya FIR (station
+     2201) got 0 records within policy scope and the `exact_lookup_missed`
+     refusal — not the cross-station leak that same code path used to produce
+     before BUG-fix v10.
+   - A genuine two-entity multi-step query ("Check whether either Usha Naika
+     or Soom Nadkarni had a prior robbery case around the same time") resolved
+     via the deterministic `_COORDINATION_RE` bounded-comparison path
+     (confidence 0.75 — exactly the routing threshold, so QuickML correctly
+     was not consulted for interpretation), correctly compared both subjects
+     (254 combined evidence items, CRAG confidence 1.0, 12 citations) — and
+     when the LLM-based prose synthesis step itself timed out (30s), the
+     deterministic extractive synthesis fallback still produced a real,
+     grounded, cited answer. This is the core safety property — "the LLM
+     makes an answer fluent, never true" — observed holding under a genuine
+     live LLM failure, not just asserted.
+   - Kannada-English code-switching works: "Mandya alli ಎಷ್ಟು theft cases
+     ಇವೆ ಈ ವರ್ಷ?" resolved deterministically to `CRIME_SEARCH` (confidence
+     0.9, 1ms) with a correct count (73 matching cases).
+   - **A real, live, honestly-unresolved limitation**: a pure-Kannada query
+     ("ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?" — the exact phrase v10's
+     changelog once recorded working) currently fails — the deterministic
+     classifier sees confidence 0.3 (`UNKNOWN`), which only makes sense if
+     `translation_agent.to_english()` is not actually producing English text
+     for this query on the current deployment, silently falling back to the
+     untranslated original; QuickML was then correctly consulted (per the new
+     routing) but could not resolve it either, twice timing out at the 30s
+     ceiling. Root cause not found this pass — `translate.py`/NLLB internals
+     were not instrumented, and this looks pre-existing (not something the
+     routing change could have caused, since routing only changes *whether*
+     the LLM is additionally consulted, not what text reaches either path).
+     Named honestly rather than silently left for someone to rediscover.
+   - **QuickML latency, measured from real production calls this pass (small
+     sample, ~10 calls — deliberately not hundreds, per this project's own
+     standing Catalyst-cost-minimization practice)**: successful semantic
+     interpretation calls ranged 5–23s; the hard ceiling is the 30s
+     `VERITAS_LLM_TIMEOUT`, hit twice (both on the untranslated-Kannada case
+     above). This is a real, load-bearing latency cost — exactly why item 8's
+     routing fix (only pay it for genuinely ambiguous queries) matters as
+     much as QuickML working at all.
 
-The architecture in §6 was correct; it is live via the deterministic path.
-`rag_agent/semantic_interpreter.py` (`interpret()` function, `SemanticRequest`
-model) deployed to `node_orchestrate`. The 30 current intents remain the
+The architecture in §6 was correct; it is live via the deterministic path AND,
+for the first time, genuinely via the model path too. `rag_agent/
+semantic_interpreter.py` (`interpret()` function, `SemanticRequest` model)
+deployed to `node_orchestrate`. The 30 current intents remain the
 compatibility layer, valid values for the `operation` field.
 
 ## 13. Failure behavior
