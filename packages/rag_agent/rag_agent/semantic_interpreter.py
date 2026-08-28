@@ -655,8 +655,10 @@ def _interpret_deterministic(
     # Same defaulting principle already used for a bare ordinal/"other" reference
     # (_default_operation_for_subject) -- a named subject with nothing else asked
     # gets the richest single-call profile, not a refusal.
+    defaulted_to_richest_profile = False
     if operation == "UNKNOWN" and subject_id and subject_type == "person":
         operation = _default_operation_for_subject("person")
+        defaulted_to_richest_profile = True
 
     # Extract constraints
     constraints = _extract_constraints(q)
@@ -664,8 +666,20 @@ def _interpret_deterministic(
     # Read previous-result context if prior turn exists
     previous_result_context = prior_result
 
-    # Assign confidence: regex shapes are more confident than keyword matches
-    confidence = 0.9 if operation != "UNKNOWN" else 0.3
+    # Assign confidence: regex shapes are more confident than keyword matches. A
+    # defaulted "richest profile" guess is neither — no keyword or shape actually
+    # matched, and we're substituting our best default (PERSON_HISTORY) for a
+    # genuine classification. Deliberately kept BELOW
+    # semantic_interpreter._LLM_ROUTING_THRESHOLD so a real semantic understanding of
+    # what the officer wants (e.g. PERSON_NETWORK for "who's this person tied up
+    # with") can still win over the generic default when the model is available —
+    # found live via this pass's own held-out evaluation: the default's old 0.9
+    # confidence outranked a correct 0.82-confidence model answer, which is backwards
+    # for a fallback that is, structurally, a guess.
+    if defaulted_to_richest_profile:
+        confidence = 0.65
+    else:
+        confidence = 0.9 if operation != "UNKNOWN" else 0.3
     if operation in ["CAPABILITY", "NOT_INFERABLE", "EXPLAIN_REASONING", "EVIDENCE_FOR",
                      "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "TIMELINE", "TIMELINE_CONNECTION",
                      "BOARD_PIN_EVENT"]:
