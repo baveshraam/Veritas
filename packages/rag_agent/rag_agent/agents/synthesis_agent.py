@@ -8,7 +8,22 @@ a citation ends up not supporting the sentence it is attached to.
 With an LLM the prose is fluent; without one it is extractive. Both are grounded in
 the same evidence and carry the same citations — the LLM changes the register of the
 answer, never its factual content.
+
+## Routing: QuickML only where a narrative adds something the list doesn't already say
+
+Live-measured (2026-08-28): calling the LLM for EVERY answer — including a plain FIR
+status lookup or a crime count with sample FIRs — cost 20-30s regardless of how simple
+the underlying fact was, because the extractive template already says exactly what the
+records say for those operations; a rephrasing buys nothing. `synthesize()` now takes
+the resolved `operation` and only calls QuickML when it's in
+`intents.NEEDS_NARRATIVE_SYNTHESIS` — a financial trail's "what stands out", a
+network's "who's connected and how", a risk score's "why", a two-entity comparison's
+"here's how these differ". This is the same principle `semantic_interpreter.interpret()`
+already applies to routing the model for *understanding* a query, now applied to
+whether it's worth calling for *phrasing* the answer — never a correctness trade-off,
+since the extractive path is always fully grounded in the same evidence either way.
 """
+from .. import intents
 from ..evidence.evaluator import NOT_FOUND_MESSAGE
 from ..llm import available, generate
 from ..state import Citation, EvidenceItem, VisualizationPayload
@@ -37,14 +52,15 @@ def _label(e: EvidenceItem) -> str:
     return head[:120] + ("…" if len(head) > 120 else "")
 
 
-def synthesize(query: str, evidence: list[EvidenceItem]) -> tuple[str, list[Citation]]:
+def synthesize(query: str, evidence: list[EvidenceItem],
+                operation: str = "") -> tuple[str, list[Citation]]:
     if not evidence:
         return NOT_FOUND_MESSAGE, []
 
     citations = build_citations(evidence)
     numbered = "\n".join(f"[{c.index}] {e.content}" for c, e in zip(citations, evidence))
 
-    if available():
+    if operation in intents.NEEDS_NARRATIVE_SYNTHESIS and available():
         try:
             answer = generate(
                 f"Question: {query}\n\nEvidence:\n{numbered}\n\n"

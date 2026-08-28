@@ -1628,7 +1628,8 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # to answer at all, and synthesis now honours the same line instead of citing the
     # whole neighbourhood.
     evidence = supporting(_rank_evidence(state))[:12]
-    answer, citations = synthesis_agent.synthesize(state.original_query or "", evidence)
+    answer, citations = synthesis_agent.synthesize(
+        state.original_query or "", evidence, operation=state.intent)
 
     note = None
     if state.language != "en":

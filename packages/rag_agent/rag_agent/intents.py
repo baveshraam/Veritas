@@ -120,6 +120,23 @@ NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
              "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
              "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS"}
 
+# Operations where a woven narrative genuinely adds something the evidence list alone
+# doesn't already say — a financial trail's "what stands out", a network's "who's
+# connected and how", a risk score's "why", a comparison's "here's how these two
+# differ". Everything NOT in this set is a direct factual retrieval (a status, a
+# count, a list of names/locations/dates) where the extractive template ("[1] ...
+# [2] ...") already says exactly what the records say — an LLM call there buys
+# nothing but 20-30s of latency for a rephrasing of a list. Used by
+# synthesis_agent.synthesize() to decide whether QuickML is worth calling at all;
+# unlike NEEDS_SUBJECT/NEEDS_CASE this is about the SHAPE OF THE ANSWER, not what a
+# question requires to be askable, but it belongs here for the same reason those do —
+# one place that knows what each operation actually is, read by whichever layer needs
+# that fact next.
+NEEDS_NARRATIVE_SYNTHESIS = {
+    "PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK", "CAUSAL",
+    "SIMILAR_CASES", "NEXT_STEPS", "BRIEFING", "TIMELINE_CONNECTION",
+}
+
 # Questions asking the system to nominate a suspect. The records hold who was accused,
 # arrested and charged; they do not hold who "could be" guilty, and inferring it is the
 # one thing an evidence-grounded police tool must not do. This is a refusal with a
