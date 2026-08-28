@@ -689,6 +689,84 @@ semantic_interpreter.py` (`interpret()` function, `SemanticRequest` model)
 deployed to `node_orchestrate`. The 30 current intents remain the
 compatibility layer, valid values for the `operation` field.
 
+10. **The one-day final push — item 9's own "deliberately-untouched" synthesis
+    latency became this pass's first priority, plus three real findings from
+    a new held-out evaluation.**
+    - **Synthesis latency, fixed, not merely diagnosed.** `synthesize()` now
+      takes the resolved `operation` and only calls QuickML when it's in the
+      new `intents.NEEDS_NARRATIVE_SYNTHESIS` set (financial trails,
+      networks, risk, causal, similar-cases, next-steps, briefings, timeline
+      connections, and person-history — which covers the bounded two-entity
+      comparison path too, since it reuses whichever base operation
+      `classify()` returned). A direct factual retrieval (a status, a count,
+      a list of names) gets the extractive template with **zero** latency
+      cost; a genuinely narrative question still gets the full LLM pass.
+      **Live-measured before/after on the identical query**: a FIR status
+      lookup — interpretation + synthesis together — went from ~16.8s to
+      **1.4s total, end to end** (`Evidence Synthesis` step: 0ms, was
+      20-30s). A `PERSON_NETWORK` question in the same session still
+      correctly invoked QuickML for its narrative (`Evidence Synthesis`:
+      15.6s, 17.1s total) — the routing is selective, not a blanket
+      LLM-off switch. 6 new tests, `test_synthesis_routing.py`.
+    - **A real multi-step gap, closed**: "Look at the financial trail around
+      this case" (a required flow named explicitly in this pass's own
+      brief) used to refuse `no_subject` even though the open case's own
+      accused was one join away — `FINANCIAL`/`PERSON_NETWORK`/
+      `PERSON_HISTORY`/`ALIAS_CHECK` all require a resolved person, and
+      nothing previously fell back to the case in focus when none was
+      named. `orchestrator._resolve_subject_from_open_case` confirms RBAC
+      scope on the case first, auto-resolves when there's exactly one
+      accused, and asks (`ambiguous_person`, never guesses) when there are
+      several — with its own early return so a decided ambiguity doesn't
+      fall through into a real retrieval it already refused (the BUG-006
+      class this codebase explicitly guards against elsewhere). Live-tested
+      end to end: a 2-accused case correctly triggered "case has 2 accused;
+      asking rather than guessing" rather than a blind refusal or a guess.
+      3 new tests, including one against the real generated dataset (a
+      single-accused case found dynamically, since not every case has
+      exactly one).
+    - **A new held-out evaluation** (`test_conversational_evaluation.py`,
+      17 scenarios, genuinely unseen phrasings not reused from any other
+      test file) immediately found a real routing-precision bug: the
+      deterministic "no keyword matched, but a subject IS resolved —
+      default to the richest profile" fallback (`PERSON_HISTORY`) was
+      scored at confidence 0.9, the same tier as an actual keyword match.
+      That let it outrank a *correct* 0.82-confidence model answer
+      (`PERSON_NETWORK`, for "who's this person tied up with?") under this
+      session's own routing fix — backwards for a fallback that is,
+      structurally, a guess. Now scored 0.65, deliberately below the 0.75
+      routing threshold, so real semantic understanding can override the
+      generic default when the model is available and more specific. The
+      two other `_default_operation_for_subject` call sites (ordinal/"other"
+      positional references) are unaffected — there the subject is resolved
+      with certainty and only the verb is defaulted, a different confidence
+      class entirely.
+    - **One gap found and left honestly unfixed, on purpose**: a correction
+      with no other verb/keyword ("no, I meant Mysuru") extracts the new
+      district constraint (`_extract_constraints` runs unconditionally) but
+      does not carry the prior turn's operation forward — `classify()`
+      scores it `UNKNOWN`. Not patched with a "no, I meant" phrase rule
+      (which this evaluation's own purpose rules out); correctly stays below
+      the routing threshold (0.3 < 0.75) so QuickML — which does have the
+      semantic understanding to treat this as a correction — is consulted
+      in the live system. That live behavior was **not** itself re-verified
+      this pass (cost-conscious QuickML usage), stated as untested rather
+      than assumed working.
+    - **Deployed and live-verified**: new deployment `52852000000356033`
+      (was `52852000000346035`), `/health` confirmed, and the three
+      live checks above run against production, not a local dev server.
+    - **Not done this pass, named rather than silently skipped**: a fresh
+      browser/CDP session (nothing UI-facing changed, so the prior
+      sessions' CDP verification of the console itself stands, but this
+      pass's specific latency/routing improvements were not independently
+      re-shown in the browser); a general N-operation composable planner
+      (`operations: []` on `SemanticRequest`) for open-ended chains like
+      "who else is connected to this person, and which of them appear in
+      other cases" — the case-scoped subject resolution above is a
+      targeted, well-scoped fix for one named example, not a general
+      multi-hop composition engine, and building the latter honestly needs
+      its own design pass rather than being rushed into a single-day push.
+
 ## 13. Failure behavior
 
 | Situation | What happens | Where |
