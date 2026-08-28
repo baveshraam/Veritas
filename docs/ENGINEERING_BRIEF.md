@@ -10,7 +10,8 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `aadcb12` on 2026-08-29. Test count
+Last verified against the repository at commit `9ef7a85` on 2026-08-29, live at
+AppSail deployment `52852000000346070` (custom_runtime, memory 2048). Test count
 (599, `pytest --collect-only -q`), the 16-scenario / 26-turn live judge battery
 (`scripts/judge_flows.py`, run against the deployed service, not the local mirror),
 the measured latency figures in §12 item 13, and the browser session in §14 were all
@@ -1117,11 +1118,26 @@ The session-focus chip read "EXAMINING · FIR 100010101202300001 · Bagalkot" af
 turns. A genuine refusal rendered with the `msg-a refusal` class and a successful
 answer with plain `msg-a`, read from the live DOM — the v16 distinction still holds.
 
+A second browser session drove the conversational fixes specifically, against the
+deployed console: a crime search (646 Theft in Bengaluru Urban, cited), a result-set
+follow-up ("Only these?" -> "646 matched in total; 5 were shown before — here are 5
+more"), a semantic correction ("Actually Mysuru, not Bengaluru Urban." -> 148 Theft in
+Mysuru), and an honest refusal rendering with the `msg-a refusal` class. 18 citation
+chips and a 5-step reasoning trace on screen.
+
 **What this pass did NOT drive**, named rather than implied: voice input/ASR (no
 microphone in a headless browser), PDF export (still blocked on SmartBrowz, §12),
 the investigation board's full UI flow (its API path is covered by
 `test_board_acceptance.py`), and the map/Sankey/forecast visualizations were confirmed
 present but not re-screenshotted — v15's own basemap verification stands.
+
+**Known, deliberately not fixed this pass**: the session-focus chip covers case and
+person, not district. A purely district-scoped conversation ("theft in Bengaluru
+Urban" -> "only these?" -> "actually Mysuru") therefore shows no chip, even though
+`SessionFocus.active_location` is exactly what those turns resolve against and carry
+forward. It is a small additive change to `_focus_view` plus the chip, and it was
+scoped out rather than started, because it needs its own API and console deploy cycle
+and this pass's remaining budget went to verification instead.
 
 ## 15. How to use this document going forward
 
