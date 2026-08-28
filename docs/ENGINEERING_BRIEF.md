@@ -10,10 +10,10 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `382c94d`, live-deployed at AppSail
-deployment `52852000000351032`. Test count (559, `pytest --collect-only -q`), the
-general N-step planner, and the live correction/RBAC findings in §12 item 11 were
-confirmed directly against the running code and the real deployed service on
+Last verified against the repository at commit `e0d982f`, live-deployed at AppSail
+deployment `52852000000353049`. Test count (581, `pytest --collect-only -q`), the
+16-category live judge simulation, and the correction-routing fix in §12 item 12
+were confirmed directly against the running code and the real deployed service on
 2026-08-28, not copied from an earlier document.
 
 ---
@@ -873,6 +873,98 @@ compatibility layer, valid values for the `operation` field.
       design (that is precisely the kind of question the deterministic
       classifier cannot honestly attempt).
 
+12. **Freeze pass — a live judge simulation against the deployed system,
+    exactly as a real evaluator would use it, and the one real defect it
+    found.** No architecture change; the explicit brief for this pass was
+    "prepare the current system for judging," not extend it further.
+    - **16-category live judge simulation**, a fresh officer session against
+      production (not a mock, not the local sqlite mirror): simple lookup,
+      unseen phrasing, multi-turn follow-up, previous-result reference,
+      correction, a compound "accused + priors" question, network,
+      financial, timeline, Kannada, Kannada-English code-switch, ambiguous
+      pronoun, no-evidence refusal, RBAC denial, a passive model-timeout
+      probe, and a fresh-session continuity check. 13 of 16 behaved exactly
+      as designed on first pass; two anomalies were investigated to a
+      determined root cause rather than assumed:
+      - **Real, fixed**: a correction typed immediately after a "Only
+        these?" follow-up (`RESULT_SET_FOLLOWUP`) answered with more of the
+        OLD district's results instead of searching the NEW one. Root
+        cause: `node_orchestrate` unconditionally overwrote
+        `state.last_request` with THIS turn's own operation — for a meta
+        turn like `RESULT_SET_FOLLOWUP`, that discarded the real prior
+        `CRIME_SEARCH` request entirely, handing the next turn's correction
+        a base with no district field to override. Fixed with
+        `intents.META_OPERATIONS` (the operations that read/describe a
+        previous turn or the system itself — `RESULT_SET_FOLLOWUP`,
+        `CASE_LOCATIONS`, `EXPLAIN_REASONING`, `EVIDENCE_FOR`, the `BOARD_*`
+        actions, `CAPABILITY`, `NOT_INFERABLE`,
+        `CASE_REFERENCE_UNSUPPORTED`): `node_orchestrate` now carries the
+        PRIOR turn's `last_request` forward unchanged whenever the current
+        operation is one of these, rather than overwriting it with its own
+        meta shape. Structural, not a phrase rule — the same "shape, not
+        topic" discipline the rest of this module already uses. 2 new
+        regression tests, confirmed to fail against the pre-fix code first.
+      - **Investigated, NOT a code defect**: the same session also saw one
+        unseen-phrasing turn ("give me a quick rundown of what's going on
+        with this one") route to `BOARD_VIEW` — a plausible-shaped but wrong
+        operation. Reproduced twice more with the identical query and prior
+        turn; both reproductions instead scored `UNKNOWN` and refused
+        honestly (deterministic fallback, since QuickML was between calls).
+        A single non-reproducible model misclassification is a live
+        LLM-judgment characteristic, not a deterministic bug to chase —
+        recorded as an observed risk, not "fixed."
+      - **Investigated and left alone, on purpose, per this pass's own
+        explicit instruction**: a code-switched query ("ಆ case ಗೆ related
+        ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?", translated to "Is there another FIR related
+        to that case?") classified as `FIR_LOOKUP` (via the literal keyword
+        "FIR") instead of a case-scoped `SIMILAR_CASES` read, and — finding
+        no FIR number to look up — fell through to an unscoped semantic
+        search that surfaced unrelated cases from other districts. This is
+        real and pre-existing (not introduced by item 11), and a keyword/
+        regex widening would fix it the same way `_CASE_LOCATIONS`/
+        `_TIMELINE` already generalize a shape elsewhere in `intents.py` —
+        but this pass's own brief explicitly forbade adding regex rules
+        during a freeze, so it is named here rather than patched.
+    - **Deterministic-path latency confirmed intact**: 8 fresh live samples
+      (FIR lookups, district counts) once the container was warm — **p50
+      1.6s, p95 1.8s, max 1.8s**. The one query that measured 4.0s in the
+      judge simulation was the session's first request against a cold
+      container (model-weight fetch + NLLB load), not a regression —
+      confirmed by immediately re-running the identical query warm (0.5s).
+      The fast path this project has repeatedly measured and protected
+      (§12 item 10) is untouched.
+    - **QuickML-invoked latency, measured under real (not synthetic) load**:
+      7 live samples that genuinely reached the model — **p50 21.4s, p95
+      34.4s, max 34.4s**. Noticeably higher than earlier passes' ~15-17s
+      figures; `/health` confirmed the LLM entered its 70-second degraded
+      cooldown at least once during this session's own testing
+      (`TimeoutError: the read operation timed out`) — the platform's own
+      documented degrade contract (`llm.py`, `COOLDOWN_SECONDS = 70`)
+      working exactly as designed, not a new failure mode. This is a real,
+      named QuickML reliability/latency characteristic under sustained
+      testing, not something a code change in this repository fixes.
+    - **UI progress-during-latency, checked, not changed**: `apps/web`
+      already streams each reasoning-trace step as it arrives
+      (`app/page.tsx`'s `onTrace` patches `trace` incrementally over the
+      same SSE connection `lib/api.ts` reads with a manual `getReader()`
+      loop) and `ReasoningTrace.tsx` shows a spinner + "reasoning…" with the
+      trace panel auto-expanded while `streaming` is true. A 20-30s QuickML
+      wait is not a frozen screen — confirmed by reading the code path, not
+      assumed; no change was needed or made.
+    - **Held-out generalization suite re-run, unchanged from item 11**: 22
+      tests (20 + the 2 new regression tests above), all passing; **581
+      collected** for the full repository, same two pre-existing
+      `test_acceptance.py` failures as every prior pass.
+    - **Deployed and live-verified**: see the changelog entry below.
+    - **Cleanup**: no secrets tracked in git (checked directly); the two
+      pre-existing untracked probe directories (`functions/`, `services/`)
+      remain deliberately untracked, unchanged from prior passes. One
+      operational note, not a code issue: an Admin API config fetch during
+      this pass printed several live secret values into local tool output
+      before the filter was corrected — flagged to the user directly at the
+      time, with a recommendation to rotate `VERITAS_JWT_SECRET` and
+      `VERITAS_JOB_TOKEN`; nothing was committed or persisted.
+
 ## 13. Failure behavior
 
 | Situation | What happens | Where |
@@ -951,6 +1043,23 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   model before being called done.
 
 ## 16. Changelog (append here; do not create a new file)
+
+- **2026-08-28 — freeze pass: a live judge simulation against production, and
+  the one real defect it found.** Full detail in §12 item 12. A 16-category
+  fresh-officer-session judge simulation run directly against the deployed
+  service found one real, fixable bug (a correction typed right after a
+  meta/follow-up turn lost the real prior request and answered from the OLD
+  district instead of the corrected one — fixed via `intents.META_OPERATIONS`
+  + `node_orchestrate`, 2 new regression tests, confirmed failing pre-fix),
+  one non-reproducible live LLM misclassification (investigated, not a code
+  defect), and one pre-existing code-switch classification gap (investigated,
+  deliberately left unfixed per this pass's own explicit no-new-regex
+  instruction). Deterministic-path latency reconfirmed intact (p50 1.6s / p95
+  1.8s warm); QuickML-invoked latency measured at p50 21.4s / p95 34.4s under
+  real load today, with one observed 70s degrade-cooldown — a live platform
+  characteristic, not a regression. The console's progress-during-latency
+  streaming was verified already correct by reading the code, not changed.
+  581 tests collected, same two pre-existing `test_acceptance.py` failures.
 
 - **2026-08-28 — the general N-step investigation planner, and a semantic fix
   for the correction gap named-and-deferred by the previous pass.** Full
