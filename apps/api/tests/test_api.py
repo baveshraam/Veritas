@@ -657,3 +657,34 @@ def test_export_requires_a_real_conversation(client, officers, dataset):
     h = _auth(client, officers["IG"]["badge_no"])
     r = client.post("/export/pdf", json={"session_id": "no-such-session-at-all"}, headers=h)
     assert r.status_code == 404
+
+
+def test_signing_in_before_the_records_are_loaded_says_so_instead_of_500ing(client, monkeypatch):
+    """Sign-in is the first thing anyone does, and on a cold container the first thing
+    to touch the data layer — so it pays the one-off mirror hydration. Observed live: a
+    bare 500 from /auth/token seconds after a redeploy, succeeding on retry once warm.
+
+    "500" on a sign-in screen is indistinguishable from a broken deployment. 503 is the
+    truthful status and the one the console's gate already treats as "warming up".
+    """
+    from data import ds
+
+    def _cold(*a, **k):
+        raise RuntimeError("mirror is still hydrating")
+
+    monkeypatch.setattr(ds, "one", _cold)
+    monkeypatch.setattr(ds, "query", _cold)
+
+    r = client.post("/auth/token", json={"badge_no": "KGID000387"})
+    assert r.status_code == 503, r.text
+    assert "retry" in r.json()["detail"].lower()
+    assert "RuntimeError" in r.json()["detail"], (
+        "a genuine data-layer fault must stay diagnosable, not be hidden as a warm-up")
+
+    assert client.get("/auth/officers").status_code == 503
+
+
+def test_an_unknown_badge_is_still_401_not_a_warm_up_message(client):
+    """The 503 wrapper must not swallow a real authentication decision."""
+    r = client.post("/auth/token", json={"badge_no": "KGID999999"})
+    assert r.status_code == 401
