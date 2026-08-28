@@ -2,7 +2,10 @@
 import pytest
 
 from data.nlp import ner_extract, transliterate
-from data.nlp.translate import TranslationUnavailable, translate, _protect_spans, _restore_spans
+from data.nlp.translate import (
+    TranslationUnavailable, translate, _protect_spans, _restore_spans,
+    _resolve_plural_markers,
+)
 
 
 def _labels(text):
@@ -170,6 +173,18 @@ def test_protect_spans_leaves_ordinary_words_and_short_numbers_alone():
     protected, mapping = _protect_spans('ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ? 5 ಜನ')
     assert mapping == {}
     assert protected == 'ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ? 5 ಜನ'
+
+
+def test_resolve_plural_markers_picks_singular_or_plural_from_the_real_count():
+    # Live defect: NLLB translated "case(s)" but copied the literal "(s)" through
+    # untouched ("73 ಪ್ರಕರಣಗಳು(s)"). Resolving to real English before the model ever
+    # sees it removes the ambiguity structurally instead of hoping NLLB drops it.
+    assert _resolve_plural_markers('73 case(s) recorded') == '73 cases recorded'
+    assert _resolve_plural_markers('1 case(s) recorded') == '1 case recorded'
+    assert _resolve_plural_markers('0 case(s) recorded') == '0 cases recorded'
+    assert _resolve_plural_markers("own account(s)") == 'own accounts'
+    assert _resolve_plural_markers('12,345 record(s)') == '12,345 records'
+    assert 'case(s)' not in _resolve_plural_markers('7 case(s) found, 1 case(s) open')
 
 
 def test_translate_sends_the_backend_a_placeholder_not_the_raw_identifier(monkeypatch):

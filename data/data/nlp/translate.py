@@ -157,6 +157,28 @@ def _restore_spans(text: str, mapping: dict[str, str]) -> str:
         text = text.replace(placeholder, original)
     return text
 
+
+# Synthesis writes count-agnostic "case(s)"/"record(s)" markers throughout
+# orchestrator.py rather than branching every f-string on singular/plural. English
+# readers parse that convention fine; NLLB does not — it translates the noun and
+# copies the literal "(s)" through untouched (observed live: "73 ಪ್ರಕರಣಗಳು(s)"). Since
+# the actual count is already known wherever the marker was written, resolving it to
+# real English singular/plural BEFORE translation removes the ambiguity structurally,
+# the same way _protect_spans removes identifiers and district names from the model's
+# job rather than hoping it renders them right.
+_PLURAL_MARKER = re.compile(r"(?:(\d[\d,]*)\s+)?\b(\w+)\(s\)")
+
+
+def _resolve_plural_markers(text: str) -> str:
+    def repl(m: re.Match) -> str:
+        num, word = m.group(1), m.group(2)
+        if num is not None and int(num.replace(",", "")) == 1:
+            return f"{num} {word}"
+        plural = word if word.endswith("s") else word + "s"
+        return f"{num} {plural}" if num is not None else plural
+
+    return _PLURAL_MARKER.sub(repl, text)
+
 # NLLB uses FLORES-200 codes; IndicTrans2 uses the same script-tagged convention.
 _FLORES = {"en": "eng_Latn", "kn": "kan_Knda"}
 
@@ -179,7 +201,7 @@ def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise TranslationUnavailable(f"unsupported language pair {src}->{tgt}")
 
-    protected, mapping = _protect_spans(text, src)
+    protected, mapping = _protect_spans(_resolve_plural_markers(text), src)
     backend = _load()
     result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
     return _restore_spans(result, mapping) if mapping else result
