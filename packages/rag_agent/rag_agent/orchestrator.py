@@ -10,7 +10,9 @@ says so. Nothing downstream can invent an answer, because synthesis is only ever
 handed the evidence list — it has no other input.
 """
 import re
+import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Optional
 
@@ -75,13 +77,45 @@ _SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
 }
 
 
+# A live view of the trace, for a caller that wants to show an officer what is
+# happening WHILE the turn runs rather than replaying it afterwards.
+#
+# apps/api streamed the trace only after run_investigation() returned, so every frame
+# arrived at once at the end. On a deterministic turn that is invisible (the whole turn
+# is under a second); on a turn that consults QuickML it meant 20-35s of spinner with
+# nothing behind it, which is the one case where showing progress actually matters.
+# The console has always handled incremental frames — the server simply never sent
+# any early.
+#
+# Thread-local rather than a field on the state: LangGraph owns the state objects
+# between nodes and may hand each node a reconstructed copy, so an object the caller
+# holds a reference to is not guaranteed to be the one being appended to. One
+# investigation runs start-to-finish on one worker thread, which makes a thread-local
+# sink exactly the right scope and costs the engine no plumbing.
+_LIVE_TRACE = threading.local()
+
+
+@contextmanager
+def live_trace(sink: list):
+    """Mirror every trace entry into `sink` as it is produced, for this thread."""
+    _LIVE_TRACE.sink = sink
+    try:
+        yield
+    finally:
+        _LIVE_TRACE.sink = None
+
+
 def _trace(state: InvestigationState, step: str, detail: str,
            t0: float, confidence: float | None = None) -> None:
-    state.agent_trace.append(AgentTraceEntry(
+    entry = AgentTraceEntry(
         step=step, detail=detail,
         duration_ms=int((time.perf_counter() - t0) * 1000),
         confidence=confidence,
-    ))
+    )
+    state.agent_trace.append(entry)
+    sink = getattr(_LIVE_TRACE, "sink", None)
+    if sink is not None:
+        sink.append(entry)
 
 
 # --- nodes -------------------------------------------------------------------
@@ -154,6 +188,14 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
         language=state.language,
         focus=state.active_entities,
         prior_turn=prior_turn,
+        # Emitted BEFORE the model round trip, not after it, so a streaming caller can
+        # tell the officer what the 20-35s wait is for while they are waiting. Its own
+        # duration is therefore ~0 by construction; the elapsed time shows up on the
+        # "Orchestrator (semantic)" entry that follows it.
+        on_model_call=lambda: _trace(
+            state, "Semantic model (QuickML)",
+            "No familiar phrasing matched — asking the model to interpret this "
+            "question. This is the slow step.", time.perf_counter()),
     )
 
     # Map to current state contract (no downstream changes needed)
@@ -2045,10 +2087,21 @@ def build_graph():
 _GRAPH = None
 
 
-def run_investigation(state: InvestigationState) -> InvestigationState:
-    """The single entrypoint apps/api calls, once per turn."""
+def run_investigation(state: InvestigationState,
+                      trace_sink: Optional[list] = None) -> InvestigationState:
+    """The single entrypoint apps/api calls, once per turn.
+
+    `trace_sink`, when given, receives each AgentTraceEntry as it is produced, so a
+    streaming caller can show progress during the turn instead of after it. It is a
+    view, not a substitute: the returned state's `agent_trace` is still the complete,
+    authoritative record.
+    """
     global _GRAPH
     if _GRAPH is None:
         _GRAPH = build_graph()
-    result = _GRAPH.invoke(state)
+    if trace_sink is None:
+        result = _GRAPH.invoke(state)
+    else:
+        with live_trace(trace_sink):
+            result = _GRAPH.invoke(state)
     return InvestigationState.model_validate(result)

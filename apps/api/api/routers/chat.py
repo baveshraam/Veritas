@@ -74,19 +74,46 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
         loop = asyncio.get_running_loop()
         queue: asyncio.Queue = asyncio.Queue()
 
+        # Filled by the engine thread as each step completes (orchestrator.live_trace).
+        # Plain list: append and len are atomic under the GIL, and only this coroutine
+        # reads it, so nothing here needs a lock.
+        live: list = []
+
         def work():
             # Hand the exception back rather than letting it die in the worker thread.
             # If work() raises, put_nowait never runs, `await queue.get()` blocks
             # forever, and the officer watches keep-alive pings until the connection
             # times out — a silent hang is the worst way for an engine bug to surface.
             try:
-                outcome = run_investigation(state)
+                outcome = run_investigation(state, trace_sink=live)
             except Exception as exc:              # noqa: BLE001 — reported, not swallowed
                 outcome = exc
             loop.call_soon_threadsafe(queue.put_nowait, outcome)
 
         loop.run_in_executor(None, work)
-        outcome = await queue.get()
+
+        # Stream each step as the engine finishes it, rather than replaying the whole
+        # trace once the turn is over. The difference is invisible on a deterministic
+        # turn (the whole thing is under a second) and is the entire experience on one
+        # that consults QuickML: 20-35s of spinner with nothing behind it becomes a
+        # trace that fills in, including the "this is the slow step" frame the
+        # interpreter emits BEFORE the model call rather than after it.
+        sent = 0
+
+        def _frame(entry) -> dict:
+            return {"data": json.dumps({
+                "type": "trace", "step": entry.step, "detail": entry.detail,
+                "duration_ms": entry.duration_ms, "confidence": entry.confidence,
+            })}
+
+        while True:
+            try:
+                outcome = await asyncio.wait_for(queue.get(), timeout=0.2)
+                break
+            except asyncio.TimeoutError:
+                while sent < len(live):
+                    yield _frame(live[sent])
+                    sent += 1
 
         if isinstance(outcome, Exception):
             log.exception("investigation failed", exc_info=outcome)
@@ -99,7 +126,12 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
             return
         result: InvestigationState = outcome
 
-        for entry in result.agent_trace:
+        # Whatever the engine produced after the last poll — usually the final couple of
+        # steps, and the whole trace on a turn fast enough to finish inside one 200ms
+        # tick. `result.agent_trace` is the authoritative record and is in the same
+        # order as the live sink, so resuming at `sent` can neither duplicate a frame
+        # nor drop one.
+        for entry in result.agent_trace[sent:]:
             yield {"data": json.dumps({
                 "type": "trace", "step": entry.step, "detail": entry.detail,
                 "duration_ms": entry.duration_ms, "confidence": entry.confidence,

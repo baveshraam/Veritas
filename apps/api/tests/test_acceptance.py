@@ -264,3 +264,47 @@ def test_what_an_officer_can_list_is_what_they_can_open(client, officers):
     h = _auth(client, officers["IO"]["badge_no"])
     for c in client.get("/cases", headers=h).json()["cases"][:10]:
         assert client.get(f"/fir/{c['fir_id']}", headers=h).status_code == 200
+
+
+def test_the_reasoning_trace_streams_during_the_turn_not_after_it(client, officers):
+    """The officer must be able to see progress WHILE a slow turn runs.
+
+    A previous pass verified this by reading `apps/web` — which does handle incremental
+    frames — and concluded the whole path streamed. It did not: the API ran the engine
+    to completion and only then replayed the trace, so a turn that consulted QuickML
+    showed 20-35s of spinner with nothing behind it. Reading the consumer proves nothing
+    about the producer, so this asserts on the producer.
+
+    TestClient buffers the response, so arrival *timing* is not observable here; what is
+    observable — and what the streaming change could actually break — is that the live
+    frames and the tail frames together reproduce the engine's own record exactly, with
+    nothing duplicated at the handover and nothing dropped.
+    """
+    from rag_agent import orchestrator
+    from rag_agent.state import InvestigationState
+
+    # 1. The engine really does publish each step as it records it.
+    sink: list = []
+    st = InvestigationState(session_id="s", officer_id="1", officer_role="IG")
+    with orchestrator.live_trace(sink):
+        orchestrator._trace(st, "Probe A", "first", 0.0)
+        orchestrator._trace(st, "Probe B", "second", 0.0)
+    orchestrator._trace(st, "Probe C", "after the context closed", 0.0)
+
+    assert [e.step for e in sink] == ["Probe A", "Probe B"], (
+        "live_trace must receive every entry recorded inside it, and only those")
+    assert [e.step for e in st.agent_trace] == ["Probe A", "Probe B", "Probe C"], (
+        "the state's own trace must stay the complete, authoritative record")
+
+    # 2. End to end, the frames on the wire are the engine's record — in order, once
+    #    each. A handover bug shows up here as a repeated or missing step.
+    h = _auth(client, officers["IG"]["badge_no"])
+    cases = client.get("/cases", headers=h).json()["cases"]
+    result = _chat(client, h, f"What is the status of FIR {cases[0]['fir_number']}?",
+                   "stream-1")
+
+    steps = [t["step"] for t in result["traces"]]
+    assert steps, "no trace frames reached the client at all"
+    assert "Evidence Synthesis" in steps, f"the turn did not run to completion: {steps}"
+    assert len(steps) == len(dict.fromkeys(steps)), (
+        f"a trace step reached the client more than once: {steps}")

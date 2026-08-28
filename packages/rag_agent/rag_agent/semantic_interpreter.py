@@ -10,7 +10,7 @@ an implementation compatibility layer, not something removed.
 """
 import re
 from datetime import date
-from typing import Any, Literal, Optional
+from typing import Any, Callable, Literal, Optional
 
 from data import SessionFocus
 from data.models import ConversationTurn
@@ -81,6 +81,7 @@ def interpret(
     language: str,
     focus: SessionFocus,
     prior_turn: Optional[ConversationTurn] = None,
+    on_model_call: Optional[Callable[[], None]] = None,
 ) -> SemanticRequest:
     """Interpret a query as a structured semantic request.
 
@@ -104,13 +105,16 @@ def interpret(
         return det
     if not llm.available():
         return det
+    # The one call in a turn that can take 20-35s. `on_model_call` fires BEFORE it, so
+    # the officer is told what is happening while it happens rather than after it
+    # finishes — an unexplained half-minute spinner is indistinguishable from a hang.
+    if on_model_call is not None:
+        on_model_call()
     try:
         llm_result = _interpret_llm(query, language, focus, prior_turn)
     except (LLMUnavailable, ValueError, KeyError):
         return det
     return llm_result if llm_result.confidence >= det.confidence else det
-
-    return _interpret_deterministic(query, language, focus, prior_turn)
 
 
 # Model-facing constraints, kept intentionally narrower than SemanticRequest's own
