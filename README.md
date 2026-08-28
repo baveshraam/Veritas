@@ -17,7 +17,7 @@ Veritas says exactly that instead of inventing one.
 | **Live API** | `https://veritas-api-50043864344.development.catalystappsail.in` — deployed, enabled, serving |
 | **Live console** | `https://veritas-60077763394.development.catalystserverless.in/app/index.html` |
 | **Identity resolution** | **F1 0.989** (precision 0.997, recall 0.981) against the generator's answer key |
-| **Test suite** | **189 passing**, no database or Docker required — `python -m pytest` |
+| **Test suite** | **606 passing**, no database or Docker required — `python -m pytest` |
 | **Live footprint** | 10,000 FIRs · ~105k rows · graph of 16,918 nodes / 87,120 edges · 13,835 indexed documents |
 | **Platform** | Zoho Catalyst — one AppSail container, Data Store, File Store, Cache, QuickML LLM, Cron |
 
@@ -92,12 +92,15 @@ Every one of these runs today, against live data, with citations.
 | Question | What Veritas does |
 |---|---|
 | *"Does Ramesh Gowda have prior cases?"* | Reconstructs his identity across cases the database never linked, and answers with the specific case numbers — even when his name is spelled three different ways. |
-| *"Show me crime hotspots in Kolar."* | A kernel-density heat map computed from real incident coordinates, with DBSCAN cluster cores — rendered on a self-drawn dark map so FIR coordinates never leave the network in a tile request. |
+| *"Show me crime hotspots in Kolar."* | A kernel-density heat map computed from real incident coordinates, with DBSCAN cluster cores, rendered on a real MapLibre basemap (OpenFreeMap, OSM-derived) — only a tile z/x/y for the viewport crosses the network, never an FIR's exact coordinates. |
 | *"Who does he operate with?"* | A co-offending network derived from the records; community detection surfaces organised groups — labelled honestly as *derived communities*, because the records name no gangs, so neither do we. |
 | *"Trace the money from this account."* | Follows transactions through the financial layer, renders the flow as a Sankey diagram, and flags laundering with both a court-auditable rule detector and a graph neural network. |
 | *"Will burglaries rise next month in this district?"* | A statistical forecast with uncertainty bands, reconciled so a district's forecast always equals the sum of its stations' — optimal, not merely close. |
 | *"ಕೊಲಾರದಲ್ಲಿ ನಿನ್ನೆ ಏನಾಯಿತು?"* | Kannada in, Kannada out. Speech-to-text and translation run **inside our own container**; police text never leaves the network to reach a third-party API. |
 | *"Give me everything on this open case."* | The Investigation Copilot: a chronological timeline, the five most similar past cases and how they resolved, ranked investigative leads, and a paste-ready case-diary paragraph. |
+| *"Pin this to the case board."* / *"What have we established so far?"* | A persistent, editable **Investigation Board** per case — pinned evidence, derived findings, leads with status, notes — that survives a refresh, a new chat session, and a new officer's login. |
+| *"Show me events involving both of them."* / *"What happened before this?"* | A **cross-entity timeline**: one chronological list spanning a case's own dates, its accused's arrests, their OTHER cases, and money through any account they own — each event traced to a real record, never inferred from two events merely being close in time. |
+| *"Only these?"* / *"The second one."* / *"What about her?"* | Result-set follow-ups, ordinal/positional reference, pronouns and mid-conversation corrections resolve against what the conversation already established, not a fresh unrelated search. |
 
 Every answer carries numbered citation chips that open the underlying record in a floating
 evidence drawer. An expandable **Reasoning Trace** panel shows *how* the answer was assembled,
@@ -319,15 +322,18 @@ the part a government panel will actually poke at, run on every single commit.
 - **The full data foundation is seeded**: the organizers' 27-table ER verbatim plus 10 `vx_`
   tables of ours, ~105k rows, on real ground truth (NCRB Karnataka crime statistics, Census
   2011 district socioeconomics, real Karnataka GIS boundaries).
-- **Kannada and English**, voice input, PDF export, and live alerts over WebSocket.
-- **189 tests green** locally, with no stack required.
+- **Kannada and English**, voice input, and live district-anomaly alerts over SSE.
+- **PDF export is BLOCKED, honestly, not silently**: SmartBrowz's API layer requires a genuine
+  Catalyst User Management identity this environment cannot drive interactively; the console
+  says so and falls back to a printable HTML copy rather than pretending to produce a PDF.
+- **606 tests green** locally, with no stack required.
 
 ---
 
 ## Run it locally
 
 ```bash
-python -m pytest                                      # 189 tests, no stack needed
+python -m pytest                                      # 606 tests, no stack needed
 cd data && python -m data.generator.run --cases 10000 # generate a synthetic dataset
 cd apps/api && uvicorn api.main:app --reload          # the API (SQLite backend locally)
 cd apps/web && npm run dev                            # the Command Console
@@ -343,9 +349,17 @@ rather than pretending.
 
 ```bash
 CATALYST_ACCESS_TOKEN=$(node scripts/catalyst-token.js) python -m data.provision   # 37 tables, idempotent
-docker build --platform linux/amd64 -t baveshraam/veritas-api:latest . && docker push baveshraam/veritas-api:latest
-# then trigger the GitHub Actions relay (.github/workflows/relay-deploy.yml) to upload + deploy
-catalyst deploy --only client                                                       # the console
+
+# API: source-only change needs no local Docker. A signed upload URL relayed through
+# GitHub Actions (.github/workflows/relay-deploy.yml) builds Dockerfile.overlay on the
+# runner — the published base plus this commit's source — and uploads it datacenter-
+# to-datacenter, since a residential uplink can't beat the URL's 30-minute TTL.
+#   1. GET .../appsail/get-signature -> write the signed URL to .github/relay-upload.url,
+#      commit, push (triggers the relay-deploy workflow)
+#   2. PUT .../appsail/upsert with the uploaded object's key (the local callback that
+#      turns the upload into a running deployment)
+
+bash scripts/deploy-console.sh                                                      # the console
 ```
 
 ---

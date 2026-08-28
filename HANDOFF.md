@@ -23,7 +23,7 @@ person" is *inferred* (Fellegi-Sunter record linkage, F1 0.989), not read off th
 ## Get it running locally
 
 ```bash
-python -m pytest                                     # 189 tests, no DB/Docker needed
+python -m pytest                                     # 606 tests, no DB/Docker needed
 cd data && python -m data.generator.run --cases 10000 # synthetic FIRs, sqlite backend
 cd apps/api && uvicorn api.main:app --reload
 cd apps/web && npm run dev
@@ -39,7 +39,7 @@ exact same ZCQL strings the live Data Store accepts, so this is a real dev loop,
 - Deploying is *not* `catalyst deploy` for the API — the image has to be patched inside a
   running container and relayed through GitHub Actions because a home uplink can't beat the
   signed-upload URL's 30-minute TTL. Full recipe in [CONTEXT.md § Deploy pipeline](CONTEXT.md).
-  Don't attempt a deploy without reading that section first — steps 60–66 of CONTEXT.md list
+  Don't attempt a deploy without reading that section first — CONTEXT.md's "WHAT FAILED" section lists
   approaches that were already tried and failed.
 
 ## Repo map

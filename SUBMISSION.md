@@ -15,7 +15,7 @@ The organizers' ER has no person: an Accused row belongs to one case, so "does h
 
 Retrieval is HippoRAG (Personalized PageRank over a graph built from the records) with Think-on-Graph for deep multi-hop questions, and a CRAG evaluator that refuses when the records do not support an answer rather than returning the nearest case. Access control is applied at query-construction time; the audit log is a SHA-256 hash chain re-verified by Cron.
 
-On Catalyst: AppSail, Data Store (37 tables, 10,000 FIRs), File Store, Cache, QuickML GLM-4.7-Flash, Cron, Web Client Hosting. 200 tests green.
+On Catalyst: AppSail, Data Store (37 tables, 10,000 FIRs), File Store, Cache, QuickML GLM-4.7-Flash, Cron, Web Client Hosting. 606 tests green.
 
 ## 3. GitHub public repository
 https://github.com/baveshraam/Veritas
@@ -39,7 +39,8 @@ Suggested run of show, in this order — it is the argument the deck makes, demo
 3. "Summarise the criminal history of <accused>" — two spellings, one resolved person, priors.
 4. Open the network view — Louvain communities over co-offending.
 5. Kannada question by voice — "ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?"
-6. Sign in as IO, repeat a district-wide question — 81 cases / 1 station instead of 500 / 76.
+6. Sign in as IO, repeat a district-wide question — 81 cases / 1 station instead of the
+   statewide 10,000 a DSP+ rank sees.
 7. Expand the reasoning trace, and click a citation to draw the evidence thread.
 
 ## 6. Before submitting

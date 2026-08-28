@@ -76,8 +76,9 @@ evidence*, and it's the thing a team writing plain SQL against the schema cannot
 "Kernel density and DBSCAN over six hundred incidents, with the scatter underneath — because
 a polygon with no points beneath it is an assertion, not a hotspot.
 
-And the basemap is drawn by us, not fetched. No FIR coordinate ever leaves the network inside
-a request to a third-party tile server."
+That's a real basemap under it — real roads, real terrain, OpenStreetMap data through
+OpenFreeMap, no API key, no per-request quota. Only a tile coordinate for the current
+viewport crosses the network — never an FIR's exact coordinates."
 
 ---
 
@@ -146,7 +147,7 @@ before the language model is called, and the answer is translated back."
 "Last thing. Same console, same question, two ranks.
 
 The Investigating Officer sees eighty-one cases, from one station. The Inspector General sees
-five hundred, across seventy-six.
+the full ten thousand, statewide.
 
 And that isn't a filter applied to the answer afterwards. You cannot un-traverse a graph, and
 you cannot reliably redact a name out of generated prose — so the officer's scope is a

@@ -84,7 +84,18 @@ export default function Copilot({
           )}
           {tab === "brief" && error && <div className="msg-a refusal">{error}</div>}
           {tab === "brief" && !brief && !error && (
-            <div className="spinner" style={{ margin: "20px auto" }} />
+            <div className="dim" style={{ textAlign: "center", padding: "24px 16px" }}>
+              <div className="spinner" style={{ margin: "0 auto 10px" }} />
+              {/* The brief's diary paragraph is the one Copilot output that calls the
+                  reasoning model unconditionally. Measured live: the first such call on
+                  a container pays real cold-inference latency (~30s) that a warmed
+                  OAuth token alone doesn't remove — spending a real model call just to
+                  pre-pay that cost would trade money for speed the cost directive rules
+                  out, so the honest fix is telling the officer what is actually
+                  happening instead of a bare spinner with no explanation. */}
+              Generating the case briefing — this calls the reasoning model for the
+              diary paragraph and can take up to 30 seconds on a cold start.
+            </div>
           )}
           {tab === "brief" && brief && (
             <>
