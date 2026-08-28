@@ -11,6 +11,13 @@ export const SEV = {
 } as const;
 
 export const ACCENT = "#d8a657";
+// A cool blue, deliberately outside the warm green->amber->red severity ramp: an
+// individual case point has to read as a distinct THING from a hotspot polygon
+// (which is drawn in the severity ramp) even where the two overlap, and it has to
+// hold contrast against OpenFreeMap's light "liberty" basemap — cream cropland,
+// green forest, blue water — which amber (too close to the ramp's own mid-tone)
+// did not (UI/map hardening pass, live-observed).
+export const MAP_POINT = "#2f6fed";
 export const GRID = "rgba(255,255,255,0.07)";
 export const TEXT_DIM = "#9fb1be";
 export const TEXT_FAINT = "#63757f";

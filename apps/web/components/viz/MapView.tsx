@@ -2,7 +2,7 @@
 import { useEffect, useRef } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ramp, rgba, ACCENT } from "./palette";
+import { ramp, rgba, MAP_POINT } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
 type Point = { lat: number; lng: number; fir_id: string };
@@ -71,9 +71,20 @@ const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/liberty";
  * own overlays (FIR points, hotspot density, district reference labels, legend, scale)
  * are unchanged — only the ground they sit on is now real geography.
  */
-export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_points: Point[] } }) {
+export default function MapView({
+  data, onSelect, activeEvidenceId,
+}: {
+  data: { polygons: Hotspot[]; fir_points: Point[] };
+  onSelect?: (id: string) => void;
+  activeEvidenceId?: string | null;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
+  // Latest callback/selection without re-registering the click handler on every
+  // render (MapLibre's `on("click", ...)` closure is set up once, in the draw
+  // effect keyed on `data` — see below).
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
 
   useEffect(() => {
     if (!ref.current || map.current) return;
@@ -138,6 +149,48 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
           .setLngLat([d.lng, d.lat]).addTo(m);
       }
     };
+    // Interaction handlers registered ONCE here, not inside the per-`data` draw
+    // effect below: MapLibre's `on(event, layerId, handler)` is layer-ID-scoped and
+    // simply doesn't fire until a layer with that ID exists — it does NOT require
+    // the layer to exist at registration time. Registering inside draw() (which
+    // re-runs on every new query result, removing and re-adding the "fir-pts"/
+    // "clusters" layers each time) would stack a new duplicate handler on every
+    // redraw with nothing ever unregistering the old ones.
+    const addInteractions = () => {
+      const m = map.current;
+      if (!m) return;
+      const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10 });
+      const showPopup = (e: maplibregl.MapLayerMouseEvent, text: string) => {
+        m.getCanvas().style.cursor = "pointer";
+        popup.setLngLat(e.lngLat).setText(text).addTo(m);
+      };
+      const hidePopup = () => { m.getCanvas().style.cursor = ""; popup.remove(); };
+
+      m.on("mouseenter", "fir-pts", (e) =>
+        showPopup(e, `FIR ${e.features?.[0]?.properties?.fir_id} — click to select`));
+      m.on("mouseleave", "fir-pts", hidePopup);
+      m.on("click", "fir-pts", (e) => {
+        const fid = e.features?.[0]?.properties?.fir_id;
+        if (fid != null) onSelectRef.current?.(`fir:${fid}`);
+      });
+
+      m.on("mouseenter", "clusters", (e) => {
+        const n = e.features?.[0]?.properties?.point_count;
+        showPopup(e, `${n} case(s) here — zoom in to see them individually`);
+      });
+      m.on("mouseleave", "clusters", hidePopup);
+      m.on("click", "clusters", (e) => {
+        const f = e.features?.[0];
+        const clusterId = f?.properties?.cluster_id;
+        const src = m.getSource("firs") as maplibregl.GeoJSONSource | undefined;
+        if (clusterId == null || !src?.getClusterExpansionZoom) return;
+        src.getClusterExpansionZoom(clusterId).then((zoom) => {
+          m.easeTo({ center: (f!.geometry as any).coordinates, zoom });
+        });
+      });
+    };
+    map.current.isStyleLoaded() ? addInteractions() : map.current.once("load", addInteractions);
+
     map.current.isStyleLoaded() ? addDistricts() : map.current.once("load", addDistricts);
 
     return () => { map.current?.remove(); map.current = null; };
@@ -148,7 +201,7 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
     if (!m) return;
 
     const draw = () => {
-      for (const id of ["hot-fill", "hot-line", "fir-pts"]) {
+      for (const id of ["hot-fill", "hot-line", "clusters", "cluster-count", "fir-pts", "fir-pts-selected"]) {
         if (m.getLayer(id)) m.removeLayer(id);
       }
       for (const id of ["hotspots", "firs"]) {
@@ -183,24 +236,73 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
 
       const pts = data.fir_points ?? [];
       if (pts.length) {
+        // Clustering (native MapLibre/GL-JS GeoJSON source option, not a new
+        // dependency): the failure mode this fixes is a dense area — dozens of FIRs
+        // in one taluk — rendering as one indistinct smear of overlapping 3px dots
+        // with no way to tell "12 cases here" from "40". Below `clusterMaxZoom` the
+        // source aggregates nearby points into a cluster feature carrying
+        // `point_count`; zooming in (or the fitBounds below) breaks clusters apart
+        // into real, individually clickable points once they're far enough apart to
+        // read as distinct.
         m.addSource("firs", {
           type: "geojson",
+          cluster: true,
+          clusterMaxZoom: 12,
+          clusterRadius: 44,
           data: {
             type: "FeatureCollection",
             features: pts.map((p) => ({
-              type: "Feature" as const, properties: {},
+              type: "Feature" as const, properties: { fir_id: p.fir_id },
               geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
             })),
           },
         });
         m.addLayer({
-          id: "fir-pts", type: "circle", source: "firs",
+          id: "clusters", type: "circle", source: "firs",
+          filter: ["has", "point_count"],
           paint: {
-            "circle-radius": 3,
-            "circle-color": ACCENT,
-            "circle-opacity": 0.75,
-            "circle-stroke-width": 0.5,
-            "circle-stroke-color": rgba("#ffffff", 0.35),
+            // Radius steps with count so a 200-case cluster visibly outweighs a
+            // 5-case one — the whole point of aggregating is to keep density
+            // legible, not to hide it behind a uniform blob.
+            "circle-radius": ["step", ["get", "point_count"], 12, 10, 16, 50, 20, 200, 26],
+            "circle-color": MAP_POINT,
+            "circle-opacity": 0.82,
+            "circle-stroke-width": 2,
+            "circle-stroke-color": rgba("#ffffff", 0.85),
+          },
+        });
+        m.addLayer({
+          id: "cluster-count", type: "symbol", source: "firs",
+          filter: ["has", "point_count"],
+          layout: {
+            "text-field": ["get", "point_count_abbreviated"],
+            "text-size": 11, "text-font": ["Noto Sans Bold"],
+          },
+          paint: { "text-color": "#ffffff" },
+        });
+        m.addLayer({
+          id: "fir-pts", type: "circle", source: "firs",
+          filter: ["!", ["has", "point_count"]],
+          paint: {
+            "circle-radius": 5,
+            "circle-color": MAP_POINT,
+            "circle-opacity": 0.9,
+            "circle-stroke-width": 1.5,
+            "circle-stroke-color": rgba("#ffffff", 0.85),
+          },
+        });
+        // The currently-selected FIR (from the Evidence rail, or a prior click on
+        // this same layer) gets its own ring on top — otherwise "which case is
+        // selected" has no answer on the map at all, unlike every other view. The
+        // filter is kept current by the separate `activeEvidenceId` effect below,
+        // not recomputed here, so selecting an item never re-triggers this whole
+        // redraw (and the fitBounds pan/zoom that comes with it).
+        m.addLayer({
+          id: "fir-pts-selected", type: "circle", source: "firs",
+          filter: ["==", ["get", "fir_id"], "__none__"],
+          paint: {
+            "circle-radius": 9, "circle-color": "rgba(0,0,0,0)",
+            "circle-stroke-width": 2.5, "circle-stroke-color": "#ffffff",
           },
         });
       }
@@ -227,13 +329,29 @@ export default function MapView({ data }: { data: { polygons: Hotspot[]; fir_poi
     m.isStyleLoaded() ? draw() : m.once("load", draw);
   }, [data]);
 
+  // Selection-ring update, deliberately separate from the draw effect above: this
+  // fires whenever the officer selects a citation (on the map or anywhere else
+  // that shares the same evidence rail), and must NOT re-run fitBounds — panning
+  // the map every time someone clicks an evidence card would fight whatever they
+  // were just looking at.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !m.getLayer("fir-pts-selected")) return;
+    const fid = activeEvidenceId?.startsWith("fir:") ? activeEvidenceId.slice(4) : "__none__";
+    m.setFilter("fir-pts-selected", ["==", ["get", "fir_id"], fid]);
+  }, [activeEvidenceId, data]);
+
   return (
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       <div ref={ref} style={{ height: "100%", width: "100%", borderRadius: 14 }} />
       <div className="map-legend">
         <div className="map-legend-row">
           <span className="map-legend-dot" />
-          <span>Individual case (FIR location)</span>
+          <span>Individual case (FIR location) — click to select</span>
+        </div>
+        <div className="map-legend-row">
+          <span className="map-legend-cluster">N</span>
+          <span>Several cases nearby — click to zoom in</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-ramp" />

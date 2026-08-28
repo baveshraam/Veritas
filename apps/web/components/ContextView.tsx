@@ -77,7 +77,9 @@ export default function ContextView({
               {kind === "network" && <NetworkView data={viz.data} />}
               {kind === "sankey" && <SankeyView data={viz.data} />}
               {kind === "trend" && <TrendView data={viz.data} />}
-              {kind === "map" && <MapView data={viz.data} />}
+              {kind === "map" && (
+                <MapView data={viz.data} activeEvidenceId={activeEvidence} onSelect={onSelectEvidence} />
+              )}
               {kind === "timeline" && (
                 <TimelineView data={viz.data} activeEvidenceId={activeEvidence}
                   onSelect={onSelectEvidence} onPin={onPinEvidence} />
