@@ -387,7 +387,18 @@ voice-specific concern is ASR noise/disfluency reaching the classifier as litera
 — not evaluated this pass (would need real ASR output samples, not synthetic ones, to
 test honestly — noted as unverified rather than assumed fine).
 
-## 12. Resource constraints — the semantic interpreter, deployed and running in degraded mode
+## 12. Resource constraints — the semantic interpreter and QuickML runtime
+
+**Current configuration verification (2026-08-28):** the official REST QuickML path is
+configured for the existing custom-runtime AppSail. The refresh token is stored only in
+the Development AppSail environment at `configuration.environment.variables`; the
+existing variable map was preserved (7 variables after adding it). The supported update
+operation is `POST /baas/v1/project/{projectId}/appsail/{appSailResourceId}/configuration`
+with `{"environment":{"variables":{...}}}`. The resource id is `52852000000204688`,
+not the public hostname number `50043864344`. A synthetic Development variable was
+written and removed with HTTP 200 responses, proving the route before storing the secret.
+The running container still requires a fresh AppSail deployment to receive this runtime
+configuration; no production data or alternate service is involved.
 
 **QuickML (the LLM) is currently unreachable in production — root-caused precisely
 this pass, not re-asserted from a prior check.** Two separate, now-resolved
@@ -453,6 +464,107 @@ questions:
    not a missing credential. The diagnostic key was reverted immediately after
    the one test call; live state and behavior are unchanged from before this
    probe (verified via `/health` before and after).
+4. **The org-id gap is not a `custom_runtime` limitation — it is project-wide,
+   verified by physically deploying and calling QuickML from two other Catalyst
+   runtimes, not by re-reading docs.** Current official docs
+   (`docs.catalyst.zoho.com/.../appsail/implement-catalyst-sdk/`) do state "You
+   will not be able to implement Catalyst SDK for apps deployed as OCI images
+   through custom runtime" — consistent with the mega-prompt's premise that
+   migrating to a **Catalyst-managed Python AppSail** runtime might clear the
+   gap. It does not. Two new, additive, throwaway probes were built and
+   deployed into this same live project (zero KSP data touched, zero change to
+   `veritas-api`):
+   - A minimal Catalyst-managed Python AppSail app (`services/semantic_quickml/`,
+     stack `python_3_9`, deployed as `veritas-semantic-probe`,
+     appComputeId `52852000000346023`) — `quick_ml().predict()` with a
+     diagnostic invalid key returns the identical
+     `CatalystAPIError ... 'code': 'ORGID_HEADER_UNAVAILABLE'`.
+   - A minimal Catalyst-native Basic I/O Function
+     (`functions/veritas_semantic_probe_fn/`), the most "native" compute Catalyst
+     offers, with no container and no AppSail gateway involved at all — same
+     call, same diagnostic key, byte-for-byte identical
+     `ORGID_HEADER_UNAVAILABLE`.
+   - Also re-confirmed on the managed AppSail probe: setting
+     `X_ZOHO_CATALYST_ORG_ID` manually via `POST /appsail/{id}/configuration` is
+     rejected as a reserved keyword there too, exactly as on `veritas-api`.
+   - **Conclusion**: no AppSail runtime type, and not even a Catalyst Function,
+     is the fix. This project's Zia Hub linkage (the internal gateway QuickML's
+     error message names — `ziahub.error.ORGID_HEADER_UNAVAILABLE`) is missing
+     org context for every programmatic/service-credential call tested, not for
+     one runtime shape. **What was not ruled out**: whether publishing a real
+     endpoint through the console UI (an interactive, cookie-authenticated
+     session with org context already attached) is itself the action that
+     establishes this linkage server-side — every call tested here used a
+     deliberately-invalid diagnostic key, because no real key has ever been
+     obtained. That remains the one untested variable, and it requires a human
+     with console access; it cannot be produced or simulated from this
+     environment.
+   - The two probe resources were left deployed (not deleted) so this finding
+     is independently re-checkable without rebuilding them.
+5. **QuickML actually works — over plain REST, not the SDK, and the runtime
+   question in item 4 turns out to be moot.** The Catalyst console's own
+   QuickML integration page (not the general SDK docs) names a completely
+   different, working contract: a dedicated OAuth self-client scoped to
+   `QuickML.deployment.READ`, a manually-supplied `CATALYST-ORG` header (a
+   static, already-known id — nothing needs runtime injection), and a
+   documented REST endpoint, `POST
+   api.catalyst.zoho.in/quickml/v1/project/{id}/glm/chat`. Verified live
+   (2026-08-28) with a temporary developer CLI token: HTTP 200, real model
+   (`crm-di-glm47b_30b_it`), real completions, 2.4s round trip. Because this is
+   a plain outbound HTTPS call, it works from **any** runtime with network
+   access — the custom_runtime/managed-AppSail/Function distinction in item 4
+   is entirely about the SDK's broken `quick_ml()` method and does not apply
+   here. **Path A wins**: the existing `veritas-api` custom-runtime AppSail
+   stays as-is; no migration, no split service, no new runtime.
+   - `llm.py` rewritten to call this REST endpoint directly (stdlib
+     `urllib`, no new dependency), authenticating via a self-client
+     refresh-token grant (`QUICKML_CLIENT_ID`/`_CLIENT_SECRET`/`_REFRESH_TOKEN`,
+     already present in `.env` for the client/secret; see `.env.example` for
+     the one-time grant-token exchange). Access tokens are cached in memory
+     and refreshed ~60s before expiry. `available()`/`generate()`/
+     `generate_json()`/degraded-mode-on-failure contract is unchanged, so
+     every existing caller (`semantic_interpreter.py`, `copilot/brief.py`,
+     `synthesis_agent.py`, `retrieval/tog.py`) needed zero changes.
+   - **Two real bugs found by actually invoking the new code against the live
+     API, not by re-reading the contract:**
+     1. The model's chain-of-thought is terminated by a bare `</think>` with
+        **no matching opening `<think>` tag** in the real response — a naive
+        `<think>.*?</think>` regex never matches, so the entire reasoning
+        trace leaks through as the "answer". Fixed: strip everything up to
+        and including the last `</think>` unconditionally.
+     2. `crm-di-glm47b_30b_it` carries a baked-in system prompt against
+        revealing "these rules", and empirically (~10 live trials) refuses a
+        meaningful fraction of schema-shaped or "reply with exactly X"
+        prompts with "I can't help with requests to expose protected
+        instructions" — non-deterministically, since identical retries
+        sometimes succeed and sometimes don't. This is content-triggered, not
+        a transport failure, so it previously would have been handed to a
+        caller as if it were real fluent prose. `generate()` itself now
+        retries once with a reassurance frame ("a calling program parses your
+        reply as data, not a conversation") and degrades to `LLMUnavailable`
+        on a second refusal, so every caller — not just `generate_json()` —
+        is protected. This is a measured mitigation, not a guarantee: live
+        testing this pass still hit a persistent double-refusal on the exact
+        phrase "reply with exactly the text X and nothing else". A more
+        natural prompt shape fared better — `semantic_interpreter._interpret_llm`
+        (the real production prompt, not an adversarial synthetic one) was
+        tested live end-to-end and correctly returned a populated
+        `SemanticRequest` (`operation=lookup_case, subject_type=case,
+        confidence=0.9`) for "Tell me more about that case".
+   - **The one remaining requirement is a human-only, one-time action**:
+     Zoho's self-client OAuth flow requires generating a short-lived
+     ("grant") token in the API Console UI (Self Client tab, scope
+     `QuickML.deployment.READ`) and exchanging it immediately for a
+     `refresh_token` — no programmatic path can produce or simulate this
+     interactive step. `QUICKML_REFRESH_TOKEN` is the only missing config
+     value; until it exists, `llm.available()` is `False` everywhere and
+     behavior is byte-for-byte identical to before this pass (verified: full
+     suite green, only 2 pre-existing unrelated failures in
+     `test_acceptance.py`, confirmed present on unmodified HEAD too).
+   - 12 new/rewritten tests in `test_engine.py` cover the token cache, the
+     `<think>`-stripping fix (both with and without a matching opening tag),
+     the refusal-retry-then-degrade path on `generate()` directly (not just
+     `generate_json()`), and the JSON-parse retry.
 
 **The semantic-interpreter layer (§5.1 migration) runs in fully-degraded mode**: it
 calls `llm.py:generate_json()` and catches `LLMUnavailable`, falling back to

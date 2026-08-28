@@ -71,9 +71,10 @@ def interpret(
     intents.classify() on any LLM failure. Both paths produce identical
     SemanticRequest shape.
     """
-    # Try LLM path if available — currently always fails (QuickML unreachable)
-    # so this always falls through to deterministic path. When QUICKML_ENDPOINT_KEY
-    # is obtained, this path activates with no further code change.
+    # Try LLM path if available — falls through to the deterministic path whenever
+    # QuickML is unconfigured, cooling down, or fails (see llm.py: available()/
+    # LLMUnavailable). Activates with no further code change once QUICKML_REFRESH_TOKEN
+    # (the one human-only setup step — see llm.py module docstring) is set.
     try:
         return _interpret_llm(query, language, focus, prior_turn)
     except (LLMUnavailable, ValueError, KeyError):
@@ -83,19 +84,102 @@ def interpret(
     return _interpret_deterministic(query, language, focus, prior_turn)
 
 
+# Model-facing constraints, kept intentionally narrower than SemanticRequest's own
+# type hints: reference_kind values like "exhaustiveness_check"/"exploration"/
+# "constraint_change" are structural (only ever produced by the shape-matching
+# patterns above, against the PRIOR turn's own recorded state) — nothing about a
+# fresh utterance licenses the model to invent one. exploration_direction is a
+# genuinely model-detectable signal ("go deeper"/"show more"), so it stays.
+_LLM_SUBJECT_TYPES = {"person", "case", "location", "account", "none"}
+_LLM_REFERENCE_KINDS = {"explicit", "pronoun", "positional", "implicit_from_focus"}
+_LLM_EXPLORATION_DIRECTIONS = {"deeper", "wider", "more_samples", None}
+
+
+def _validate_llm_result(result_json: dict) -> dict:
+    """Schema + allowlist + argument validation on the model's raw JSON, before any of
+    it is trusted to build a SemanticRequest. Raises ValueError on anything invalid —
+    interpret()'s own try/except already treats that as "fall back to deterministic",
+    so an invalid model output degrades exactly like an unreachable model, never a
+    silently-misrouted turn.
+
+    What this deliberately does NOT do: read a subject_id from the model. The model
+    only ever supplies subject_text (how the officer named something); resolving that
+    to a real id is this module's own job (sql_agent.person_by_name, below), grounded
+    in the actual record layer. A model output has no field this validator would ever
+    accept as an identifier, which is the structural version of "the model cannot
+    invent entities" rather than a rule enforced by convention.
+    """
+    if not isinstance(result_json, dict):
+        raise ValueError(f"LLM result is not an object: {type(result_json).__name__}")
+
+    operation = result_json.get("operation")
+    if not isinstance(operation, str) or not operation.strip():
+        raise ValueError("LLM result missing a string 'operation'")
+    operation = operation.strip().upper()
+    if operation not in intents.ALL_OPERATIONS:
+        raise ValueError(f"LLM returned an operation outside the allowlist: {operation!r}")
+
+    subject_type = result_json.get("subject_type", "none")
+    if subject_type not in _LLM_SUBJECT_TYPES:
+        raise ValueError(f"LLM returned an invalid subject_type: {subject_type!r}")
+
+    reference_kind = result_json.get("reference_kind", "implicit_from_focus")
+    if reference_kind not in _LLM_REFERENCE_KINDS:
+        raise ValueError(f"LLM returned an invalid reference_kind: {reference_kind!r}")
+
+    subject_text = result_json.get("subject_text")
+    if subject_text is not None and not isinstance(subject_text, str):
+        raise ValueError("LLM result's subject_text must be a string or null")
+
+    constraints = result_json.get("constraints", {})
+    if not isinstance(constraints, dict):
+        raise ValueError("LLM result's constraints must be an object")
+
+    comparison_entities = result_json.get("comparison_entities", [])
+    if not isinstance(comparison_entities, list) or not all(
+            isinstance(x, str) for x in comparison_entities):
+        raise ValueError("LLM result's comparison_entities must be a list of strings")
+
+    exploration_direction = result_json.get("exploration_direction")
+    if exploration_direction not in _LLM_EXPLORATION_DIRECTIONS:
+        raise ValueError(
+            f"LLM returned an invalid exploration_direction: {exploration_direction!r}")
+
+    clarification_response = result_json.get("clarification_response")
+    if clarification_response is not None and not isinstance(clarification_response, str):
+        raise ValueError("LLM result's clarification_response must be a string or null")
+
+    confidence = result_json.get("confidence", 0.5)
+    if not isinstance(confidence, (int, float)) or isinstance(confidence, bool):
+        raise ValueError("LLM result's confidence must be a number")
+    confidence = max(0.0, min(1.0, float(confidence)))  # miscalibration, not unsafe — clamp
+
+    return {
+        "operation": operation, "subject_type": subject_type, "subject_text": subject_text,
+        "reference_kind": reference_kind, "constraints": constraints,
+        "comparison_entities": comparison_entities,
+        "exploration_direction": exploration_direction,
+        "clarification_response": clarification_response, "confidence": confidence,
+    }
+
+
 def _interpret_llm(
     query: str,
     language: str,
     focus: SessionFocus,
     prior_turn: Optional[ConversationTurn] = None,
 ) -> SemanticRequest:
-    """LLM-based semantic interpretation (currently always fails, kept for future)."""
+    """LLM-based semantic interpretation. Every field the model returns is validated
+    against the real operation allowlist and argument types (_validate_llm_result)
+    before anything downstream sees it — see that function's docstring for why
+    subject_id specifically is never read from the model at all."""
     schema = {
         "type": "object",
         "properties": {
             "operation": {
                 "type": "string",
-                "description": "one of the 30 investigation operations",
+                "enum": sorted(intents.ALL_OPERATIONS),
+                "description": "the single investigation operation this query asks for",
             },
             "subject_type": {
                 "type": "string",
@@ -148,51 +232,59 @@ Current focus: person={focus.active_person}, case={focus.active_fir}, location={
 {prior_context}
 
 Interpret the query as:
-- operation: what they want done (lookup_person, count_crimes, find_network, explain_reasoning, etc.)
+- operation: exactly one value from the enum given for "operation" — the closest match
+  to what the officer is asking for. Never invent a value outside that list.
 - subject_type: person/case/location/account/none
-- subject_text: how they named it
+- subject_text: how they named the subject, verbatim from the query — never a resolved
+  id or a name you infer from outside the query
 - reference_kind: explicit name, pronoun, positional ("the second one"), or implicit (from focus)
-- constraints: extracted filters (date, crime type, district)
+- constraints: extracted filters (date, crime type, district) — only ones actually named
 - exploration_direction: if asking to "go deeper" or "show more"
 - confidence: 0.5-1.0 (higher = confident interpretation)
 - comparison_entities: for "both of them", "compare"
 
-Never invent information. If the query is unclear, set operation="unknown"."""
+Never invent information not present in the query or the stated focus. If the query is
+unclear or matches no operation well, set operation="UNKNOWN"."""
 
     result_json = generate_json(prompt, schema)
     if not result_json:
         raise LLMUnavailable("LLM returned empty response")
 
-    # Resolve subject_id from subject_text if present
-    subject_id = None
-    subject_type = result_json.get("subject_type", "none")
-    subject_text = result_json.get("subject_text")
+    validated = _validate_llm_result(result_json)
+    operation = validated["operation"]
+    subject_type = validated["subject_type"]
+    subject_text = validated["subject_text"]
 
+    # Resolve subject_id from subject_text ourselves — the model never supplies one
+    # (see _validate_llm_result's docstring). This is the one DB-grounded step in the
+    # whole LLM path, and it is identical to what the deterministic path already does.
+    subject_id = None
     if subject_text and subject_type == "person":
         hits = sql_agent.person_by_name(subject_text)
         if hits:
             if len(hits) > 1 and hits[0].get("record_count", 0) == hits[1].get("record_count", 0):
                 # Ambiguous
                 return SemanticRequest(
-                    operation=result_json.get("operation", "unknown"),
+                    operation=operation,
                     subject_type="person",
                     subject_text=subject_text,
-                    reference_kind=result_json.get("reference_kind", "explicit"),
+                    reference_kind=validated["reference_kind"],
                     ambiguous_candidates=[h["name_en"] for h in hits[:4]],
-                    confidence=result_json.get("confidence", 0.7),
+                    confidence=validated["confidence"],
                 )
             subject_id = str(hits[0]["person_id"])
 
     return SemanticRequest(
-        operation=result_json.get("operation", "unknown"),
+        operation=operation,
         subject_type=subject_type,
         subject_id=subject_id,
         subject_text=subject_text,
-        reference_kind=result_json.get("reference_kind", "explicit"),
-        constraints=result_json.get("constraints", {}),
-        comparison_entities=result_json.get("comparison_entities", []),
-        exploration_direction=result_json.get("exploration_direction"),
-        confidence=result_json.get("confidence", 0.7),
+        reference_kind=validated["reference_kind"],
+        constraints=validated["constraints"],
+        comparison_entities=validated["comparison_entities"],
+        exploration_direction=validated["exploration_direction"],
+        clarification_response=validated["clarification_response"],
+        confidence=validated["confidence"],
     )
 
 

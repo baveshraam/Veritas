@@ -44,6 +44,8 @@ client/
 
 .vercel
 .env*
+Veritas-QUICKML-Production
+self_client.json
 
 .build.log
 

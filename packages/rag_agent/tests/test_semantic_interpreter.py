@@ -318,3 +318,158 @@ class TestDeterministicPath:
         assert result.subject_type is not None
         assert result.reference_kind is not None
         assert 0.0 <= result.confidence <= 1.0
+
+
+# ============================================================================
+# LLM PATH VALIDATION — the operation allowlist and argument checks that stand
+# between whatever the model returns and anything downstream trusting it.
+#
+# BUG found by this pass's own live testing: the LLM prompt used to describe
+# `operation` with lowercase examples ("lookup_person", "count_crimes") that don't
+# match ANY real dispatch value orchestrator.py actually checks (all uppercase,
+# e.g. "CASE_CONTEXT", "PERSON_HISTORY") — a live call for "Tell me more about
+# that case" returned operation="lookup_case", which would have silently
+# misrouted every LLM-interpreted turn with no error raised anywhere. Fixed at
+# two layers: the schema now enumerates the real allowlist, and
+# _validate_llm_result rejects (raises ValueError -> falls back to the
+# deterministic path) anything the model returns outside it regardless.
+# ============================================================================
+
+from rag_agent import semantic_interpreter as si
+from rag_agent.intents import ALL_OPERATIONS
+
+
+class TestLLMPathValidation:
+    def test_a_hallucinated_operation_outside_the_allowlist_is_rejected(self):
+        with pytest.raises(ValueError, match="allowlist"):
+            si._validate_llm_result({
+                "operation": "lookup_case",  # the exact bug found live — not a real op
+                "subject_type": "case", "reference_kind": "explicit", "confidence": 0.9,
+            })
+
+    def test_a_real_uppercase_operation_from_the_allowlist_is_accepted(self):
+        out = si._validate_llm_result({
+            "operation": "CASE_CONTEXT", "subject_type": "case",
+            "reference_kind": "explicit", "confidence": 0.9,
+        })
+        assert out["operation"] == "CASE_CONTEXT"
+        assert out["operation"] in ALL_OPERATIONS
+
+    def test_operation_is_case_normalized(self):
+        """A model that returns lowercase for an otherwise-real operation is corrected,
+        not rejected — case is a formatting slip, not a hallucinated capability."""
+        out = si._validate_llm_result({
+            "operation": "case_context", "subject_type": "case",
+            "reference_kind": "explicit", "confidence": 0.9,
+        })
+        assert out["operation"] == "CASE_CONTEXT"
+
+    def test_missing_operation_is_rejected(self):
+        with pytest.raises(ValueError):
+            si._validate_llm_result({"subject_type": "case", "confidence": 0.9})
+
+    def test_invalid_subject_type_is_rejected(self):
+        with pytest.raises(ValueError, match="subject_type"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "vehicle",
+                "confidence": 0.9,
+            })
+
+    def test_invalid_reference_kind_is_rejected(self):
+        with pytest.raises(ValueError, match="reference_kind"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "telepathic", "confidence": 0.9,
+            })
+
+    def test_a_structural_only_reference_kind_the_model_should_never_invent_is_rejected(self):
+        """exhaustiveness_check/exploration/constraint_change are produced only by the
+        deterministic structural patterns matching against the PRIOR turn's recorded
+        state — nothing about a fresh utterance licenses the model to claim one."""
+        with pytest.raises(ValueError, match="reference_kind"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "exhaustiveness_check", "confidence": 0.9,
+            })
+
+    def test_non_dict_constraints_is_rejected(self):
+        with pytest.raises(ValueError, match="constraints"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "explicit", "confidence": 0.9,
+                "constraints": "Bengaluru",
+            })
+
+    def test_non_string_items_in_comparison_entities_is_rejected(self):
+        with pytest.raises(ValueError, match="comparison_entities"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "explicit", "confidence": 0.9,
+                "comparison_entities": [{"name": "Ramesh"}],
+            })
+
+    def test_out_of_range_confidence_is_clamped_not_rejected(self):
+        """Miscalibration is not a safety issue — a model saying 1.5 confident just
+        means 1.0 confident, not an invalid response."""
+        out = si._validate_llm_result({
+            "operation": "CASE_CONTEXT", "subject_type": "case",
+            "reference_kind": "explicit", "confidence": 1.7,
+        })
+        assert out["confidence"] == 1.0
+
+    def test_non_numeric_confidence_is_rejected(self):
+        with pytest.raises(ValueError, match="confidence"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "explicit", "confidence": "very sure",
+            })
+
+    def test_a_boolean_confidence_is_rejected_despite_being_an_int_subtype(self):
+        """bool is a subclass of int in Python — isinstance(True, int) is True — so a
+        naive numeric check would silently accept it as confidence=1.0/0.0."""
+        with pytest.raises(ValueError, match="confidence"):
+            si._validate_llm_result({
+                "operation": "CASE_CONTEXT", "subject_type": "case",
+                "reference_kind": "explicit", "confidence": True,
+            })
+
+    def test_the_model_can_never_supply_a_subject_id_directly(self):
+        """There is no code path in _validate_llm_result or _interpret_llm that reads
+        subject_id from the model's JSON — planting one in the payload must have zero
+        effect, proving entity resolution stays grounded in the real record lookup."""
+        out = si._validate_llm_result({
+            "operation": "CASE_CONTEXT", "subject_type": "person",
+            "subject_id": "999999",  # a model has no such field to legitimately set
+            "reference_kind": "explicit", "confidence": 0.9,
+        })
+        assert "subject_id" not in out
+
+    def test_interpret_llm_end_to_end_with_a_mocked_valid_response(self, monkeypatch):
+        """The full _interpret_llm path: mocked generate_json -> validation -> a real
+        SemanticRequest. subject_type="case" takes no DB round trip in this path (only
+        a resolved person does, via sql_agent.person_by_name), so a synthetic focus is
+        enough here — the dataset-grounded resolution is covered separately above."""
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "CASE_CONTEXT", "subject_type": "case", "subject_text": "that case",
+            "reference_kind": "implicit_from_focus", "confidence": 0.88,
+        })
+        focus = _make_state(active_fir="12345")
+        result = si._interpret_llm("Tell me more about that case", "en", focus, None)
+        assert result.operation == "CASE_CONTEXT"
+        assert result.subject_type == "case"
+        assert result.confidence == 0.88
+
+    def test_interpret_llm_raises_and_falls_back_on_a_hallucinated_operation(self, monkeypatch):
+        """interpret() (not _interpret_llm directly) must recover from the exact bug
+        found live: the LLM path returning something that means nothing to the
+        dispatcher. The public interpret() should silently fall back rather than
+        propagate or misroute."""
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "lookup_case", "subject_type": "case",
+            "reference_kind": "explicit", "confidence": 0.9,
+        })
+        focus = _make_state()
+        # interpret() catches ValueError from the validator and falls back — this must
+        # not raise, and must still produce a real (deterministic-path) answer.
+        result = si.interpret("Tell me more about that case", "en", focus, None)
+        assert isinstance(result, SemanticRequest)

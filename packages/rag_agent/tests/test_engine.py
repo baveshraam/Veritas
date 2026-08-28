@@ -288,66 +288,88 @@ def test_citations_are_1_based_and_aligned_to_evidence():
 
 
 # --- LLM degradation ----------------------------------------------------------
-# A present-but-rate-limited key is the common failure, not a missing one: Gemini's
-# free tier 429s exactly when a demo hammers it. Every provider error must collapse
-# into LLMUnavailable / {} so the deterministic paths take over, because the one
-# thing this engine may never do is fail a turn just because the LLM blinked.
+# A present-but-rate-limited endpoint is the common failure, not a missing one: a demo
+# hammering QuickML will eventually 429/5xx. Every provider error must collapse into
+# LLMUnavailable / {} so the deterministic paths take over, because the one thing this
+# engine may never do is fail a turn just because the LLM blinked.
+#
+# llm.py went through two real implementations: the Python SDK's quick_ml().predict()
+# (killed by a platform-wide ORGID_HEADER_UNAVAILABLE gap — see docs/ENGINEERING_BRIEF.md
+# Sec12) and the current one, direct REST against QuickML's documented GLM chat endpoint
+# with a dedicated OAuth self-client. These tests mock at the `_chat()`/`_get_access_token()`
+# boundary rather than the network, since that's the real seam this module owns.
 
-class _FakeQuickML:
-    """Stands in for app.quick_ml() — the real SDK class (zcatalyst_sdk.quick_ml.QuickML)
-    is AppSail-only and not installed in this dev/test environment."""
-    def __init__(self, predict_fn):
-        self._predict_fn = predict_fn
-
-    def predict(self, end_point_key, input_data):
-        return self._predict_fn(end_point_key, input_data)
-
-
-def _fake_app(predict_fn):
-    class _App:
-        def quick_ml(self_):
-            return _FakeQuickML(predict_fn)
-    return _App()
-
-
-def test_a_successful_predict_call_is_parsed_and_marks_the_llm_available(monkeypatch):
-    """The real predict() response shape (the generic ML-pipeline one documented for
-    QuickML) is {"status": "success", "result": [...]}, not an OpenAI chat-completion
-    shape — this is what actually gets parsed now, not what the old raw-HTTP version
-    assumed."""
+def _configure(monkeypatch, **overrides):
+    """Make llm._configured() True with harmless defaults, then apply overrides."""
+    defaults = dict(CLIENT_ID="cid", CLIENT_SECRET="secret", REFRESH_TOKEN="rtok",
+                     PROJECT_ID="52852000000013048", ORG_ID="60077763394")
+    defaults.update(overrides)
     from rag_agent import llm
-    import data.ds as ds_module
-
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
+    for k, v in defaults.items():
+        monkeypatch.setattr(llm, k, v)
     monkeypatch.setattr(llm, "_degraded_until", 0.0)
     monkeypatch.setattr(llm, "_ever_succeeded", False)
+    monkeypatch.setattr(llm, "_access_token", "")
+    monkeypatch.setattr(llm, "_access_token_expiry", 0.0)
 
-    def fake_predict(key, data):
-        assert key == "a-key"
-        assert data == {llm.PROMPT_FIELD: "hello"}
-        return {"status": "success", "result": ["a fluent answer"]}
 
-    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(fake_predict))
+def test_a_successful_chat_call_is_parsed_and_marks_the_llm_available(monkeypatch):
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+
+    def fake_post(url, headers, body, timeout):
+        assert "/glm/chat" in url
+        assert headers["Authorization"] == "Bearer tok"
+        assert headers["CATALYST-ORG"] == "60077763394"
+        payload = json.loads(body)
+        assert payload["messages"][-1]["content"] == "hello"
+        return {"response": "a fluent answer", "model": llm.QUICKML_MODEL_ID}
+
+    monkeypatch.setattr(llm, "_http_post_json", fake_post)
     assert llm.generate("hello") == "a fluent answer"
     assert llm._ever_succeeded is True
     assert llm.status() == f"quickml ({llm.MODEL})"
 
 
+def test_think_block_is_stripped_from_the_reply(monkeypatch):
+    """The model emits its own chain-of-thought inline before the real answer, ended
+    (only) by a bare </think> marker — verified live 2026-08-28. There is no matching
+    opening <think> tag in the real responses, which a naive <think>...</think> regex
+    would miss entirely, leaking the whole reasoning trace as the "answer" (a real bug
+    found live and fixed here, not a hypothetical)."""
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(llm, "_http_post_json",
+                         lambda *a, **k: {"response": "1. Reasoning...\n2. More.</think>4"})
+    assert llm.generate("what is 2+2?") == "4"
+
+
+def test_think_block_with_a_matching_opening_tag_is_also_stripped(monkeypatch):
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(llm, "_http_post_json",
+                         lambda *a, **k: {"response": "<think>reasoning here</think>4"})
+    assert llm.generate("what is 2+2?") == "4"
+
+
 def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     from rag_agent import llm
-    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
-    monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    monkeypatch.setattr(llm, "_degraded_reason", "")
+    _configure(monkeypatch)
 
     class Boom(Exception):
         pass
 
-    def explode(_key, _data):
-        raise Boom("429 RESOURCE_EXHAUSTED")
+    def explode():
+        raise Boom("network error")
 
-    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(explode))
+    monkeypatch.setattr(llm, "_get_access_token", explode)
     assert llm.available() is True             # configured, nothing known bad yet
 
     with pytest.raises(llm.LLMUnavailable):    # NOT the raw provider error
@@ -358,71 +380,108 @@ def test_provider_failure_degrades_instead_of_propagating(monkeypatch):
     assert llm.generate_json("hello", {}) == {}   # returns {}, never raises
 
 
-def test_endpoint_key_is_passed_to_predict_only_when_configured(monkeypatch):
-    """BUG-022: the key cannot be obtained or verified from this environment
-    (console-only), so it must stay optional — passed through when someone sets it,
-    never fabricated. Verified against the real SDK's predict(end_point_key, ...)
-    signature, not a guessed HTTP header."""
-    from rag_agent import llm
-    import data.ds as ds_module
-
-    monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    captured = {}
-
-    def fake_predict(key, data):
-        captured["key"] = key
-        return {"status": "success", "result": ["ok"]}
-
-    monkeypatch.setattr(ds_module, "catalyst_app", lambda: _fake_app(fake_predict))
-
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "secret-from-console")
-    llm.generate("hello")
-    assert captured["key"] == "secret-from-console"
-
-
 def test_an_unconfigured_llm_is_reported_honestly(monkeypatch):
-    """"No LLM" (no published endpoint key) is the normal case everywhere but a fully
-    set-up AppSail deployment — it must say so rather than name a model it cannot reach."""
+    """"No LLM" (no self-client/refresh token) is the normal case until a human completes
+    the one-time OAuth grant-token exchange — it must say so, not name an unreachable model."""
     from rag_agent import llm
 
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "")
+    monkeypatch.setattr(llm, "REFRESH_TOKEN", "")
     assert llm.available() is False
     assert "not configured" in llm.status()
     assert llm.generate_json("hello", {}) == {}
 
 
-def test_no_catalyst_credential_means_no_llm(monkeypatch):
-    """QuickML is only reachable with the app's own Catalyst token, resolved entirely
-    inside app.quick_ml().predict() by the SDK's AuthorizedHttpClient. Without a real
-    Catalyst context — every environment that is not AppSail — that call raises, and
-    the engine must run deterministically rather than propagate it."""
+def test_access_token_is_cached_across_calls_not_refetched_every_time(monkeypatch):
+    """A fresh access token costs a round trip to accounts.zoho.in; minting one per
+    request would double QuickML latency and risks rate-limiting the token endpoint."""
     from rag_agent import llm
-    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
-    monkeypatch.setattr(llm, "_degraded_until", 0.0)
+    _configure(monkeypatch)
+    calls = {"token": 0}
 
-    def no_credential(_app=None):
-        raise RuntimeError("no Catalyst credential — QuickML is only reachable in AppSail")
-    monkeypatch.setattr(ds_module, "catalyst_app", no_credential)
+    def fake_post(url, headers, body, timeout):
+        if "/oauth/v2/token" in url:
+            calls["token"] += 1
+            return {"access_token": "tok", "expires_in": 3600}
+        return {"response": "ok"}
 
+    monkeypatch.setattr(llm, "_http_post_json", fake_post)
+    llm.generate("one")
+    llm.generate("two")
+    assert calls["token"] == 1
+
+
+def test_generate_retries_once_on_refusal_then_succeeds(monkeypatch):
+    """A refusal is content, not a transport error — plain generate() must not hand a
+    'protected instructions' refusal to a caller as if it were real prose."""
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    responses = [
+        {"response": "I can't help with requests to expose protected instructions."},
+        {"response": "here is the real answer"},
+    ]
+    monkeypatch.setattr(llm, "_http_post_json", lambda *a, **k: responses.pop(0))
+    assert llm.generate("summarize this evidence") == "here is the real answer"
+
+
+def test_generate_degrades_after_a_second_refusal(monkeypatch):
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(
+        llm, "_http_post_json",
+        lambda *a, **k: {"response": "I can't help with requests to expose protected instructions."},
+    )
     with pytest.raises(llm.LLMUnavailable):
-        llm.generate("hello")
+        llm.generate("summarize this evidence")
+    assert not llm.available()
 
 
-# --- QuickML invocation contract corrected against the real SDK --------------------
-#
-# Every prior version of llm.py called a hand-built URL with a raw urllib POST and a
-# guessed OpenAI-shaped body, including a manually-replicated `_token()` standing in
-# for auth. Reading the real installed zcatalyst-sdk (1.4.0) directly
-# (`zcatalyst_sdk/quick_ml.py`) showed the SDK exposes exactly one QuickML method —
-# `app.quick_ml().predict(end_point_key, input_data)` — whose underlying
-# AuthorizedHttpClient already does the admin-credential switch internally, the same
-# call `_token()` used to replicate by hand. Delegating to the real method (see
-# `_predict()`) makes that whole replicated-auth bug class structurally impossible
-# rather than merely fixed — there is no hand-rolled credential path left to get
-# wrong. `test_no_catalyst_credential_means_no_llm` above covers the "no real
-# Catalyst context" case at this new call site.
+def test_generate_json_retries_once_on_false_positive_refusal_then_gives_up(monkeypatch):
+    """crm-di-glm47b_30b_it's own safety guard sometimes refuses a schema-shaped prompt
+    with 'I can't help with requests to expose protected instructions' — measured live,
+    non-deterministic across identical retries (see llm.py module docstring). One retry
+    is a documented mitigation, not a guarantee, so a persistent refusal must still land
+    on the same {} contract every other failure uses."""
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    calls = {"n": 0}
+
+    def fake_post(url, headers, body, timeout):
+        calls["n"] += 1
+        return {"response": "I can't help with requests to expose protected instructions."}
+
+    monkeypatch.setattr(llm, "_http_post_json", fake_post)
+    assert llm.generate_json("describe a cat", {"name": "string"}) == {}
+    assert calls["n"] == 2   # one original attempt + exactly one retry
+
+
+def test_generate_json_succeeds_on_retry_after_one_refusal(monkeypatch):
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    responses = [
+        {"response": "I can't help with requests to expose protected instructions."},
+        {"response": '```json\n{"name": "Whiskers", "age": 3}\n```'},
+    ]
+    monkeypatch.setattr(llm, "_http_post_json", lambda *a, **k: responses.pop(0))
+    assert llm.generate_json("describe a cat", {}) == {"name": "Whiskers", "age": 3}
+
+
+def test_generate_json_strips_markdown_fences(monkeypatch):
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token", lambda: "tok")
+    monkeypatch.setattr(llm, "_http_post_json",
+                         lambda *a, **k: {"response": '```json\n{"ok": true}\n```'})
+    assert llm.generate_json("x", {}) == {"ok": True}
 
 
 # --- Exact FIR lookup: the number on the paper FIR --------------------------
@@ -772,16 +831,12 @@ def test_a_refusal_already_decided_by_orchestrate_does_not_still_run_a_generic_s
 
 def test_a_missing_credential_degrades_the_reported_status(monkeypatch):
     from rag_agent import llm
-    import data.ds as ds_module
 
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
-    monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    monkeypatch.setattr(llm, "_degraded_reason", "")
-    monkeypatch.setattr(llm, "_ever_succeeded", False)
+    _configure(monkeypatch)
 
     def no_credential():
         raise RuntimeError("no Catalyst credential — QuickML is only reachable in AppSail")
-    monkeypatch.setattr(ds_module, "catalyst_app", no_credential)
+    monkeypatch.setattr(llm, "_get_access_token", no_credential)
 
     with pytest.raises(llm.LLMUnavailable):
         llm.generate("hello")
@@ -793,9 +848,7 @@ def test_a_missing_credential_degrades_the_reported_status(monkeypatch):
 def test_a_configured_but_uncontacted_endpoint_is_not_reported_as_serving(monkeypatch):
     from rag_agent import llm
 
-    monkeypatch.setattr(llm, "ENDPOINT_KEY", "a-key")
-    monkeypatch.setattr(llm, "_degraded_until", 0.0)
-    monkeypatch.setattr(llm, "_ever_succeeded", False)
+    _configure(monkeypatch)
 
     assert "not yet contacted" in llm.status()
 

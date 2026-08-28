@@ -1,24 +1,21 @@
-"""LLM client — Catalyst QuickML LLM Serving (GLM-4.7-Flash).
+"""LLM client — Catalyst QuickML LLM Serving (GLM-4.7-Flash), over the official REST API.
 
 Was Gemini. Gemini is a third-party service and QuickML is Catalyst's equivalent, so under
 the competition rule — where a Catalyst service exists, it must be used — the provider had
 to move. The *interface* did not: `available()` / `generate()` / `generate_json()` and the
 degraded-mode contract below are unchanged, which is why nothing else in the package had to
-be touched.
+be touched when this file's internals changed twice (SDK attempt, then this REST rewrite).
 
 What the LLM is and isn't used for:
   - IS: synthesising prose from evidence the caller already retrieved, ranking leads,
-    drafting a case-diary paragraph.
+    drafting a case-diary paragraph, and (via `semantic_interpreter.py`) decomposing an
+    officer's query into a structured `SemanticRequest`.
   - IS NOT: translating or transcribing FIR content, and it never sees Kannada. Record text
     stays inside the network — the Kannada NLP/ASR/TTS layer is self-hosted for exactly that
     reason, and a query in Kannada is translated to English *in our own container* before
     the model is called, then the answer is translated back.
   - IS NOT: the thing that makes an answer true. It never sees the database, and it cannot
     add a claim to an answer that the evidence chain does not already contain.
-
-Authentication is nothing. Inside AppSail the Catalyst SDK is injected with the app's own
-credentials (`CATALYST_AUTH`), so there is no API key in the image, no secret to rotate, and
-nothing to leak. Locally, where there is no Catalyst, `available()` is simply False.
 
 Degraded mode is a designed behaviour, not a stub: the deterministic paths (intent templates
 + extractive synthesis) produce grounded, cited answers on their own. The LLM makes them
@@ -30,92 +27,96 @@ the one signal the rest of the system already understands:
 
 and trips a short cooldown so an exhausted endpoint is not hammered.
 
-## The invocation contract — corrected against the real Python SDK (v1.4.0), not guessed
+## Why this is REST, not the Python SDK's quick_ml().predict()
 
-Every prior version of this file called a hand-built URL (`QUICKML_ENDPOINT`) with a raw
-`urllib.request` POST and an OpenAI-shaped `{"model", "messages", "temperature"}` body,
-because QuickML LLM Serving's own invoke contract is not published in the reachable docs.
-That was wrong on more than the missing key: `pip install zcatalyst-sdk` and reading
-`zcatalyst_sdk/quick_ml.py` directly shows the ONLY method the Python SDK exposes for
-QuickML is:
+Two prior investigations (see docs/ENGINEERING_BRIEF.md Sec12) tried `app.quick_ml().predict()`
+from three different Catalyst runtimes — this app's custom_runtime AppSail, a Catalyst-managed
+Python AppSail probe, and a Catalyst Basic I/O Function — and got the identical
+`CatalystAPIError: ORGID_HEADER_UNAVAILABLE` every time. Root cause: the SDK's HttpClient only
+attaches the `CATALYST-ORG` header when `os.getenv('X_ZOHO_CATALYST_ORG_ID')` is set, and no
+Catalyst runtime tested injects it — the env var name is reserved and cannot be set manually
+either. This is a platform gap in the SDK's QuickML path specifically, not a runtime choice.
 
-    app.quick_ml().predict(end_point_key: str, input_data: Dict[str, Union[str, int]])
-        -> POST {base}/quickml/v1/project/{project_id}/endpoints/predict
-           headers: X-QUICKML-ENDPOINT-KEY: <end_point_key>
-           body:    {"data": input_data}
+The Catalyst console's own QuickML integration page names a *different*, working contract:
+plain OAuth (a self-client with scope `QuickML.deployment.READ`), a manually-supplied
+`CATALYST-ORG` header (a static, already-known project org id — not something that needs
+runtime injection), and a documented REST endpoint:
 
-which is a generic ML-pipeline `predict()` call — a flat key/value dict in, a JSON dict out
-— not an OpenAI chat-completions shape, and not a `messages` array (the SDK's own type hint
-forbids nesting). Two real consequences:
+    POST {api_base}/quickml/v1/project/{project_id}/glm/chat
+    headers: Authorization: Bearer <access_token>, CATALYST-ORG: <org_id>
+    body:    {"model": <model_id>, "messages": [{"role": "user", "content": "..."}], ...}
 
-  1. The base URL is resolved by the SDK's own `AuthorizedHttpClient` from the project id
-     already known — `QUICKML_ENDPOINT` was never a real requirement, only a symptom of not
-     having found this. Removed.
-  2. Multi-turn conversation ("Conversation Mode" in the GLM-4.7-Flash docs) cannot be a
-     client-sent message array through this call shape; whatever mechanism it uses is
-     server-side and undocumented here. Not implemented — `generate()`/`generate_json()`
-     stay single-turn, exactly as every caller already treats them.
+Verified live (2026-08-28) with a temporary developer CLI token: HTTP 200, real model
+(`crm-di-glm47b_30b_it`), real completions. `access_token` here is minted from a dedicated
+self-client (`QUICKML_CLIENT_ID`/`QUICKML_CLIENT_SECRET`/`QUICKML_REFRESH_TOKEN`) via the
+standard Zoho OAuth refresh-token grant — a machine identity, independent of any developer's
+personal login, which is what a deployed service must use. `QUICKML_REFRESH_TOKEN` is the one
+value that cannot be produced from this environment: Zoho's self-client flow requires a human
+to generate a short-lived "grant token" in the API Console UI once, which this module (or an
+operator, one time) exchanges for the long-lived refresh token stored in AppSail configuration.
 
-What remains an honest guess, clearly marked as one: the exact key name(s)
-`input_data` must carry for an LLM Serving endpoint specifically (the generic ML-pipeline
-docs show arbitrary "column name" keys; GLM-4.7-Flash's own page states "Input type: Text
-only" but not the field name). `PROMPT_FIELD` below is the inferred value — change it in
-one place, not a claim it is confirmed correct.
+## A model quirk worth documenting: false-positive refusals on schema-shaped prompts
 
-## A second, deeper blocker found by actually invoking predict() — not just the missing key
-
-Confirmed live (2026-08-27, "build the actual conversational brain" pass): with a
-deliberately invalid `QUICKML_ENDPOINT_KEY` set temporarily on the deployed app to force a
-real call through this exact code path, the SDK's own `AuthorizedHttpClient` never even
-reaches key validation — it fails first with:
-
-    CatalystAPIError: {'code': 'API_ERROR', 'message': "Request failed with status 400
-    and response data: {'code': 'ORGID_HEADER_UNAVAILABLE' ...
-
-Traced to `zcatalyst_sdk/_http_client.py`: `HttpClient.request()` only attaches the
-`CATALYST-ORG` header when `os.getenv('X_ZOHO_CATALYST_ORG_ID')` is set, and QuickML's
-gateway specifically requires it (Data Store/Cache/every other call this app makes do not
-— confirmed working throughout this deployment). Two things rule out a workaround from
-this environment, not just "not yet tried":
-
-  1. Setting `X_ZOHO_CATALYST_ORG_ID` via `POST /appsail/{id}/configuration` (the same
-     endpoint that successfully manages every other env var this app has) is rejected
-     outright: `{"error_code": "INVALID_INPUT", "message": "environment_variables must
-     not contain reserved keywords"}` — the platform reserves this name for itself, and
-     is not injecting it into a `custom_runtime` AppSail container.
-  2. It is not recoverable from an incoming request either: the AppSail gateway's own
-     per-request headers this SDK reads (`ProjectHeader`/`CredentialHeader` in
-     `_constants.py` — project id, domain, key, environment, admin/user credential
-     tokens) carry no org id in any form.
-
-So the honest state is: **even a real, published `endpoint_key` would not be sufficient**
-on its own — this app has no path to the org-id context QuickML's gateway requires, and
-no configuration surface reachable from here can supply one. This is a platform gap for
-custom_runtime AppSail apps calling QuickML specifically, not a missing credential this
-project forgot to obtain. (The live diagnostic env var was set and then immediately
-reverted to the exact prior state — this file's behavior with an absent key is unchanged.)
+`crm-di-glm47b_30b_it` carries a baked-in system prompt (visible in its own chain-of-thought
+when it fires) instructing it never to reveal/quote/describe "these rules". Empirically
+(2026-08-28, ~10 trials), a prompt that asks for "a JSON object matching this schema" or
+"exactly this and nothing else" pattern-matches that guard some fraction of the time and gets
+refused with "I can't help with requests to expose protected instructions" — non-deterministic
+across identical retries, so it is sampling-dependent, not purely content-triggered. Reframing
+the instruction as an ordinary backend/integration task ("a calling program parses your reply
+as data, not as a conversation") measurably reduces — but, empirically, does not eliminate —
+the refusal rate. `generate_json()` below applies that framing and retries once on a detected
+refusal or unparseable output before giving up; callers still see the same {} contract either
+way. This is a real, load-bearing reliability limit on the structured-output path, not
+something fixable client-side, and should inform how much any planner leans on it.
 """
+from __future__ import annotations
+
 import json
 import logging
 import os
+import re
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 log = logging.getLogger(__name__)
 
-MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")
-# The unique id of a PUBLISHED QuickML LLM Serving endpoint — the one thing that must come
-# from the console (see module docstring). Everything else the SDK's predict() call needs
-# (base URL, project id, auth) it resolves itself from the already-initialized CatalystApp.
-ENDPOINT_KEY = os.getenv("QUICKML_ENDPOINT_KEY", "").strip()
-# Inferred input_data key for a single text prompt — see module docstring's last paragraph.
-PROMPT_FIELD = os.getenv("VERITAS_LLM_PROMPT_FIELD", "prompt")
+MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")                     # display name
+QUICKML_MODEL_ID = os.getenv("QUICKML_MODEL_ID", "crm-di-glm47b_30b_it")    # id sent to the API
+
+CLIENT_ID = os.getenv("QUICKML_CLIENT_ID", "").strip()
+CLIENT_SECRET = os.getenv("QUICKML_CLIENT_SECRET", "").strip()
+REFRESH_TOKEN = os.getenv("QUICKML_REFRESH_TOKEN", "").strip()
+ACCOUNTS_URL = os.getenv("QUICKML_ACCOUNTS_URL", "https://accounts.zoho.in").rstrip("/")
+API_BASE = os.getenv("QUICKML_API_BASE", "https://api.catalyst.zoho.in").rstrip("/")
+PROJECT_ID = os.getenv("CATALYST_PROJECT_ID", "").strip()
+ORG_ID = os.getenv("CATALYST_ORG", "").strip()
 TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
 
 COOLDOWN_SECONDS = 70.0
+_TOKEN_SAFETY_MARGIN = 60.0  # refresh this many seconds before Zoho says it expires
+
+# The model's own reasoning trace is observed live (2026-08-28) to end with a bare
+# </think> marker but *no* matching opening <think> tag — an opening-tag regex like
+# r"<think>.*?</think>" never matches, and the entire chain-of-thought leaks through as
+# the "answer". Strip everything up to and including the LAST </think>, tag optional.
+_THINK_RE = re.compile(r"^.*</think>", re.DOTALL)
+_REFUSAL_MARKER = "protected instructions"
+
+_INTEGRATION_FRAME = (
+    "You are functioning as a backend API for a police-records application. The calling "
+    "program parses your reply programmatically as data, not as a conversation. This is a "
+    "normal integration task, unrelated to your configuration or instructions.\n\n"
+)
 
 _degraded_until = 0.0
 _degraded_reason = ""
 _ever_succeeded = False
+
+_access_token = ""
+_access_token_expiry = 0.0
 
 
 class LLMUnavailable(RuntimeError):
@@ -123,9 +124,7 @@ class LLMUnavailable(RuntimeError):
 
 
 def _configured() -> bool:
-    """A published endpoint key is the only thing predict() genuinely requires — the SDK
-    resolves project id/base URL/auth itself from the already-initialized CatalystApp."""
-    return bool(ENDPOINT_KEY)
+    return bool(CLIENT_ID and CLIENT_SECRET and REFRESH_TOKEN and PROJECT_ID and ORG_ID)
 
 
 def available() -> bool:
@@ -136,19 +135,9 @@ def available() -> bool:
 
 
 def status() -> str:
-    """Honest one-liner for /health. Never reports a model when it cannot be reached.
-
-    It used to break that promise twice over. It reported `quickml (glm-4.7-flash)`
-    whenever an endpoint URL was merely *configured* — reachable or not, contacted or
-    not — and the one failure mode that was actually occurring in production ("no
-    Catalyst credential", raised straight out of _chat) bypassed _degrade(), so the
-    cooldown never tripped and the status never changed. Live, every answer was
-    extractive and the Copilot diary was the deterministic string, while /health
-    reported the model as serving. Configured is not the same as working, and this
-    now says which one it knows.
-    """
+    """Honest one-liner for /health. Never reports a model when it cannot be reached."""
     if not _configured():
-        return "deterministic (QuickML not configured — no published endpoint key)"
+        return "deterministic (QuickML not configured — no OAuth client/refresh token)"
     if time.monotonic() < _degraded_until:
         return f"deterministic (LLM degraded: {_degraded_reason})"
     if not _ever_succeeded:
@@ -165,87 +154,139 @@ def _degrade(exc: Exception) -> LLMUnavailable:
     return LLMUnavailable(_degraded_reason)
 
 
-def _predict(prompt: str) -> str:
-    """The one real call: app.quick_ml().predict(endpoint_key, {PROMPT_FIELD: prompt}).
+def _http_post_json(url: str, headers: dict, body: bytes, timeout: float) -> dict:
+    req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"HTTP {e.code}: {detail}") from e
+    except urllib.error.URLError as e:
+        raise RuntimeError(f"network error: {e.reason}") from e
 
-    Auth is handled entirely by the SDK's AuthorizedHttpClient (it switches to the admin
-    credential internally, the same way every Data Store/Cache call in this codebase
-    already authenticates) — no manual token fetch, unlike the raw-HTTP version this
-    replaced.
+
+def _get_access_token() -> str:
+    """Mint (or reuse) a QuickML access token via the self-client refresh-token grant.
+
+    This is a machine identity dedicated to QuickML, independent of any developer's personal
+    Catalyst CLI login — the latter works (verified live) but must never be embedded in a
+    deployed service.
     """
+    global _access_token, _access_token_expiry
+
+    if _access_token and time.monotonic() < _access_token_expiry - _TOKEN_SAFETY_MARGIN:
+        return _access_token
+
+    form = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+        "refresh_token": REFRESH_TOKEN,
+    }).encode("utf-8")
+    result = _http_post_json(
+        f"{ACCOUNTS_URL}/oauth/v2/token",
+        {"Content-Type": "application/x-www-form-urlencoded"},
+        form,
+        TIMEOUT,
+    )
+    token = result.get("access_token")
+    if not token:
+        raise RuntimeError(f"token refresh returned no access_token: {str(result)[:200]}")
+
+    _access_token = token
+    _access_token_expiry = time.monotonic() + float(result.get("expires_in", 3600))
+    return _access_token
+
+
+def _chat(messages: list[dict], temperature: float | None = None) -> str:
+    """One real call to QuickML's GLM chat endpoint. Returns the reply text with any
+    <think>...</think> reasoning trace stripped."""
     global _ever_succeeded
 
     try:
-        from data.ds import catalyst_app
-        result = catalyst_app().quick_ml().predict(ENDPOINT_KEY, {PROMPT_FIELD: prompt})
-    except ImportError as e:
-        raise _degrade(RuntimeError(f"zcatalyst-sdk not installed: {e}")) from e
+        token = _get_access_token()
+        body: dict = {"model": QUICKML_MODEL_ID, "messages": messages}
+        if temperature is not None:
+            body["temperature"] = temperature
+        result = _http_post_json(
+            f"{API_BASE}/quickml/v1/project/{PROJECT_ID}/glm/chat",
+            {
+                "Authorization": f"Bearer {token}",
+                "CATALYST-ORG": ORG_ID,
+                "Content-Type": "application/json",
+            },
+            json.dumps(body).encode("utf-8"),
+            TIMEOUT,
+        )
     except Exception as e:
         raise _degrade(e) from e
 
-    # Response shape is the generic ML-pipeline one documented for predict():
-    # {"status": "success", "result": [...]}. Handle a bare string or a dict with a
-    # "response"/"text" key too — genuinely unverified which one LLM Serving uses
-    # (see module docstring), so this degrades cleanly to "unexpected shape" rather
-    # than crashing on whichever guess is wrong.
-    text = None
-    if isinstance(result, dict):
-        r = result.get("result")
-        if isinstance(r, list) and r:
-            text = r[0] if isinstance(r[0], str) else json.dumps(r[0])
-        elif isinstance(r, str):
-            text = r
-        elif isinstance(result.get("response"), str):
-            text = result["response"]
-        elif isinstance(result.get("text"), str):
-            text = result["text"]
-    if text is None:
+    text = result.get("response")
+    if not isinstance(text, str):
         raise _degrade(RuntimeError(f"unexpected response shape: {str(result)[:200]}"))
+
     _ever_succeeded = True
-    return text.strip()
+    return _THINK_RE.sub("", text).strip()
 
 
 def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -> str:
     """Plain text completion. Raises LLMUnavailable on any failure — callers fall back.
 
-    temperature is accepted for interface compatibility but not sent — predict()'s
-    input_data is a flat str/int dict scoped to whatever LLM Serving's own endpoint
-    schema defines, which is not documented anywhere this session could reach (see
-    module docstring); adding an unconfirmed extra key risks the call being rejected
-    rather than merely ignored.
+    A false-positive safety refusal (see module docstring) is content, not a transport
+    failure, so `_chat()` itself doesn't know to treat it as one — but a refusal string
+    handed to a caller as if it were real fluent prose is exactly the failure mode this
+    module exists to prevent (a synthesis caller would show it to an officer as the
+    answer). One retry with the reassurance framing; a second refusal degrades like any
+    other provider failure, so callers fall back to their deterministic path either way.
     """
     if not available():
         raise LLMUnavailable(_degraded_reason or "no LLM configured")
-    full_prompt = f"{system}\n\n{prompt}" if system else prompt
-    return _predict(full_prompt)
+
+    def _messages(extra_frame: str = "") -> list[dict]:
+        msgs = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": extra_frame + prompt})
+        return msgs
+
+    text = _chat(_messages(), temperature)
+    if _REFUSAL_MARKER in text.lower():
+        text = _chat(_messages(_INTEGRATION_FRAME), temperature)
+        if _REFUSAL_MARKER in text.lower():
+            raise _degrade(RuntimeError("model refused a benign prompt (safety false positive)"))
+    return text
 
 
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> dict:
     """Structured output. Returns {} on any failure or unparseable output — callers treat
     that as 'no LLM opinion' and use their deterministic path.
 
-    The schema is stated in the prompt rather than enforced by the provider: predict()'s
-    generic input_data shape has no response-format parameter to request JSON mode with,
-    so correctness depends entirely on the model following the instruction and on the
-    parsing below, not on a provider guarantee.
+    A persistent refusal is already turned into LLMUnavailable by `generate()`; the retry
+    loop here is only for a real reply that doesn't parse as JSON.
     """
     if not available():
         return {}
-    sys_prompt = (system or "") + (
-        "\n\nRespond with a single JSON object and nothing else. It must match this schema:\n"
-        + json.dumps(schema)
-    )
-    try:
-        raw = _predict(f"{sys_prompt.strip()}\n\n{prompt}")
-    except LLMUnavailable:
-        return {}
 
-    raw = raw.strip()
-    if raw.startswith("```"):                       # models fence JSON even when told not to
-        raw = raw.strip("`")
-        raw = raw[raw.index("{"):] if "{" in raw else raw
-    try:
-        out = json.loads(raw or "{}")
-        return out if isinstance(out, dict) else {}
-    except json.JSONDecodeError:
-        return {}
+    instruction = _INTEGRATION_FRAME + (
+        "Respond with a single JSON object and nothing else. It must match this shape:\n"
+        + json.dumps(schema) + "\n\n" + (system or "") + "\n\n" + prompt
+    )
+
+    for _attempt in range(2):
+        try:
+            raw = generate(instruction)
+        except LLMUnavailable:
+            return {}
+
+        raw = raw.strip()
+        if raw.startswith("```"):                       # models fence JSON even when told not to
+            raw = raw.strip("`")
+            raw = raw[raw.index("{"):] if "{" in raw else raw
+        try:
+            out = json.loads(raw or "{}")
+            if isinstance(out, dict):
+                return out
+        except json.JSONDecodeError:
+            continue
+    return {}

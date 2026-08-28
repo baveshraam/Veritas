@@ -311,6 +311,19 @@ def classify(query: str) -> str:
 _EXTRA_VISUALIZATION = {"CASE_LOCATIONS": "map", "TIMELINE": "timeline",
                         "TIMELINE_CONNECTION": "timeline"}
 
+# The complete set of operations classify() can ever return, plus the ones matched
+# by regex shape (never in INTENTS, since they carry no keyword tuple) and the two
+# structural values semantic_interpreter.py's own follow-up patterns produce
+# (RESULT_SET_FOLLOWUP) or fall back to (UNKNOWN). This is the ONE allowlist the
+# semantic-planner's model output is validated against — computed from this module's
+# own dispatch table rather than hand-duplicated, so it cannot silently drift out of
+# sync with what orchestrator.py actually knows how to route.
+ALL_OPERATIONS: frozenset[str] = frozenset(INTENTS) | {
+    "CAPABILITY", "NOT_INFERABLE", "EXPLAIN_REASONING", "EVIDENCE_FOR",
+    "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "TIMELINE", "TIMELINE_CONNECTION",
+    "RESULT_SET_FOLLOWUP", "UNKNOWN",
+}
+
 
 def visualization_for(intent: str) -> str:
     if intent in _EXTRA_VISUALIZATION:
