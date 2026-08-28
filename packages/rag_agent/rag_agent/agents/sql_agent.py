@@ -250,8 +250,18 @@ def filter_viewable(rows: list[dict], officer_role: str, officer_ps_code: str) -
 def fir_points(district_code: str, limit: int = 600) -> list[dict]:
     """Case coordinates for the map layer. The hotspot polygons alone show WHERE the
     clusters are but not how dense the surrounding activity is — the point scatter is what
-    makes a cluster legible as a cluster rather than an arbitrary shape."""
+    makes a cluster legible as a cluster rather than an arbitrary shape.
+
+    `crime_no`/`filed` ride along from the same row `cases_in_district` already fetches —
+    no second query, no added JOIN — so the map's hover tooltip can show the real 18-digit
+    FIR number and filing date instead of forcing an officer to click through for the one
+    fact a tooltip exists to answer: which case is this. `fir_id` stays the internal
+    CaseMasterID; every citation/selection in the app already addresses a case as
+    `fir:{CaseMasterID}`, and changing that here would desync map selection from the rest
+    of the evidence chain.
+    """
     rows = queries.cases_in_district(queries.district_id(district_code))
-    pts = [{"fir_id": str(r["CaseMasterID"]), "lat": r["latitude"], "lng": r["longitude"]}
+    pts = [{"fir_id": str(r["CaseMasterID"]), "lat": r["latitude"], "lng": r["longitude"],
+            "crime_no": r.get("CrimeNo"), "filed": r.get("CrimeRegisteredDate")}
            for r in rows if r["latitude"] is not None and r["longitude"] is not None]
     return pts[:limit]

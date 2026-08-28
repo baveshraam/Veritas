@@ -44,11 +44,12 @@
   --sev-med: #ee8b4b;
   --sev-high: #f2555a;
 
-  /* An individual map case point deliberately sits OUTSIDE the severity ramp above —
-   * it has to read as a distinct kind of mark from a hotspot polygon even where the
-   * two overlap, and it has to hold contrast against a light basemap where amber
-   * did not. Keep this in sync with viz/palette.ts's MAP_POINT. */
-  --map-point: #2f6fed;
+  /* A located case reads as cool, factual data — deliberately outside the warm
+   * severity ramp above (a hotspot's colour), and deliberately not brass: brass is
+   * this console's one reserved "selected" signal everywhere else, so a case mark
+   * at rest has to be a different colour or the selected state on the map would
+   * mean nothing. Keep this in sync with viz/palette.ts's MAP_POINT. */
+  --map-point: #6fd3e8;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -617,35 +618,94 @@ body::after {
   to   { opacity: 1; transform: none; }
 }
 
-/* Map legend — the two things a hotspot map shows (one exact record, one modeled
- * density estimate) are visually different marks with no key anywhere on screen;
- * without this an officer can't tell an evidence-backed FIR point from a statistical
- * estimate at a glance, which is exactly the distinction this system's whole
- * evidence discipline exists to preserve. */
+/* Map legend — case / cluster / selected / hotspot are four visually distinct marks
+ * with no key on screen otherwise; an officer has to be able to tell an exact record
+ * from an aggregate from a statistical density estimate at a glance, which is the
+ * distinction this system's whole evidence discipline exists to preserve. Each row's
+ * mark is a small rendition of the REAL map mark (ring+core, ring+count, brass ring,
+ * gradient bar) rather than a generic key colour, so learning the legend once teaches
+ * the actual map. */
 .map-legend {
   position: absolute; top: 10px; left: 10px; z-index: 5;
-  display: flex; flex-direction: column; gap: 6px;
-  padding: 8px 11px;
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 9px 12px;
   background: var(--glass-strong);
   border: 1px solid var(--glass-line);
   border-radius: var(--radius-sm);
-  font-size: 11px; color: var(--text-dim);
+  font-family: var(--font-label);
+  font-size: 10.5px; letter-spacing: 0.01em; color: var(--text-dim);
   pointer-events: none;
+  backdrop-filter: blur(10px);
 }
-.map-legend-row { display: flex; align-items: center; gap: 7px; }
-.map-legend-dot {
-  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
-  background: var(--map-point); box-shadow: 0 0 0 1.5px rgba(255,255,255,0.85);
+.map-legend-row { display: flex; align-items: center; gap: 8px; }
+.map-legend-mark {
+  flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px;
 }
-.map-legend-cluster {
-  width: 13px; height: 13px; border-radius: 50%; flex: 0 0 auto;
-  background: var(--map-point); box-shadow: 0 0 0 1.5px rgba(255,255,255,0.85);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 7px; font-weight: 700; color: #fff;
+/* Case: a ring around a core — the same two-layer mark drawn on the map itself. */
+.map-legend-mark--case { position: relative; }
+.map-legend-mark--case i {
+  position: absolute; inset: 0; border-radius: 50%;
+  background: var(--map-point); opacity: 0.16;
+  border: 1.3px solid rgba(111, 211, 232, 0.85);
+}
+.map-legend-mark--case i::after {
+  content: ""; position: absolute; inset: 0; margin: auto;
+  width: 4px; height: 4px; border-radius: 50%; background: #d8f5fc;
+}
+/* Cluster: a wider ring badge carrying a count — never a solid filled bubble. */
+.map-legend-mark--cluster {
+  border-radius: 50%; background: rgba(111, 211, 232, 0.17);
+  border: 1.4px solid rgba(111, 211, 232, 0.9);
+  font-family: var(--font-rec); font-size: 8px; font-weight: 700; color: #eef8fb;
+}
+/* Selected: the console's one reserved accent colour, nowhere else on the map. */
+.map-legend-mark--selected { position: relative; }
+.map-legend-mark--selected i {
+  position: absolute; inset: 2px; border-radius: 50%;
+  border: 2px solid var(--accent);
 }
 .map-legend-ramp {
   width: 26px; height: 7px; border-radius: 3px; flex: 0 0 auto;
   background: linear-gradient(90deg, var(--sev-low), var(--sev-med), var(--sev-high));
+  opacity: 0.85;
+}
+
+/* District reference label — quiet by design (see MapView.tsx's own hierarchy note):
+ * geography for orientation, never competing with an investigative mark. */
+.map-district-label {
+  font-size: 10px; font-family: var(--font-label); letter-spacing: 0.02em;
+  color: rgba(233, 239, 244, 0.55); white-space: nowrap;
+  background: rgba(6, 10, 14, 0.55);
+  padding: 1px 5px; border-radius: 4px;
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  transform: translateY(5px); pointer-events: none;
+}
+
+/* The map's own hover popup, restyled from MapLibre's default white card to the
+ * console's dark glass language — a popup that looked like a browser tooltip read as
+ * a foreign widget, not part of the instrument. */
+.veritas-map-popup .maplibregl-popup-content {
+  background: var(--glass-strong);
+  border: 1px solid var(--glass-line-hi);
+  border-radius: var(--radius-sm);
+  padding: 9px 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(12px);
+}
+.veritas-map-popup .maplibregl-popup-tip { display: none; }
+.veritas-map-popup-title {
+  font-family: var(--font-label); font-size: 12px; color: var(--text);
+  white-space: nowrap;
+}
+.veritas-map-popup-title.mono { font-family: var(--font-rec); letter-spacing: 0.02em; }
+.veritas-map-popup-sub {
+  font-family: var(--font-body); font-size: 10.5px; color: var(--text-dim);
+  margin-top: 2px;
+}
+.veritas-map-popup-hint {
+  font-family: var(--font-label); font-size: 9.5px; color: var(--accent);
+  margin-top: 4px; letter-spacing: 0.03em; text-transform: uppercase;
 }
 
 .tabs { display: flex; gap: 5px; align-items: center; }

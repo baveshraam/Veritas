@@ -11,13 +11,16 @@ export const SEV = {
 } as const;
 
 export const ACCENT = "#d8a657";
-// A cool blue, deliberately outside the warm green->amber->red severity ramp: an
-// individual case point has to read as a distinct THING from a hotspot polygon
-// (which is drawn in the severity ramp) even where the two overlap, and it has to
-// hold contrast against OpenFreeMap's light "liberty" basemap — cream cropland,
-// green forest, blue water — which amber (too close to the ramp's own mid-tone)
-// did not (UI/map hardening pass, live-observed).
-export const MAP_POINT = "#2f6fed";
+// A located case record reads as "cool, factual data" — deliberately outside the
+// warm green->amber->red severity ramp a hotspot is drawn in, and deliberately NOT
+// brass: brass/ACCENT is this console's one existing "selected/primary" signal
+// everywhere else (focus chips, active tabs, the citation-selected state), and
+// reusing it for every ordinary case mark at rest would dilute the one thing that
+// makes a SELECTED case legible at a glance — that it, alone, wears the console's
+// accent colour. A case mark is cyan; the selected one is brass. Two colours, two
+// meanings, never overlapping.
+export const MAP_POINT = "#6fd3e8";
+export const MAP_POINT_DIM = "rgba(111, 211, 232, 0.5)";
 export const GRID = "rgba(255,255,255,0.07)";
 export const TEXT_DIM = "#9fb1be";
 export const TEXT_FAINT = "#63757f";

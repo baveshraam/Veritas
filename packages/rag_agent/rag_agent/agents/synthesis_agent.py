@@ -136,7 +136,8 @@ def build_visualization(intent: str, state) -> VisualizationPayload:
     if kind == "map":
         hotspots = state.prediction_results.get("detect_hotspots") or []
         polygons = [h.model_dump() if hasattr(h, "model_dump") else h for h in hotspots]
-        points = [{"lat": r["lat"], "lng": r["lng"], "fir_id": r["fir_id"]}
+        points = [{"lat": r["lat"], "lng": r["lng"], "fir_id": r["fir_id"],
+                   "crime_no": r.get("crime_no"), "filed": r.get("filed")}
                   for r in state.sql_query_results
                   if r.get("lat") is not None and r.get("lng") is not None]
         if polygons or points:
