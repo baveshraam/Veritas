@@ -181,33 +181,60 @@ def test_same_operation_with_a_new_district_carries_the_crime_type_forward():
     assert result.constraints.get("district") == "Mysuru"
 
 
-def test_a_correction_naming_a_different_district_defers_to_the_model_honestly():
-    """A REAL, precisely-characterized gap in the deterministic path, found by
-    actually checking both fields this scenario touches — an earlier version of
-    this test only checked `constraints.district`, which passes by accident
-    (`_extract_constraints` runs unconditionally, independent of intent) and masked
-    the actual finding: the OPERATION does not carry forward.
+def test_a_cueless_correction_carries_the_prior_operation_and_replaces_only_the_named_constraint():
+    """A correction that names ONLY a new constraint and no verb of its own.
 
-    'No, I meant Mysuru' has no keyword/regex shape of its own, so
-    `intents.classify()` scores it UNKNOWN — it does NOT repeat the prior turn's
-    CRIME_SEARCH the way 'same thing for Mysuru' explicitly does via
-    `_REPEAT_CUE_RE`. This is a real, narrow gap in the deterministic path, not
-    patched here with a 'no, I meant' phrase rule (which this evaluation's own
-    purpose rules out) — but it is NOT a broken end-to-end experience: UNKNOWN at
-    confidence 0.3 is below `_LLM_ROUTING_THRESHOLD` (0.75), so this exact phrasing
-    correctly defers to QuickML in the live system, which has the semantic
-    understanding to treat "no, I meant X" as a correction to the prior operation.
-    That live behavior was not itself re-verified this pass (cost-conscious QuickML
-    usage — see docs/ENGINEERING_BRIEF.md Sec12); recorded honestly as untested
-    rather than assumed."""
+    This test previously asserted the opposite — that "no, I meant Mysuru" scored
+    UNKNOWN and deferred to QuickML — and documented that as "a real, narrow gap in
+    the deterministic path". The gap is now closed structurally rather than with a
+    phrase rule: `_interpret_deterministic` treats "classified as nothing, names no
+    subject, but DOES name a constraint, and a substantive request came before it" as
+    a constraint change against the prior request. Any wording satisfying that shape
+    composes for free, which is why the three phrasings below are asserted together
+    and none of them appears as a literal anywhere in the interpreter.
+
+    The three properties that actually matter, and that the old assertion could not
+    have caught:
+
+      1. the prior OPERATION carries forward (the officer did not restate it);
+      2. the prior constraint they did NOT correct survives (crime_type stays Theft —
+         a correction is a replacement of one field, not a new empty request);
+      3. the replacement is the district they MEANT, not the one they were rejecting,
+         even when the rejected one is named FIRST. That last case is the whole reason
+         `_corrected_constraints` exists rather than a bare `_extract_constraints`
+         call: the plain extractor takes the first gazetteer hit, which for
+         "not Bengaluru Urban, I meant Mysuru" is the wrong one.
+    """
     prior = _turn("how many theft cases in Bengaluru Urban", "42 cases",
                    result_context={"operation": "CRIME_SEARCH",
-                                    "constraints": {"crime_type": "Theft", "district": "Bengaluru Urban"}})
-    focus = _focus()
-    result = interpret("no, I meant Mysuru", "en", focus, prior)
-    assert result.constraints.get("district") == "Mysuru"  # the gazetteer still works
-    assert result.operation == "UNKNOWN"                   # the real finding
-    assert result.confidence < si._LLM_ROUTING_THRESHOLD    # ...and it defers safely
+                                    "constraints": {"crime_type": "Theft",
+                                                    "district": "Bengaluru Urban"}})
+    for phrasing in ("no, I meant Mysuru",
+                     "actually Mysuru",
+                     "not Bengaluru Urban, I meant Mysuru"):
+        result = interpret(phrasing, "en", _focus(), prior)
+        assert result.operation == "CRIME_SEARCH", phrasing
+        assert result.constraints.get("district") == "Mysuru", phrasing
+        assert result.constraints.get("crime_type") == "Theft", phrasing
+        assert result.reference_kind == "constraint_change", phrasing
+
+
+def test_a_correction_naming_only_the_value_being_rejected_is_not_read_as_a_change():
+    """The safety half of the rule above, and the reason it is written as "the first
+    named value that ISN'T the prior one" rather than "the last named value".
+
+    "not Bengaluru Urban" names a district but proposes no replacement. Silently
+    re-running the same search against the same district would tell the officer their
+    correction was accepted when nothing changed; carrying the rejected value forward
+    would be worse still. The district constraint is dropped instead, so the turn is
+    answered — or refused — on what the officer actually said.
+    """
+    prior = _turn("how many theft cases in Bengaluru Urban", "42 cases",
+                   result_context={"operation": "CRIME_SEARCH",
+                                    "constraints": {"crime_type": "Theft",
+                                                    "district": "Bengaluru Urban"}})
+    result = interpret("not Bengaluru Urban", "en", _focus(), prior)
+    assert result.constraints.get("district") != "Bengaluru Urban"
 
 
 # ============================================================================

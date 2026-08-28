@@ -297,6 +297,15 @@ _PRONOUNS = re.compile(
     re.I)
 
 
+# A record identifier: the 18-digit CrimeNo the generator writes and the case index
+# renders, or the short "0112/2026" form. Floored at 12 digits so "the last 30 days"
+# and "2026" can never be read as one. Lives here rather than in orchestrator.py
+# (which imports it from here) because classify() below needs the same fact: whether
+# this query names a record at all is part of what the question IS, not just how it
+# is later answered.
+FIR_NUMBER_RE = re.compile(r"\b(\d{3,4}/\d{4}|\d{12,20})\b")
+
+
 def classify(query: str) -> str:
     """Highest-scoring intent by keyword hits; UNKNOWN if nothing matches.
 
@@ -334,6 +343,20 @@ def classify(query: str) -> str:
         if hits:
             scores[intent] = hits
 
+    # FIR_LOOKUP is not a topic, it is "fetch the one record with this identifier" —
+    # so a query that names no identifier cannot be one, however often it says "FIR".
+    # Found live: "ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?" ("is there another FIR
+    # related to that case?") scored FIR_LOOKUP on the bare word "FIR", and the
+    # orchestrator's FIR_LOOKUP branch is guarded by the same regex — so it matched
+    # nothing, produced no evidence, set no exact_lookup_missed flag, and dropped the
+    # turn through to the unscoped semantic search at the bottom of _run_specialists,
+    # which answered a case-scoped question with confidently-cited cases from other
+    # districts. Removing it from scoring here lets the query reach the operation it
+    # actually is, rather than widening a keyword list to cover one more phrasing.
+    has_identifier = bool(FIR_NUMBER_RE.search(query or ""))
+    if not has_identifier:
+        scores.pop("FIR_LOOKUP", None)
+
     # CRIME_SEARCH is scored last, because its keywords are not topic words — "show",
     # "list", "find", "cases" are the verbs almost every question in this domain uses.
     # Counting them alongside specific ones let a generic pair outvote a precise single:
@@ -343,6 +366,11 @@ def classify(query: str) -> str:
     specific = {i: n for i, n in scores.items() if i != "CRIME_SEARCH"}
     if specific:
         return max(specific, key=lambda i: (specific[i], -list(INTENTS).index(i)))
+    # The converse of the rule above: an officer who pastes a bare record identifier
+    # with no verb around it ("100010101202300001", "0112/2026 status") is asking for
+    # that record. Nothing else in this table can mean anything by a record number.
+    if has_identifier:
+        return "FIR_LOOKUP"
     if not scores:
         return "UNKNOWN"
     return "CRIME_SEARCH"

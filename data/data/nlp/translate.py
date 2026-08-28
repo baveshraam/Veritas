@@ -43,6 +43,7 @@ backend rather than being replaced by the fallback.
 """
 import os
 import re
+import threading
 from functools import lru_cache
 
 # Kannada is U+0C80..U+0CFF. Script detection needs no model and cannot be wrong about
@@ -184,8 +185,31 @@ def translate(text: str, src: str, tgt: str) -> str:
     return _restore_spans(result, mapping) if mapping else result
 
 
-@lru_cache(maxsize=1)
+# Serialises backend construction. `lru_cache` memoises a RESULT; it does not make the
+# miss atomic, so two threads that miss together both run the wrapped function. Here
+# that means two concurrent full NLLB loads — which is not hypothetical, it is the
+# normal case: `warm()` runs on the startup background thread while the first Kannada
+# request comes in on a worker, so a cold container loads the model twice, on a box
+# with 2048MB. Measured symptom: the FIRST Kannada query after a start returned an
+# UNKNOWN-intent refusal (the backend raised, `to_english` degraded to the untranslated
+# text, and Kannada script matches no keyword, gazetteer or regex downstream), while
+# every later one answered correctly.
+#
+# With the lock the request path WAITS on the warm-up's load instead of starting a
+# second one — the officer pays latency, which is honest, rather than getting a wrong
+# refusal, which is not. Uncontended acquisition is ~100ns against a load measured at
+# ~20s, so this costs nothing on the warm path.
+_LOAD_LOCK = threading.Lock()
+
+
 def _load():
+    """Pick a backend once, cache it for the process. See `_LOAD_LOCK`."""
+    with _LOAD_LOCK:
+        return _load_backend()
+
+
+@lru_cache(maxsize=1)
+def _load_backend():
     """Pick a backend once, cache it for the process.
 
     IndicTrans2, or any model an officer points `VERITAS_TRANSLATION_MODEL` at, loads
@@ -205,6 +229,14 @@ def _load():
         return _CTranslate2Backend(_CT2_DIR, DEFAULT_MODEL)
     return _TransformersBackend(DEFAULT_MODEL)
 
+
+# `cache_clear` and `cache_info` are part of this function's public contract —
+# tests reset the cached backend through the first, and `backend_status()` asks the
+# second whether a load has happened WITHOUT triggering one. The locking wrapper
+# would otherwise hide both, so they are re-exported from the memoised inner
+# function they actually belong to.
+_load.cache_clear = _load_backend.cache_clear
+_load.cache_info = _load_backend.cache_info
 
 def warm() -> None:
     """BUG-016: profiled live, the ~2s Kannada round-trip already reported was a warm

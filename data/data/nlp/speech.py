@@ -23,6 +23,7 @@ degrade to text instead of pretending it spoke.
 """
 import io
 import os
+import threading
 from functools import lru_cache
 from typing import Literal
 
@@ -60,8 +61,20 @@ def _whisper_transcribe(audio: bytes, lang: str = "en") -> str:
     return " ".join(s.text.strip() for s in segments).strip()
 
 
-@lru_cache(maxsize=2)          # one English checkpoint, one multilingual
+# Same reason as translate.py's `_LOAD_LOCK`: `lru_cache` memoises a result, it does
+# not make the miss atomic, so `warm()` on the startup thread and the first voice
+# request on a worker both load the checkpoint. Serialising makes the request WAIT for
+# the warm-up rather than start a second concurrent load of the same weights.
+_LOAD_LOCK = threading.Lock()
+
+
 def _load_whisper(name: str):
+    with _LOAD_LOCK:
+        return _load_whisper_cached(name)
+
+
+@lru_cache(maxsize=2)          # one English checkpoint, one multilingual
+def _load_whisper_cached(name: str):
     from data.nlp.model_fetch import ensure_models
     ensure_models()                    # no-op locally; File Store fetch on AppSail
     try:
@@ -72,6 +85,14 @@ def _load_whisper(name: str):
         ) from e
     return WhisperModel(name, device="cpu", compute_type="int8")
 
+
+# `cache_clear` and `cache_info` are part of this function's public contract —
+# tests reset the cached backend through the first, and `backend_status()` asks the
+# second whether a load has happened WITHOUT triggering one. The locking wrapper
+# would otherwise hide both, so they are re-exported from the memoised inner
+# function they actually belong to.
+_load_whisper.cache_clear = _load_whisper_cached.cache_clear
+_load_whisper.cache_info = _load_whisper_cached.cache_info
 
 def warm() -> None:
     """BUG-016. Same reasoning as translate.warm(): pay the one-time model-load cost

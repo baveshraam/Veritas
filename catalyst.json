@@ -13,17 +13,6 @@
       "source": "docker://baveshraam/veritas-api:latest",
       "port": 8000,
       "stack": "custom"
-    },
-    {
-      "source": "services\\semantic_quickml",
-      "name": "veritas-semantic-probe"
     }
-  ],
-  "functions": {
-    "targets": [
-      "veritas_semantic_probe_fn"
-    ],
-    "ignore": [],
-    "source": "functions"
-  }
+  ]
 }

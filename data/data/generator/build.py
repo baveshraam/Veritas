@@ -35,7 +35,7 @@ from datetime import date, datetime, timedelta
 from ..districts import all_districts
 from ..priors import CrimeTypePrior, district_weights, sample_crime_type, sample_district
 from . import refdata as rd
-from .geo import sample_point
+from .geo import locality as locality_name, sample_point
 from .names import full_record_name, sample_name, sample_patronym
 
 NOW = date(2026, 7, 1)
@@ -333,8 +333,23 @@ def _crime_no(category: int, district: int, unit: int, year: int, serial: int) -
     return f"{category:1d}{district:04d}{unit:04d}{year:04d}{serial:05d}"
 
 
+# Offences that are group offences in law, not merely in narration: dacoity is robbery
+# "by five or more persons" (IPC 391) and rioting requires an unlawful assembly, also of
+# five (IPC 146/141). The accused count used to be drawn from one distribution for every
+# crime type, which produced dacoities committed by a lone individual — an internal
+# contradiction inside a single record, and one that only became visible once the
+# narrative started stating the offender count out loud. It also flattened the
+# co-offending graph: the two crime types that should contribute the densest cliques
+# were contributing the same 1-2 person edges as a pickpocketing.
+_GROUP_OFFENCE_SIZES: dict[str, tuple[int, ...]] = {
+    "Dacoity": (5, 6, 7, 8),
+    "Riot": (5, 6, 7, 8, 9),
+}
+
+
 def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TruePerson,
-                  district: str, crews: dict[int, Counter]) -> list[TruePerson]:
+                  district: str, crews: dict[int, Counter],
+                  crime_type: str = "") -> list[TruePerson]:
     """Three forces decide who did it: prior offending, proximity, and who they run with.
 
     Preferential attachment on priors. Uniform sampling means a prior record predicts
@@ -361,7 +376,9 @@ def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TrueP
     there to recover. The gang label is a *consequence* of this structure, not an input to
     it: nothing downstream reads TruePerson.gang, and the ER records no gang at all.
     """
-    k = rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0]
+    group_sizes = _GROUP_OFFENCE_SIZES.get(crime_type)
+    k = (rng.choice(group_sizes) if group_sizes
+         else rng.choices([1, 2, 3, 4], weights=[55, 25, 12, 8], k=1)[0])
     base = [(1.0 + RECIDIVISM_ALPHA * p.offences)
             * (LOCAL_WEIGHT if p.home_district == district else 1.0)
             for p in pool]
@@ -388,24 +405,193 @@ def _pick_accused(rng: random.Random, pool: list[TruePerson], complainant: TrueP
     return chosen
 
 
+# What the record shows was taken, lost, injured or seized. This is the slot that
+# carries actual investigative content: an MO says how the offence was committed, this
+# says what it produced, and it is the half an officer searches on ("gold ornaments
+# from an almirah", "two-wheeler", "OTP", "post-mortem"). Written per crime type
+# because a burglary and a dowry death have nothing in common to say here — a shared
+# pool would be the same zero-content fallback `_MO_VARIANTS` already had to remove.
+_CASE_DETAIL: dict[str, tuple[str, ...]] = {
+    "Theft": (
+        "Gold ornaments and cash were reported missing from the complainant's person",
+        "A mobile handset and a wallet containing cash were listed as stolen",
+        "Household articles and a small sum of cash were reported taken"),
+    "Hurt": (
+        "The complainant sustained injuries to the head and forearm and was treated at a government hospital",
+        "Blunt injuries were recorded in the wound certificate",
+        "The injured was shifted to the taluk hospital and discharged the same day"),
+    "House Burglary": (
+        "Gold jewellery and cash kept in an almirah were found missing",
+        "An almirah was broken open and documents and ornaments removed",
+        "Electronic items and cash were reported taken from an inner room"),
+    "Cheating": (
+        "The complainant parted with a sum paid to the accused in instalments",
+        "Payments were collected against a promised return that never materialised",
+        "Money was transferred on the assurance of a job placement"),
+    "Criminal Breach of Trust": (
+        "Collected funds were not remitted to the account they were meant for",
+        "Goods entrusted for sale were neither returned nor accounted for",
+        "Amounts held on behalf of members were applied to personal use"),
+    "Assault on Woman": (
+        "The complainant was medically examined and her statement recorded under Sec.164 CrPC",
+        "A woman police officer recorded the complainant's statement",
+        "The complainant was referred for medical examination the same day"),
+    "Criminal Intimidation": (
+        "The threat was delivered in the presence of witnesses",
+        "Call records were sought from the service provider",
+        "A written complaint was filed the following day"),
+    "Motor Vehicle Theft": (
+        "A two-wheeler bearing a Karnataka registration was reported missing",
+        "A four-wheeler parked overnight was found missing in the morning",
+        "The vehicle's registration particulars were circulated to adjoining stations"),
+    "Robbery": (
+        "A gold chain was snatched and the victim sustained minor injuries",
+        "Cash and a mobile handset were taken under threat",
+        "A bag containing documents and cash was removed by force"),
+    "Riot": (
+        "Damage to property and minor injuries to bystanders were reported",
+        "Vehicles parked on the road were damaged during the disturbance",
+        "Additional force was deployed to restore order"),
+    "Cyber Crime": (
+        "A sum was debited from the complainant's account after an OTP was shared",
+        "The fraudulent transaction was traced to a wallet account",
+        "Screenshots of the chat and the payment reference were produced"),
+    "Rash Driving": (
+        "The vehicle involved was seized and sent for mechanical inspection",
+        "One person sustained injuries and was hospitalised",
+        "A spot mahazar was drawn in the presence of panchas"),
+    "Extortion": (
+        "A demand was made for a specified sum, to be paid in instalments",
+        "The demand was repeated over telephone on several occasions",
+        "The complainant was warned of consequences to their business premises"),
+    "Kidnapping": (
+        "A missing person report preceded the registration of this case",
+        "The whereabouts of the person were traced within the district",
+        "A search party was constituted the same night"),
+    "Attempt to Murder": (
+        "A weapon was recovered from the spot and sent for examination",
+        "The injured was admitted in a critical condition",
+        "The victim survived with grievous injuries"),
+    "Murder": (
+        "The body was sent for post-mortem examination",
+        "An inquest was held and the body handed over to the relatives",
+        "The scene was preserved and the forensic team summoned"),
+    "Rape": (
+        "The complainant was medically examined and the statement recorded under Sec.164 CrPC",
+        "The victim was produced before a magistrate for recording of statement",
+        "Samples were forwarded to the forensic science laboratory"),
+    "Dowry Death": (
+        "An inquest was held in the presence of an executive magistrate",
+        "Statements of the parents of the deceased were recorded",
+        "The viscera were preserved for chemical examination"),
+    "Dacoity": (
+        "Cash and ornaments were taken from the premises by an armed group",
+        "The occupants were restrained while property was removed",
+        "Weapons were displayed to overpower the household"),
+    "Narcotics": (
+        "Contraband was seized and weighed in the presence of panchas",
+        "A sample was drawn and forwarded to the forensic science laboratory",
+        "The seized substance was deposited in the station malkhana"),
+}
+
+# Closing sentence, chosen by the case's OWN status id rather than fixed. The old
+# narrative ended every one of 10,000 cases with the identical
+# "Investigation is being carried out as per procedure." — on a convicted case that
+# sentence is not merely repetitive, it is false.
+_CLOSINGS: dict[int, tuple[str, ...]] = {
+    1: ("Investigation is in progress.",
+        "The case remains under investigation.",
+        "Enquiry is continuing and the accused are yet to be laid before court."),
+    2: ("A chargesheet has been filed before the jurisdictional court.",
+        "The final report has been submitted to the committal court."),
+    3: ("The accused was convicted after trial.",
+        "The trial ended in a conviction."),
+    4: ("The accused was acquitted for want of evidence.",
+        "The trial ended in an acquittal."),
+    5: ("The case was closed after enquiry.",
+        "The case was filed as undetected."),
+}
+
+# How strongly a repeat offender's method carries between their own cases. Not
+# cosmetic: an offender who breaks in the same way twice is the thing an investigator
+# is actually looking for, and the previous generator gave the MO an independent draw
+# per case — so a crew's five burglaries described five unrelated methods, and
+# "cases with the same modus operandi as this one" could only ever return noise. At
+# 1.0 the signature would be a giveaway, every case of a type by one person reading
+# identically; the residual keeps it a lead rather than a lookup key.
+_SIGNATURE_STRENGTH = 0.7
+
+
+def _signature_choice(rng: random.Random, pool, signature, salt: str):
+    """Pick from `pool`, favouring the value this offender habitually uses.
+
+    `signature` is a stable per-person id — the generator's own TruePerson.uid during
+    generation, the resolved PersonUID during backfill. Either is stable per person,
+    which is the only property this needs. None means an unattributed case, which
+    draws freely: a case with no accused on it has no habit to express.
+    """
+    if signature is None:
+        return rng.choice(pool)
+    habitual = random.Random("%s:%s" % (salt, signature)).choice(pool)
+    return habitual if rng.random() < _SIGNATURE_STRENGTH else rng.choice(pool)
+
+
 def _narrative(rng: random.Random, crime_type: str, district: str, filed: datetime,
-               occ_from: datetime, n_accused: int) -> str:
-    """Case-specific narrative text, built entirely from facts this case already has:
-    the crime type, the district, when it was filed, when it actually occurred (for the
-    time-of-day phrase), and how many people were accused (for the offender-count
-    phrase) — no field here is invented; every one is a real, already-generated
-    attribute of this case. The MO clause is a per-case draw from a pool of variants
-    for this crime type (all 20 types now covered, not 8), so two cases of the same
-    type in the same district no longer collapse to one template once date is
-    normalised out (BUG-023).
+               occ_from: datetime, n_accused: int, *, station: str = "",
+               locality: str = "", sections: tuple = (), status: int = 1,
+               signature=None) -> str:
+    """Case-specific narrative text, built entirely from facts this case already has.
+
+    Every slot below is a real, already-generated attribute of this case: the crime
+    type, the district, the registering station, the named activity centre the
+    coordinates fall in, when it occurred, how many people were accused, the sections
+    invoked, and the case's status. Nothing is invented, and nothing here is a second
+    copy of a fact the record layer does not hold — this is that record layer,
+    rendered as the prose an officer reads and searches.
+
+    Why it is this long. `BriefFacts` is the ONLY free text in the schema, so it is the
+    entire input to the vector index (`fir_narrative`), to "similar cases", and to
+    every semantic search the console runs. Measured on the live 10,000-case dataset,
+    the previous narrative produced **592 distinct strings once the date was normalised
+    out, with a single template covering 520 cases** — so semantic retrieval was
+    ranking near-identical points and "find cases like this one" returned whatever the
+    tie broke to. Diversity for its own sake would not have fixed that. What fixes it
+    is that the added slots are *investigative facts that differ between cases and are
+    worth searching on*: the station that registered it, the locality it happened in,
+    what was taken or seized, the sections invoked, and how it ended.
+
+    Two of the slots deliberately carry ACROSS cases, which is where the multi-hop
+    structure comes from:
+
+      - `locality` names the activity centre the incident's own coordinates fall in,
+        so cases in one hotspot say so in words as well as in latitude/longitude, and
+        the map layer and the text layer finally describe the same fact;
+      - the MO and detail draws are weighted towards the lead accused's habitual
+        choice (`_signature_choice`), so a crew's cases share a recognisable method.
     """
     variants = _MO_VARIANTS.get(crime_type)
-    mo = rng.choice(variants) if variants else f"{crime_type} — routine method"
+    mo = (_signature_choice(rng, variants, signature, "mo:" + crime_type)
+          if variants else "%s — routine method" % crime_type)
+    detail_pool = _CASE_DETAIL.get(crime_type)
+    detail = (_signature_choice(rng, detail_pool, signature, "detail:" + crime_type)
+              if detail_pool else "")
+
+    where = " near %s" % locality if locality else ""
+    at = "%s " % station if station else ""
     when = _time_of_day(occ_from.hour)
     who = _offender_count_phrase(n_accused)
-    return (f"On {filed:%d %b %Y}, a case of {crime_type.lower()} was registered in "
-            f"{district} district. {mo}, {when}, {who}. "
-            f"Investigation is being carried out as per procedure.")
+
+    parts = ["On {:%d %b %Y}, {}registered a case of {} in {} district.".format(
+                 filed, at, crime_type.lower(), district),
+             "{}{}, {}, {}.".format(mo, where, when, who)]
+    if detail:
+        parts.append(detail + ".")
+    if sections:
+        parts.append("Offences registered under section{} {}.".format(
+            "s" if len(sections) > 1 else "",
+            ", ".join(str(x) for x in sections)))
+    parts.append(rng.choice(_CLOSINGS.get(status, _CLOSINGS[1])))
+    return " ".join(parts)
 
 
 def generate(rng: random.Random, n_cases: int) -> Dataset:
@@ -460,7 +646,8 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
         # Picked before CaseMaster so the narrative can honestly say how many people
         # were accused — a real fact about this case, not an invented one.
         complainant = rng.choice(people)
-        accused_list = _pick_accused(rng, people, complainant, dc, crews)
+        accused_list = _pick_accused(rng, people, complainant, dc, crews,
+                                     prior.crime_type)
 
         ds.rows("CaseMaster").append({
             "CaseMasterID": case_id,
@@ -476,8 +663,18 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
             "IncidentFromDate": occ_from, "IncidentToDate": occ_to,
             "InfoReceivedPSDate": filed,
             "latitude": lat, "longitude": lng,
-            "BriefFacts": _narrative(rng, prior.crime_type, dname, filed, occ_from,
-                                     len(accused_list)),
+            # Every keyword below is a column on this very row (or, for `locality`,
+            # a function of lat/lng on this very row) — the narrative restates the
+            # record, it does not extend it. `signature` is the LEAD accused: an MO
+            # habit belongs to the person who chose the method, and A1 is the ER's own
+            # ordering for that.
+            "BriefFacts": _narrative(
+                rng, prior.crime_type, dname, filed, occ_from, len(accused_list),
+                station=unit["UnitName"],
+                locality=locality_name(lat, lng, dc),
+                sections=prior.ipc_sections,
+                status=status,
+                signature=accused_list[0].uid if accused_list else None),
         })
 
         # ActSectionAssociation — the ER's replacement for a TEXT[] of IPC sections.

@@ -28,7 +28,16 @@ import pytest
 _ROOT = pathlib.Path(__file__).parent.resolve()
 sys.path[:] = [p for p in sys.path if p not in ("", ".", str(_ROOT))]
 
-TEST_CASES = 250          # enough for co-offending crews, hotspots and a money trail
+# 400, raised from 250. The hotspot assertion in ml_models was marginal by
+# construction at 250 and had been passing on luck: the busiest district drew ~67
+# cases, which over the generator's 4 activity centres is ~12 incidents each against
+# DBSCAN's production `min_samples=10` — so a change anywhere upstream that shifts the
+# RNG stream by a few draws flips it. Measured across seeds at 250: 0 clusters. At
+# 400 the busiest district draws ~108 and DBSCAN finds 3, which is the property this
+# fixture is supposed to be able to express. The alternative — lowering min_samples —
+# would have weakened a production spatial parameter that is correct for the real
+# 10,000-case dataset, to accommodate a fixture that was too sparse.
+TEST_CASES = 400          # enough for co-offending crews, hotspots and a money trail
 
 # Where the session dataset lives. `ds.reset_for_tests()` re-points a module global, so a
 # suite that resets to an in-memory database (test_ds, test_audit_sessions) would otherwise

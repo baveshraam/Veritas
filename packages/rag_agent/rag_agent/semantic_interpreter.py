@@ -18,6 +18,7 @@ from data.nlp import ner_extract
 
 from . import intents
 from . import llm
+from . import operation_semantics
 from .agents import sql_agent
 from .llm import LLMUnavailable, generate_json
 
@@ -893,6 +894,54 @@ def _interpret_deterministic(
     # Extract constraints
     constraints = _extract_constraints(q)
 
+    # A correction that names only NEW CONSTRAINTS and no verb of its own —
+    # "actually Mysuru, not Bengaluru Urban", "no, robbery", "make it Kolar". The
+    # cue-anchored forms of this ("same thing for X", "and Mysuru?") are already
+    # handled above; this is the same *shape* with no cue at all, which is how an
+    # officer most often actually corrects themselves. It is structural, not a
+    # phrase list: the trigger is "this turn classified as nothing, names no
+    # subject, but does name a constraint, and a substantive request came before
+    # it" — any wording satisfying that composes for free.
+    if (operation == "UNKNOWN" and subject_type == "none" and constraints
+            and not ambiguous_candidates and prior_turn):
+        prior_request = prior_result.get("last_request") or {}
+        prior_operation = prior_request.get("operation") or prior_result.get("operation")
+        if prior_operation and prior_operation not in intents.META_OPERATIONS:
+            prior_constraints = (prior_request.get("constraints")
+                                 or prior_result.get("constraints") or {})
+            return SemanticRequest(
+                operation=prior_operation, reference_kind="constraint_change",
+                constraints=_corrected_constraints(q, prior_constraints),
+                previous_result_context=prior_result, confidence=0.8)
+
+    # The semantic fallback tier runs LAST of the three, and the order is the point.
+    # It is an embedding argmax over ~35 prototypes; the correction branch above reads
+    # the officer's ACTUAL PRIOR TURN. Strictly better evidence goes first. Running the
+    # tier earlier was a measured misroute, not a hypothetical: "not Bengaluru Urban"
+    # is a bare constraint correction, but a district name on its own embeds nearest to
+    # HOTSPOT ("the areas and hotspots with the most incidents") — so the tier claimed
+    # the turn at 0.70, the correction branch never saw it, and the officer's rejected
+    # district was silently re-served back to them as a hotspot map.
+    # The semantic fallback tier (operation_semantics.py): when no keyword or regex
+    # shape matched, or when the only thing that "matched" was the generic
+    # richest-profile default above, ask the embedding model already loaded in this
+    # container what the question MEANS. This is what turns "who does she run with"
+    # into PERSON_NETWORK and "any idea who else got roped into this one" into
+    # CASE_PEOPLE without a phrase rule for either — and it costs ~3.5ms rather
+    # than the 20-35s a QuickML round trip costs for the same judgment. It is scoped
+    # to what this session can actually support and declines rather than guessing;
+    # see that module for how both gates were measured.
+    semantic_confidence: Optional[float] = None
+    if operation == "UNKNOWN" or defaulted_to_richest_profile:
+        proposal = operation_semantics.resolve(
+            q,
+            has_person=bool(subject_id and subject_type == "person") or bool(focus.active_person),
+            has_case=bool(focus.active_fir),
+        )
+        if proposal:
+            operation, semantic_confidence = proposal
+            defaulted_to_richest_profile = False
+
     # Read previous-result context if prior turn exists
     previous_result_context = prior_result
 
@@ -914,6 +963,12 @@ def _interpret_deterministic(
                      "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "TIMELINE", "TIMELINE_CONNECTION",
                      "BOARD_PIN_EVENT"]:
         confidence = 0.95  # Regex-shape matches are high-confidence
+    if semantic_confidence is not None:
+        # Last word, deliberately: the operation came from the meaning of the query,
+        # so the confidence must come from the same place — not from a regex-shape
+        # tier that never actually matched this turn (TIMELINE is both a shape and a
+        # prototype, and a shape's 0.95 would overstate an embedding proposal).
+        confidence = semantic_confidence
 
     refusal_reason = None
     if ambiguous_candidates:
@@ -951,6 +1006,44 @@ def _extract_constraints(query: str) -> dict[str, Any]:
             constraints["district"] = e.text
             break
     return constraints
+
+
+def _corrected_constraints(query: str, prior: dict[str, Any]) -> dict[str, Any]:
+    """The constraints a correction is REPLACING the prior ones with.
+
+    Returns the WHOLE constraint set the corrected request should run with, not a
+    patch to merge over the prior one. That distinction is load-bearing and was a real
+    bug: a correction can REMOVE a constraint ("not Bengaluru Urban", naming no
+    replacement), and a patch merged over the prior can only ever add or overwrite —
+    so the rejected district survived the correction that rejected it, and the officer
+    was silently re-served the same result they had just said was wrong.
+
+    Differs from `_extract_constraints` in one further structural way, and only one: a
+    correction usually restates the value it is rejecting alongside the one it wants
+    ("actually Mysuru, not Bengaluru Urban"), and `_extract_constraints` takes the
+    first match it finds — which is the wrong one whenever the officer leads with the
+    rejection ("not Bengaluru, I meant Mysuru"). The value being corrected is, by
+    definition, the one already in the prior request, so the replacement is the first
+    named value that ISN'T it. No negation parsing, no phrase list.
+    """
+    out = {**dict(prior), **_extract_constraints(query)}
+
+    named_districts = [e.text for e in ner_extract(query or "", "en") if e.label == "LOCATION"]
+    replacement = next((d for d in named_districts if d != prior.get("district")), None)
+    if replacement:
+        out["district"] = replacement
+    elif named_districts:
+        out.pop("district", None)      # only the OLD value was named — not a change
+
+    from data.generator.refdata import crime_type_names
+    q = (query or "").lower()
+    named_types = sorted((c for c in crime_type_names() if c.lower() in q), key=len, reverse=True)
+    replacement = next((c for c in named_types if c != prior.get("crime_type")), None)
+    if replacement:
+        out["crime_type"] = replacement
+    elif named_types:
+        out.pop("crime_type", None)
+    return out
 
 
 def _recent_person_candidates_from_prior(prior_turn: Optional[ConversationTurn]) -> list[str]:

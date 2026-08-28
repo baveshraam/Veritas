@@ -181,6 +181,25 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "substituted a similarly-spelled name — if you expected a match, the record "
         "may be filed under a different spelling, or outside your access scope."
     ),
+    # The interpreter understood no operation at all — neither a keyword, a regex
+    # shape, the embedding tier, nor (where reachable) the model. Reporting that as
+    # "no supporting evidence was retrieved — check whether the record exists" is a
+    # false statement about the records: nothing was ever looked up, because nothing
+    # was understood to look up. Same discipline as nothing_prior_locations.
+    "cannot_understand": (
+        "I did not understand what you're asking me to look up. Try naming what you "
+        "want to know about — a person, an FIR number, a district, or the case in "
+        "view — and what you want to know about it."
+    ),
+    # The question was never read, so nothing about the records can be reported. Same
+    # discipline as cannot_understand and nothing_prior_locations: name the actual
+    # obstacle rather than borrowing a message that blames the record layer.
+    "translation_unavailable": (
+        "I could not translate your Kannada query, so I have not searched the records "
+        "— answering from untranslated text would only produce a false 'not found'. "
+        "The translation model may still be loading after a restart; please try again "
+        "in a moment, or ask in English."
+    ),
     "not_inferable": (
         "The records do not answer this. They record who was accused, arrested and "
         "charged; they do not nominate suspects, and I will not infer one. Ask about "

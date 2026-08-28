@@ -56,8 +56,13 @@ def _chat(client, headers: dict, query: str, session: str) -> dict:
 
 
 def _intent(result: dict) -> str:
+    # `startswith`, not `==`: the orchestrator labels its trace by which tier decided
+    # the turn ("Orchestrator", "Orchestrator (semantic)", "Orchestrator (multi-step
+    # plan)", ...). Matching the bare name exactly made this helper silently return ""
+    # for every query the semantic interpreter routed, which is now the normal path —
+    # the assertion then failed on the helper, not on the engine.
     for t in result["traces"]:
-        if t["step"] == "Orchestrator":
+        if t["step"].startswith("Orchestrator"):
             return t["detail"].split(";")[0].replace("Intent: ", "").strip()
     return ""
 

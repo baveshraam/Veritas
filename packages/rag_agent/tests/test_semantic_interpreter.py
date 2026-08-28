@@ -145,14 +145,43 @@ class TestCodeSwitching:
     """Test that mixed Kannada-English queries are understood."""
 
     def test_kannada_english_fir_query(self):
-        """'ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?' should be understood as a case query."""
-        focus = _make_state(language="kn")
-        # This query is Kannada-script, but the interpreter receives it *after* translation
-        # in node_translate_in, so we simulate the translated form
-        result = interpret("Is there another FIR related to that case?", language="kn", focus=focus)
-        # Should classify as some case-related intent (FIR_LOOKUP or similar)
-        # If the translated form is too garbled, it might fall back, but intent should be determined
-        assert result.operation != "UNKNOWN"
+        """'ಆ case ಗೆ related ಇನ್ನೊಂದು FIR ಇದ್ಯಾ?' is a question about the case in
+        view, not a record lookup — and must never be answered as one.
+
+        This test used to assert only `operation != "UNKNOWN"`, which the buggy
+        behaviour satisfied: the bare word "FIR" scored FIR_LOOKUP, whose branch is
+        guarded by FIR_NUMBER_RE, so it matched nothing, produced no evidence, and
+        dropped the turn into the unscoped semantic search that answered a case-scoped
+        question with cases from other districts (ENGINEERING_BRIEF §12 item 12
+        recorded this live and left it unfixed during a freeze). Asserting the
+        operation the query actually IS, rather than that *something* was returned, is
+        what makes this a regression test instead of a description of the bug.
+        """
+        # The interpreter receives the translated form (node_translate_in runs first).
+        english = "Is there another FIR related to that case?"
+
+        with_case = interpret(english, language="kn",
+                              focus=_make_state(language="kn", active_fir="1234"))
+        assert with_case.operation in {"SIMILAR_CASES", "CASE_CONTEXT", "CASE_PEOPLE"}, (
+            f"a case-scoped question resolved to {with_case.operation}")
+
+        # With no case open there is nothing for "that case" to mean. Refusing is the
+        # honest answer; becoming a record lookup for a record nobody named is not.
+        without_case = interpret(english, language="kn", focus=_make_state(language="kn"))
+        assert without_case.operation != "FIR_LOOKUP"
+
+    def test_a_query_naming_no_record_identifier_is_not_a_record_lookup(self):
+        """The general rule behind the fix above: FIR_LOOKUP means "fetch the one
+        record with this identifier", so a query with no identifier in it cannot be
+        one however many times it says "FIR"."""
+        from rag_agent import intents
+
+        assert intents.classify("show me the FIR") != "FIR_LOOKUP"
+        assert intents.classify("which FIR is this") != "FIR_LOOKUP"
+        assert intents.classify("is there another FIR on this") != "FIR_LOOKUP"
+        # ...and the converse: a bare identifier with no verb around it IS one.
+        assert intents.classify("100010101202300001") == "FIR_LOOKUP"
+        assert intents.classify("what is the status of FIR 0112/2026") == "FIR_LOOKUP"
 
     def test_pure_kannada_query(self):
         """Pure Kannada query (translated) should still classify correctly."""

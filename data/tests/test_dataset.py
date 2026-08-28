@@ -197,3 +197,179 @@ def test_a_habitual_offender_appears_under_more_than_one_spelling(dataset, habit
         '  ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" '
         'WHERE "vx_accused_identity"."PersonUID" = :uid', {"uid": habitual["PersonUID"]})}
     assert len(names) > 1, f"the most-connected offender has only one recorded spelling"
+
+
+# ------------------------------------------------------- narrative investigative signal
+def test_a_narrative_states_the_facts_an_officer_would_actually_search_on(dataset):
+    """`BriefFacts` is the ONLY free text in the schema, so it is the entire input to the
+    vector index, to "similar cases", and to every semantic search the console runs. It
+    used to state four things (date, crime type, district, one MO clause) and nothing
+    else — measured on the live 10,000-case dataset, that produced 592 distinct strings
+    once the date was normalised out, with one template covering 520 cases.
+
+    The facts asserted here are the ones an investigator types into a search box and the
+    ones that make one case distinguishable from another, and every one of them is a
+    column this same row already carries. None was reachable from the text before.
+    """
+    rows = ds.query('SELECT "CaseMasterID", "BriefFacts", "CaseStatusID" FROM "CaseMaster"')
+    texts = [r["BriefFacts"] for r in rows if r["BriefFacts"]]
+    assert texts
+
+    stations = {u["UnitName"] for u in ds.query('SELECT "UnitName" FROM "Unit"')}
+    assert sum(any(s and s in t for s in stations) for t in texts) == len(texts), \
+        "a narrative that does not name the registering station cannot be searched by station"
+
+    # The sections invoked. This is what lets the lexical half of hybrid retrieval answer
+    # "IPC 457" — exactly what an investigator types and exactly what a dense embedding
+    # cannot represent.
+    assert sum("under section" in t for t in texts) == len(texts)
+
+    # The closing sentence follows the case's OWN status. Every case previously ended with
+    # "Investigation is being carried out as per procedure." — on a convicted case that is
+    # not merely repetitive, it is false.
+    from data.generator.build import _CLOSINGS
+    for r in rows:
+        if not r["BriefFacts"]:
+            continue
+        expected = _CLOSINGS.get(int(r["CaseStatusID"]), _CLOSINGS[1])
+        assert r["BriefFacts"].endswith(tuple(expected)), (
+            "case %s (status %s) ends with a closing belonging to a different status: %r"
+            % (r["CaseMasterID"], r["CaseStatusID"], r["BriefFacts"][-70:]))
+
+
+def test_a_named_locality_is_the_activity_centre_the_coordinates_actually_fall_in(dataset):
+    """The spatial layer and the text layer must describe the same fact.
+
+    Activity centres are the only real spatial structure in this dataset — they are why
+    KDE and DBSCAN find anything at all — but they had no name, so nothing about them
+    reached the text an officer searches: two burglaries 300m apart in one market were,
+    as far as retrieval was concerned, unrelated. This asserts the naming is *derived
+    from the coordinates on the row*, not drawn alongside them, so the narrative and the
+    hotspot on the map cannot disagree.
+    """
+    import re
+
+    from data.districts import all_districts
+    from data.generator.geo import locality
+
+    code_for = {d.name: d.code for d in all_districts()}
+    rows = ds.query(
+        'SELECT "CaseMaster"."BriefFacts", "CaseMaster"."latitude", '
+        '       "CaseMaster"."longitude", "District"."DistrictName" AS "district" '
+        'FROM "CaseMaster" '
+        'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
+        'JOIN "District" ON "Unit"."DistrictID" = "District"."DistrictID"')
+
+    named = 0
+    for r in rows:
+        expected = locality(float(r["latitude"]), float(r["longitude"]),
+                            code_for[r["district"]])
+        m = re.search(r" near ([^,]+),", r["BriefFacts"])
+        assert (m.group(1) if m else "") == expected, (
+            "narrative says %r but the coordinates fall in %r"
+            % (m.group(1) if m else "(no locality)", expected))
+        named += bool(expected)
+
+    # A background incident genuinely did not happen at an activity centre and must stay
+    # unnamed — inventing a locality for it would fabricate the one fact this layer
+    # exists to record.
+    assert 0.5 < named / len(rows) < 0.95, (
+        "%d/%d narratives name a locality — either the background draws are being named "
+        "(invention) or the clustered ones are not (no signal)" % (named, len(rows)))
+
+
+def test_a_repeat_offenders_method_carries_across_their_own_cases(dataset):
+    """An offender who breaks in the same way twice is what an investigator is actually
+    looking for, and it is what makes "cases with the same modus operandi as this one" a
+    lead rather than noise. The generator used to give the MO an independent draw per
+    case, so a crew's five burglaries described five unrelated methods.
+
+    Asserted against a PERMUTATION NULL rather than an absolute threshold, because an
+    absolute one proves nothing here: MO variants are drawn per crime type, so any two
+    cases of a type already agree a third of the time by chance. Reshuffling the same MO
+    labels among the same cases *within each crime type* destroys exactly one thing — the
+    tie to the offender — and leaves every other structure (crime-type mix, how many
+    cases each person has) identical. Beating that null is evidence of the tie itself.
+    """
+    import collections
+    import random
+
+    from data.generator.build import _MO_VARIANTS
+
+    variants = [v for vs in _MO_VARIANTS.values() for v in vs]
+    briefs = {r["CaseMasterID"]: r["BriefFacts"]
+              for r in ds.query('SELECT "CaseMasterID", "BriefFacts" FROM "CaseMaster"')}
+    ctype = {r["CaseMasterID"]: r["CrimeMinorHeadID"] for r in
+             ds.query('SELECT "CaseMasterID", "CrimeMinorHeadID" FROM "CaseMaster"')}
+    identity = {r["AccusedMasterID"]: r["PersonUID"] for r in
+                ds.query('SELECT "AccusedMasterID", "PersonUID" FROM "vx_accused_identity"')}
+    # A1 only: an MO habit belongs to whoever chose the method, and A1 is the ER's own
+    # ordering label for the lead accused on a case.
+    lead = {r["CaseMasterID"]: identity[r["AccusedMasterID"]]
+            for r in ds.query('SELECT "CaseMasterID", "AccusedMasterID", "PersonID" '
+                              'FROM "Accused"')
+            if str(r["PersonID"]).upper() == "A1" and r["AccusedMasterID"] in identity}
+
+    groups, pool = collections.defaultdict(list), collections.defaultdict(list)
+    for cid, uid in lead.items():
+        m = next((v for v in variants if v in (briefs.get(cid) or "")), None)
+        if m:
+            groups[(uid, ctype.get(cid))].append(m)
+            pool[ctype.get(cid)].append(m)
+
+    def modal_share(gs):
+        num = den = 0
+        for ms in gs.values():
+            if len(ms) < 2:
+                continue
+            num += collections.Counter(ms).most_common(1)[0][1]
+            den += len(ms)
+        return (num / den if den else 0.0), den
+
+    observed, n = modal_share(groups)
+    assert n >= 20, "only %d case-attributions by a repeat lead offender — too few" % n
+
+    nulls = []
+    for seed in range(5):
+        rnd = random.Random(seed)
+        shuffled = {k: list(v) for k, v in pool.items()}
+        for v in shuffled.values():
+            rnd.shuffle(v)
+        it = {k: iter(v) for k, v in shuffled.items()}
+        nulls.append(modal_share(
+            {k: [next(it[k[1]]) for _ in ms] for k, ms in groups.items()})[0])
+    null = sum(nulls) / len(nulls)
+
+    assert observed > null + 0.08, (
+        "an offender's method does not carry across their own cases: observed modal-MO "
+        "share %.4f vs permutation null %.4f (n=%d)" % (observed, null, n))
+
+
+def test_a_group_offence_is_recorded_as_a_group_offence(dataset):
+    """Dacoity is robbery "by five or more persons" (IPC 391); rioting requires an
+    unlawful assembly, also of five (IPC 146/141).
+
+    The accused count used to be drawn from one distribution for every crime type, which
+    produced dacoities committed by a lone individual — a contradiction inside a single
+    record, and one only visible once the narrative started stating the offender count
+    out loud. It also flattened the co-offending graph: the two crime types that should
+    contribute the densest cliques were contributing the same one-to-two person edges as
+    a pickpocketing.
+    """
+    from data.generator.build import _GROUP_OFFENCE_SIZES
+
+    counts = Counter(r["CaseMasterID"] for r in
+                     ds.query('SELECT "CaseMasterID" FROM "Accused"'))
+    rows = ds.query('SELECT "CaseMaster"."CaseMasterID", "CrimeSubHead"."CrimeHeadName" '
+                    'AS "crime_type" FROM "CaseMaster" JOIN "CrimeSubHead" ON '
+                    '"CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID"')
+    checked = 0
+    for r in rows:
+        sizes = _GROUP_OFFENCE_SIZES.get(r["crime_type"])
+        if not sizes:
+            continue
+        checked += 1
+        assert counts.get(r["CaseMasterID"], 0) >= min(sizes), (
+            "%s case %s has %d accused"
+            % (r["crime_type"], r["CaseMasterID"], counts.get(r["CaseMasterID"], 0)))
+    assert checked, "no group offence in the sample — this property was not exercised"

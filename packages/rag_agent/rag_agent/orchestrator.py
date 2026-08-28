@@ -47,7 +47,11 @@ class _NoEvidenceInContext(Exception):
 # a Hurt case in Mandya returned cyber-crime cases in Shivamogga. The long form is
 # floored at 12 digits so ordinary numbers in a question ("the last 30 days", "2026")
 # can never be mistaken for a record identifier.
-FIR_NUMBER_RE = re.compile(r"\b(\d{3,4}/\d{4}|\d{12,20})\b")
+# Defined in intents.py and re-exported here (this name is the one the tests and the
+# rest of this module already use). It moved because classify() needs the same fact:
+# whether a query names a record at all is part of what the question IS — a query
+# that says "FIR" but names no number is not a record lookup, and used to become one.
+FIR_NUMBER_RE = intents.FIR_NUMBER_RE
 
 TOG_CONFIDENCE_FLOOR = 0.55      # below this, HippoRAG alone isn't trusted
 _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
@@ -115,6 +119,18 @@ def node_translate_in(state: InvestigationState) -> InvestigationState:
         state.original_query = english
         _trace(state, "Translation Agent (kn->en)", f"Query understood as: {english}", t0)
     else:
+        # Translation did not run. The turn STOPS here rather than carrying on with the
+        # untranslated text, and that is the whole point: this module's own docstring
+        # says an untranslated Kannada query "matches none of it and retrieves nothing
+        # at all" — so continuing means sweeping the index with a string that cannot
+        # match, and refusing with a message about the RECORDS ("no supporting evidence
+        # was retrieved — check whether the record exists"). That message is a false
+        # statement about the records. Nothing was looked up, because the question was
+        # never read.
+        #
+        # Refusing here says the true thing instead, and says it in the officer's own
+        # language on the way out like any other answer.
+        state.refusal_reason = "translation_unavailable"
         _trace(state, "Translation Agent (kn->en)", note or "translation unavailable", t0)
     return state
 
@@ -159,8 +175,23 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
         elif sem_req.subject_type == "location":
             state.active_entities.active_location = sem_req.subject_text
     elif sem_req.subject_text and sem_req.subject_type == "person":
-        # Subject was named but not found
+        # The turn names someone we hold no record for. The focus MUST be cleared,
+        # never inherited: leaving the previous turn's subject in place makes the
+        # engine answer about a different person entirely, and the officer is given
+        # someone else's record with nothing to indicate a substitution happened.
+        #
+        # And the turn refuses HERE, with the reason it actually has, rather than
+        # sweeping the vector index and refusing later with "check whether the record
+        # exists in the system" — the system already knows the answer to that. This
+        # was the behaviour before the semantic-interpreter migration (83b8695)
+        # dropped it: two consequences followed, both real. The officer stopped being
+        # told the specific, useful fact ("no person of that name appears in the
+        # records available to you — I have not substituted a similarly-spelled
+        # name"), and a decided refusal started running the generic search again,
+        # which is exactly the Evidence-rail padding the guard in node_retrieve
+        # exists to prevent.
         state.active_entities.active_person = None
+        state.refusal_reason = "person_not_on_file"
         resolved_note = f"no person matching '{sem_req.subject_text}' exists in the records"
 
     # Propagate any ambiguity/refusal from the interpreter
@@ -168,7 +199,12 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
         state.refusal_reason = "ambiguous_person"
         state.ambiguous_candidates = sem_req.ambiguous_candidates
         resolved_note = f"'{sem_req.subject_text}' matches {len(sem_req.ambiguous_candidates)} people; asking rather than guessing"
-    elif sem_req.refusal_reason:
+    elif sem_req.refusal_reason and not state.refusal_reason:
+        # `not state.refusal_reason`: a reason decided just above from the RESOLVED
+        # subject (person_not_on_file) is strictly more specific than the
+        # interpreter's own generic "no operation matched", and must not lose to it —
+        # "Tell me about <someone we have no file on>" matches no keyword either, so
+        # both fire on exactly the query where the specific one is the useful one.
         state.refusal_reason = sem_req.refusal_reason
 
     detail = f"Intent: {state.intent}"
