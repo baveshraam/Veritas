@@ -51,6 +51,7 @@ class SemanticRequest:
         ambiguous_candidates: Optional[list[str]] = None,
         refusal_reason: Optional[str] = None,
         confidence: float = 0.0,
+        plan_steps: Optional[list[dict[str, Any]]] = None,
     ):
         self.operation = operation
         self.subject_type = subject_type
@@ -65,6 +66,13 @@ class SemanticRequest:
         self.ambiguous_candidates = ambiguous_candidates or []
         self.refusal_reason = refusal_reason
         self.confidence = confidence
+        # A general N-step investigation plan (see module docstring below
+        # _validate_llm_result and orchestrator._run_plan). None/empty for every
+        # ordinary single-op request — which is every request the deterministic
+        # path ever produces, and most LLM-path ones too. When present, this
+        # object's own operation/subject_* fields mirror plan_steps[0] so every
+        # existing caller (node_orchestrate) keeps working unchanged.
+        self.plan_steps = plan_steps or []
 
 
 def interpret(
@@ -183,6 +191,99 @@ def _validate_llm_result(result_json: dict) -> dict:
     }
 
 
+def _resolve_person_by_text(subject_text: Optional[str]) -> tuple[Optional[str], list[str]]:
+    """(person_id, ambiguous_candidate_names) for a model-supplied subject_text —
+    the one DB-grounded resolution step both the flat single-op path and each step
+    of a multi-op plan share. Never returns a guess: a tied name search returns no
+    id, only the names to ask about (mirrors sql_agent's own tie-break rule)."""
+    if not subject_text:
+        return None, []
+    hits = sql_agent.person_by_name(subject_text)
+    if not hits:
+        return None, []
+    if len(hits) > 1 and hits[0].get("record_count", 0) == hits[1].get("record_count", 0):
+        return None, [h["name_en"] for h in hits[:4]]
+    return str(hits[0]["person_id"]), []
+
+
+# Per-step schema fields, in addition to the ones the flat single-op shape already
+# has (operation/subject_type/subject_text/reference_kind/constraints) — see
+# _interpret_llm's docstring for what each does and why a linear/bounded-fan-out
+# plan, not an arbitrary graph of operations, is what's implemented.
+_PLAN_STEP_EXTRA_PROPERTIES = {
+    "depends_on_step": {
+        "type": ["integer", "null"],
+        "description": (
+            "1-based index of an EARLIER step in this same plan whose resolved "
+            "subject this step should use, instead of subject_text — for a "
+            "genuine follow-on step like 'go deeper on the second person' or "
+            "'check whether either of them...'. Null for a step that names its "
+            "own subject_text or reads from focus."
+        ),
+    },
+    "fan_out": {
+        "type": "boolean",
+        "description": (
+            "Only meaningful with depends_on_step set. True means: run this "
+            "step once for EACH entity the referenced step's own operation "
+            "found (e.g. each associate PERSON_NETWORK returned), not just "
+            "that step's single subject — for 'which of them appear in other "
+            "cases'. False (the default) means reuse that step's one subject."
+        ),
+    },
+    "position": {
+        "type": ["integer", "null"],
+        "description": (
+            "1-based citation position from the PREVIOUS turn's own numbered "
+            "answer this step's subject refers to — 'the first one', 'the "
+            "third case' — resolved against that turn's citation list, never "
+            "guessed. Null unless the query names a position."
+        ),
+    },
+}
+
+
+def _validate_llm_step(step_json: dict, step_index: int, n_prior_steps: int) -> dict:
+    """_validate_llm_result plus the three plan-only fields above. Raises ValueError
+    on anything invalid — the SAME contract as _validate_llm_result, so one bad step
+    invalidates the whole plan and interpret() falls back to the deterministic
+    result exactly as an unreachable model would, never a partially-executed plan."""
+    base = _validate_llm_result(step_json)
+
+    depends_on_step = step_json.get("depends_on_step")
+    if depends_on_step is not None:
+        if not isinstance(depends_on_step, int) or isinstance(depends_on_step, bool):
+            raise ValueError(f"Step {step_index}'s depends_on_step must be an integer or null")
+        if not (1 <= depends_on_step <= n_prior_steps):
+            raise ValueError(
+                f"Step {step_index}'s depends_on_step ({depends_on_step}) must name an "
+                f"EARLIER step in this same plan")
+
+    fan_out = step_json.get("fan_out", False)
+    if not isinstance(fan_out, bool):
+        raise ValueError(f"Step {step_index}'s fan_out must be a boolean")
+
+    position = step_json.get("position")
+    if position is not None:
+        if not isinstance(position, int) or isinstance(position, bool):
+            raise ValueError(f"Step {step_index}'s position must be an integer or null")
+        if not (1 <= position <= 20):
+            raise ValueError(f"Step {step_index}'s position ({position}) is out of range")
+
+    base["depends_on_step"] = depends_on_step
+    base["fan_out"] = fan_out and depends_on_step is not None
+    base["position"] = position
+    return base
+
+
+# Hard cap on plan length — bounds both QuickML prompt/latency cost and the amount
+# of retrieval a single turn can trigger. Every example in the design spec this
+# implements needs 4 steps or fewer; a "plan" this long is almost certainly the
+# model over-decomposing a simple question, which the deterministic path would
+# have answered in one step anyway.
+_MAX_PLAN_STEPS = 6
+
+
 def _interpret_llm(
     query: str,
     language: str,
@@ -192,14 +293,36 @@ def _interpret_llm(
     """LLM-based semantic interpretation. Every field the model returns is validated
     against the real operation allowlist and argument types (_validate_llm_result)
     before anything downstream sees it — see that function's docstring for why
-    subject_id specifically is never read from the model at all."""
-    schema = {
+    subject_id specifically is never read from the model at all.
+
+    Two capabilities live here beyond a single operation:
+
+    - A general multi-step investigation PLAN (the optional "steps" array). Absent
+      or a single-item array, this is unchanged from before — the model returns one
+      operation and this function resolves and returns it exactly as always. Two or
+      more items is a genuine multi-step investigation (design spec: "resolve
+      subjects -> retrieve history for subject 1 -> ... -> compare"); each step is
+      independently validated and subject-resolved right here, the same way the
+      flat single-op shape always was — orchestrator._run_plan then EXECUTES the
+      plan by calling the existing per-operation retrieval it already has for every
+      operation in the allowlist. Nothing about what an operation DOES changes; only
+      how many of them one turn can chain.
+    - Semantic, non-phrase-specific CORRECTION handling: when a prior turn exists,
+      its own structured request (not just its prose) is given to the model, with an
+      explicit instruction to return a MERGED, corrected request when this query
+      reads as an adjustment to it ("actually Bengaluru, not Mysuru", "no, the other
+      person", "same thing but earlier") rather than a fresh, unrelated one. This is
+      why corrections need no keyword list: the merge is the model's own semantic
+      judgment over two structured objects, validated by the same allowlist/type
+      checks as everything else it returns.
+    """
+    step_schema = {
         "type": "object",
         "properties": {
             "operation": {
                 "type": "string",
                 "enum": sorted(intents.ALL_OPERATIONS),
-                "description": "the single investigation operation this query asks for",
+                "description": "the single investigation operation this step performs",
             },
             "subject_type": {
                 "type": "string",
@@ -207,7 +330,39 @@ def _interpret_llm(
             },
             "subject_text": {
                 "type": ["string", "null"],
-                "description": "how the officer named the subject, if present",
+                "description": "how the officer named this step's subject, if present "
+                               "and not covered by depends_on_step/position below",
+            },
+            "reference_kind": {
+                "type": "string",
+                "enum": ["explicit", "pronoun", "positional", "implicit_from_focus"],
+            },
+            "constraints": {
+                "type": "object",
+                "description": "date_range (as date_before/date_after, YYYY-MM-DD), "
+                               "crime_type, district, etc. — only ones actually named",
+            },
+            **_PLAN_STEP_EXTRA_PROPERTIES,
+        },
+        "required": ["operation", "subject_type", "reference_kind"],
+    }
+    schema = {
+        "type": "object",
+        "properties": {
+            "operation": {
+                "type": "string",
+                "enum": sorted(intents.ALL_OPERATIONS),
+                "description": "the single investigation operation this query asks for "
+                               "— used only when 'steps' below is absent or has one item",
+            },
+            "subject_type": {
+                "type": "string",
+                "enum": ["person", "case", "location", "account", "none"],
+            },
+            "subject_text": {
+                "type": ["string", "null"],
+                "description": "how the officer named the subject, if present — never a "
+                               "resolved id or a name you infer from outside the query",
             },
             "reference_kind": {
                 "type": "string",
@@ -235,14 +390,42 @@ def _interpret_llm(
                 "minimum": 0.0,
                 "maximum": 1.0,
             },
+            "steps": {
+                "type": "array",
+                "items": step_schema,
+                "minItems": 1,
+                "maxItems": _MAX_PLAN_STEPS,
+                "description": (
+                    "ONLY for a question that genuinely needs several DIFFERENT "
+                    "retrieval operations in sequence to answer (e.g. 'check "
+                    "whether either of those people had a prior robbery case in "
+                    "Bengaluru around the same time' -> one PERSON_HISTORY step "
+                    "per person; 'who else is connected to this person and which "
+                    "of them appear in other cases' -> a PERSON_NETWORK step then "
+                    "a fan_out PERSON_HISTORY step). Omit entirely for an ordinary "
+                    "single-operation question — do NOT wrap a simple question in "
+                    "a one-item plan."
+                ),
+            },
         },
         "required": ["operation", "subject_type", "reference_kind", "confidence"],
     }
 
-    # Build context prompt from prior turn if present
+    # Build context prompt from prior turn if present — both the prose (for a human-
+    # style read of what was just discussed) and the prior turn's own STRUCTURED
+    # request, when one was recorded (see state.py InvestigationState.last_request /
+    # apps/api/routers/chat.py). The structured form is what makes correction
+    # handling semantic rather than phrase-matched: the model merges two objects,
+    # not two sentences.
     prior_context = ""
     if prior_turn:
-        prior_context = f"\nPrevious turn: {prior_turn.query[:200]}\nAnswer: {prior_turn.final_answer[:200]}\n"
+        prior_context = (
+            f"\nPrevious turn: {prior_turn.query[:200]}\n"
+            f"Answer: {prior_turn.final_answer[:200]}\n"
+        )
+        prior_request = (prior_turn.result_context or {}).get("last_request")
+        if prior_request:
+            prior_context += f"Previous turn's structured request: {prior_request}\n"
 
     prompt = f"""You are a police investigation assistant. Decompose this officer query into structured semantic concepts.
 
@@ -262,6 +445,15 @@ Interpret the query as:
 - exploration_direction: if asking to "go deeper" or "show more"
 - confidence: 0.5-1.0 (higher = confident interpretation)
 - comparison_entities: for "both of them", "compare"
+- steps: only if this ONE question genuinely requires several different operations run
+  in sequence to answer — see the schema description for "steps". Most questions do not.
+
+If a "Previous turn's structured request" is shown above and this query reads as a
+CORRECTION or adjustment to it (a different person/case/district swapped in, "no, the
+other one", "actually X not Y", a narrower or shifted time window, a reference like
+"the first and third") rather than a brand-new, unrelated question: return the FULL
+corrected request — carry forward every field from the previous request that this
+query does not itself override. Do not return only the part that changed.
 
 Never invent information not present in the query or the stated focus. If the query is
 unclear or matches no operation well, set operation="UNKNOWN"."""
@@ -269,6 +461,10 @@ unclear or matches no operation well, set operation="UNKNOWN"."""
     result_json = generate_json(prompt, schema)
     if not result_json:
         raise LLMUnavailable("LLM returned empty response")
+
+    raw_steps = result_json.get("steps")
+    if isinstance(raw_steps, list) and len(raw_steps) >= 2:
+        return _build_plan_request(raw_steps[:_MAX_PLAN_STEPS])
 
     validated = _validate_llm_result(result_json)
     operation = validated["operation"]
@@ -280,19 +476,16 @@ unclear or matches no operation well, set operation="UNKNOWN"."""
     # whole LLM path, and it is identical to what the deterministic path already does.
     subject_id = None
     if subject_text and subject_type == "person":
-        hits = sql_agent.person_by_name(subject_text)
-        if hits:
-            if len(hits) > 1 and hits[0].get("record_count", 0) == hits[1].get("record_count", 0):
-                # Ambiguous
-                return SemanticRequest(
-                    operation=operation,
-                    subject_type="person",
-                    subject_text=subject_text,
-                    reference_kind=validated["reference_kind"],
-                    ambiguous_candidates=[h["name_en"] for h in hits[:4]],
-                    confidence=validated["confidence"],
-                )
-            subject_id = str(hits[0]["person_id"])
+        subject_id, ambiguous = _resolve_person_by_text(subject_text)
+        if ambiguous:
+            return SemanticRequest(
+                operation=operation,
+                subject_type="person",
+                subject_text=subject_text,
+                reference_kind=validated["reference_kind"],
+                ambiguous_candidates=ambiguous,
+                confidence=validated["confidence"],
+            )
 
     return SemanticRequest(
         operation=operation,
@@ -305,6 +498,43 @@ unclear or matches no operation well, set operation="UNKNOWN"."""
         exploration_direction=validated["exploration_direction"],
         clarification_response=validated["clarification_response"],
         confidence=validated["confidence"],
+    )
+
+
+def _build_plan_request(raw_steps: list) -> SemanticRequest:
+    """Validate and subject-resolve every step of a multi-op plan, then wrap it in a
+    SemanticRequest whose own top-level fields mirror step 1 — see the module-level
+    docstring on SemanticRequest.plan_steps for why: every existing caller of
+    interpret() (node_orchestrate) keeps reading .operation/.subject_id/etc.
+    unchanged, and only orchestrator._run_plan needs to look at .plan_steps at all.
+
+    A single bad step (invalid operation, out-of-range depends_on_step, wrong type)
+    raises ValueError, which interpret()'s caller already treats as "fall back to
+    the deterministic result" — a plan is validated as a whole, not partially
+    executed with an unvalidated step silently dropped.
+    """
+    steps: list[dict[str, Any]] = []
+    for i, raw in enumerate(raw_steps, start=1):
+        if not isinstance(raw, dict):
+            raise ValueError(f"Step {i} is not an object")
+        v = _validate_llm_step(raw, i, n_prior_steps=i - 1)
+        subject_id, ambiguous = (None, [])
+        if v["subject_text"] and v["subject_type"] == "person" and v["depends_on_step"] is None:
+            subject_id, ambiguous = _resolve_person_by_text(v["subject_text"])
+        steps.append({
+            "operation": v["operation"], "subject_type": v["subject_type"],
+            "subject_text": v["subject_text"], "subject_id": subject_id,
+            "reference_kind": v["reference_kind"], "constraints": v["constraints"],
+            "depends_on_step": v["depends_on_step"], "fan_out": v["fan_out"],
+            "position": v["position"], "ambiguous_candidates": ambiguous,
+        })
+
+    first = steps[0]
+    return SemanticRequest(
+        operation=first["operation"], subject_type=first["subject_type"],
+        subject_id=first["subject_id"], subject_text=first["subject_text"],
+        reference_kind=first["reference_kind"], constraints=first["constraints"],
+        confidence=0.8, plan_steps=steps,
     )
 
 

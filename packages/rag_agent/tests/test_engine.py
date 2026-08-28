@@ -899,6 +899,206 @@ def test_a_refusal_already_decided_by_orchestrate_does_not_still_run_a_generic_s
     assert state.evidence_items == []
 
 
+# --- General N-step investigation plan (orchestrator._run_plan) -------------
+#
+# semantic_interpreter's LLM path is what actually PRODUCES a multi-step plan
+# (see test_semantic_interpreter.py's TestMultiStepPlan for that half); these
+# tests exercise EXECUTION of an already-validated plan directly against
+# InvestigationState, the same way test_a_needs_subject_question_asks_which_
+# accused_when_the_case_has_several exercises node_retrieve's other branches
+# without going through the full interpreter.
+
+def _plan_step(operation, subject_type="person", subject_text=None, subject_id=None,
+              constraints=None, depends_on_step=None, fan_out=False, position=None,
+              ambiguous_candidates=None):
+    return {"operation": operation, "subject_type": subject_type,
+            "subject_text": subject_text, "subject_id": subject_id,
+            "reference_kind": "explicit", "constraints": constraints or {},
+            "depends_on_step": depends_on_step, "fan_out": fan_out, "position": position,
+            "ambiguous_candidates": ambiguous_candidates or []}
+
+
+def test_a_two_step_plan_with_explicit_subjects_runs_both_and_labels_evidence(dataset):
+    """'Compare the two people...' — two PERSON_HISTORY steps, each naming its own
+    subject directly (no depends_on_step/position/fan_out at all), the simplest
+    real multi-step plan. Both subjects' evidence must be present, distinctly
+    labeled by step, and focus must be restored afterward."""
+    from data import ds
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    people = ds.query('SELECT "PersonUID" FROM "vx_person" LIMIT 2')
+    if len(people) < 2:
+        pytest.skip("dataset has fewer than two people")
+    pid1, pid2 = str(people[0]["PersonUID"]), str(people[1]["PersonUID"])
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="compare their histories")
+    state.intent = "PERSON_HISTORY"
+    state.plan_steps = [
+        _plan_step("PERSON_HISTORY", subject_id=pid1),
+        _plan_step("PERSON_HISTORY", subject_id=pid2),
+    ]
+
+    saved_ps = orch._officer_ps
+    orch._officer_ps = lambda _oid: ""
+    try:
+        out = orch.node_retrieve(state)
+    finally:
+        orch._officer_ps = saved_ps
+
+    assert out.refusal_reason == ""
+    assert out.intent == "INVESTIGATION_PLAN"
+    ids = [e.evidence_id for e in out.evidence_items]
+    assert any(f"#plan:1:{pid1}" in i for i in ids)
+    assert any(f"#plan:2:{pid2}" in i for i in ids)
+    # Focus is restored to whatever it was before the plan ran (nothing, here) —
+    # a plan step's subject must not leak into the NEXT turn's session focus.
+    assert out.active_entities.active_person is None
+
+
+def test_a_fan_out_step_repeats_its_operation_over_an_earlier_steps_own_findings(monkeypatch):
+    """'Who else is connected to this person and which of them appear in other
+    cases?' -> step 1 (PERSON_NETWORK) finds associates; step 2 (PERSON_HISTORY,
+    depends_on_step=1, fan_out=True) must run ONCE PER associate step 1 found,
+    not just once. _run_specialists itself is stubbed so the associate list is
+    deterministic and this test does not depend on the graph having real edges."""
+    from rag_agent.state import InvestigationState, EvidenceItem
+    import rag_agent.orchestrator as orch
+
+    def fake_specialists(state, widen):
+        if state.intent == "PERSON_NETWORK":
+            state.graph_query_results += [
+                {"person_id": "101", "name_en": "Assoc One"},
+                {"person_id": "102", "name_en": "Assoc Two"},
+            ]
+            return []
+        if state.intent == "PERSON_HISTORY":
+            pid = state.active_entities.active_person
+            return [EvidenceItem(evidence_id=f"fir:hist:{pid}", source_type="CRIMINAL_RECORD",
+                                 source_id=pid or "", content="history", confidence=0.9)]
+        return []
+
+    saved = (orch._run_specialists, orch.hipporag.retrieve, orch._person_name)
+    orch._run_specialists = fake_specialists
+    orch.hipporag.retrieve = lambda *a, **k: ([], [])
+    orch._person_name = lambda pid: f"Person {pid}" if pid else None
+    try:
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="who else is connected, and do they "
+                                                  "appear in other cases")
+        state.intent = "PERSON_NETWORK"
+        state.active_entities.active_person = "1"
+        state.plan_steps = [
+            _plan_step("PERSON_NETWORK", subject_id=None),
+            _plan_step("PERSON_HISTORY", depends_on_step=1, fan_out=True),
+        ]
+        out = orch.node_retrieve(state)
+    finally:
+        orch._run_specialists, orch.hipporag.retrieve, orch._person_name = saved
+
+    assert out.refusal_reason == ""
+    ids = [e.evidence_id for e in out.evidence_items]
+    assert any("#plan:2:101" in i for i in ids)
+    assert any("#plan:2:102" in i for i in ids)
+
+
+def test_a_plan_step_depending_on_an_unresolved_earlier_step_refuses_not_guesses():
+    """A step's depends_on_step must name an EARLIER step that actually resolved
+    a subject — semantic_interpreter's own validation already bounds the index
+    to earlier steps at INTERPRETATION time; this covers the EXECUTION-time case
+    where that earlier step's fan_out source found nothing (e.g. an associate
+    search that came back empty), which validation cannot know in advance."""
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    saved = (orch._run_specialists, orch.hipporag.retrieve)
+    orch._run_specialists = lambda state, widen: []   # PERSON_NETWORK finds nobody
+    orch.hipporag.retrieve = lambda *a, **k: ([], [])
+    try:
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="who else is connected, and do they "
+                                                  "appear in other cases")
+        state.intent = "PERSON_NETWORK"
+        state.active_entities.active_person = "1"
+        state.plan_steps = [
+            _plan_step("PERSON_NETWORK", subject_id=None),
+            _plan_step("PERSON_HISTORY", depends_on_step=1, fan_out=True),
+        ]
+        out = orch.node_retrieve(state)
+    finally:
+        orch._run_specialists, orch.hipporag.retrieve = saved
+
+    assert out.refusal_reason == "plan_step_unresolved"
+
+
+def test_a_plan_step_naming_an_ambiguous_subject_refuses_with_the_candidates():
+    """A step whose subject_text tied on name search at interpretation time
+    carries ambiguous_candidates instead of a subject_id — executing that step
+    must stop the whole plan and ask, exactly like an ordinary single-op tied
+    name search does, not silently skip the step or guess one candidate."""
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="check both Ramesh and the other person")
+    state.intent = "PERSON_HISTORY"
+    state.plan_steps = [
+        _plan_step("PERSON_HISTORY", subject_text="Ramesh",
+                   ambiguous_candidates=["Ramesh Gowda", "Ramesh Kumar"]),
+        _plan_step("PERSON_HISTORY", subject_id="42"),
+    ]
+
+    out = orch.node_retrieve(state)
+
+    assert out.refusal_reason == "ambiguous_person"
+    assert set(out.ambiguous_candidates) == {"Ramesh Gowda", "Ramesh Kumar"}
+
+
+def test_a_plan_step_referencing_a_citation_position_resolves_against_it():
+    """'Compare the first and third' — a plan step naming its subject by POSITION
+    in the previous turn's own citation list, not by text. Reuses the exact
+    same evidence_id-prefix convention (assoc:<person_id>) ordinary single-turn
+    ordinal resolution already reads (semantic_interpreter._citation_subject)."""
+    from data.models import ConversationTurn
+    from rag_agent.state import InvestigationState
+    import rag_agent.orchestrator as orch
+
+    def fake_history(session_id):
+        return [ConversationTurn(
+            turn_index=0, query="who are the associates", language="en",
+            final_answer="...", created_at="2026-01-01T00:00:00",
+            citations=[
+                {"index": 1, "evidence_id": "assoc:501", "label": "Person A"},
+                {"index": 2, "evidence_id": "assoc:502", "label": "Person B"},
+                {"index": 3, "evidence_id": "assoc:503", "label": "Person C"},
+            ],
+            evidence_items=[], visualization={}, agent_trace=[], result_context={},
+        )]
+
+    saved = (orch._run_specialists, orch.hipporag.retrieve, orch._person_name)
+    import data as data_mod
+    saved_history = data_mod.get_conversation_history
+    data_mod.get_conversation_history = fake_history
+    orch._run_specialists = lambda state, widen: []
+    orch.hipporag.retrieve = lambda *a, **k: ([], [])
+    orch._person_name = lambda pid: f"Person {pid}" if pid else None
+    try:
+        state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                   original_query="compare the first and third")
+        state.intent = "PERSON_HISTORY"
+        state.plan_steps = [
+            _plan_step("PERSON_HISTORY", position=1),
+            _plan_step("PERSON_HISTORY", position=3),
+        ]
+        out = orch.node_retrieve(state)
+    finally:
+        data_mod.get_conversation_history = saved_history
+        orch._run_specialists, orch.hipporag.retrieve, orch._person_name = saved
+
+    assert out.refusal_reason == ""
+
+
 # --- BUG-012: /health reported a model it had never reached ------------------
 #
 # Live, every answer was extractive and the Copilot diary was the deterministic

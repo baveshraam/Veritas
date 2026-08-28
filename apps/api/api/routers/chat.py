@@ -142,7 +142,12 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
             evidence_items=[e.model_dump(mode="json") for e in result.evidence_items],
             visualization=result.visualization.model_dump(),
             agent_trace=trace,
-            result_context=result.result_context,
+            # last_request is a separate InvestigationState field precisely so it
+            # survives every specialist branch that overwrites result_context
+            # wholesale (see state.py) — merged in only here, at the one point a
+            # turn is actually persisted, so it round-trips regardless of which
+            # path node_retrieve took this turn.
+            result_context={**(result.result_context or {}), "last_request": result.last_request},
         )
         record(officer.officer_id, req.session_id, "/chat",
                req.model_dump(exclude={"audio"}), final, trace)

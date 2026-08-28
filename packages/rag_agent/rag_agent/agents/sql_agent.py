@@ -106,7 +106,8 @@ def search_firs(officer_role: str, officer_ps_code: str,
 
 
 def count_firs(officer_role: str, officer_ps_code: str,
-               crime_type: Optional[str] = None, district: Optional[str] = None) -> int:
+               crime_type: Optional[str] = None, district: Optional[str] = None,
+               date_from: Optional[date] = None, date_to: Optional[date] = None) -> int:
     """The exact count for a "how many X cases in Y" question — ZCQL has no GROUP BY
     over a join this deep, so this counts rows in Python over the same scoped WHERE
     clause search_firs uses, rather than approximating from a sample page."""
@@ -118,6 +119,12 @@ def count_firs(officer_role: str, officer_ps_code: str,
     if district:
         clauses.append('AND "District"."DistrictName" LIKE :d')
         params["d"] = f"%{district}%"
+    if date_from:
+        clauses.append('AND "CaseMaster"."CrimeRegisteredDate" >= :d0')
+        params["d0"] = date_from
+    if date_to:
+        clauses.append('AND "CaseMaster"."CrimeRegisteredDate" < :d1')
+        params["d1"] = date_to
     rows = ds.query(
         'SELECT "CaseMaster"."CaseMasterID" FROM "CaseMaster" '
         'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '

@@ -538,3 +538,175 @@ class TestLLMRouting:
         result = si.interpret("xyzzy qwerty nonsense", "en", focus, None)
         assert result.operation == "UNKNOWN"
         assert result.confidence == 0.3  # the deterministic UNKNOWN, not the 0.05 guess
+
+
+# ============================================================================
+# GENERAL N-STEP INVESTIGATION PLAN — semantic_interpreter's own half (building
+# and validating a plan from the model's raw JSON). Orchestrator EXECUTION of an
+# already-built plan is covered in test_engine.py.
+# ============================================================================
+
+_STEP_BASE = {"subject_type": "person", "reference_kind": "explicit"}
+
+
+class TestMultiStepPlan:
+    def test_an_absent_steps_field_is_completely_unaffected(self, monkeypatch):
+        """The overwhelming common case — a normal single-op question — must be
+        byte-for-byte unchanged by a feature that never even looks at 'steps'."""
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "CASE_CONTEXT", "subject_type": "case",
+            "reference_kind": "implicit_from_focus", "confidence": 0.88,
+        })
+        result = si._interpret_llm("Tell me about this case", "en", _make_state(), None)
+        assert result.plan_steps == []
+        assert result.operation == "CASE_CONTEXT"
+
+    def test_a_single_item_steps_array_is_not_treated_as_a_plan(self, monkeypatch):
+        """Wrapping an ordinary single-op answer in a one-item 'steps' array must
+        not change behaviour — only 2+ items is a genuine plan (see _interpret_llm's
+        docstring: 'do NOT wrap a simple question in a one-item plan')."""
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "CASE_CONTEXT", "subject_type": "case",
+            "reference_kind": "implicit_from_focus", "confidence": 0.88,
+            "steps": [{"operation": "CASE_CONTEXT", **_STEP_BASE,
+                      "reference_kind": "implicit_from_focus"}],
+        })
+        result = si._interpret_llm("Tell me about this case", "en", _make_state(), None)
+        assert result.plan_steps == []
+
+    def test_a_two_step_plan_resolves_each_steps_subject_independently(self, dataset):
+        from data import ds
+        people = ds.query('SELECT "PersonUID", "CanonicalName" FROM "vx_person" LIMIT 2')
+        if len(people) < 2:
+            pytest.skip("dataset has fewer than two people")
+        p1, p2 = people[0], people[1]
+
+        steps = si._build_plan_request([
+            {**_STEP_BASE, "operation": "PERSON_HISTORY", "subject_text": p1["CanonicalName"]},
+            {**_STEP_BASE, "operation": "PERSON_HISTORY", "subject_text": p2["CanonicalName"]},
+        ])
+        assert len(steps.plan_steps) == 2
+        assert steps.plan_steps[0]["subject_id"] == str(p1["PersonUID"])
+        assert steps.plan_steps[1]["subject_id"] == str(p2["PersonUID"])
+        # Top-level fields mirror step 1 — every EXISTING caller of interpret()
+        # (node_orchestrate) keeps working unchanged.
+        assert steps.operation == "PERSON_HISTORY"
+        assert steps.subject_id == str(p1["PersonUID"])
+
+    def test_depends_on_step_is_carried_but_not_resolved_here(self):
+        """A step chaining off an earlier one carries no subject_text/id of its own
+        at INTERPRETATION time — orchestrator._run_plan resolves it at EXECUTION
+        time, from whatever that earlier step's operation actually found."""
+        result = si._build_plan_request([
+            {**_STEP_BASE, "operation": "PERSON_NETWORK", "subject_type": "none"},
+            {**_STEP_BASE, "operation": "PERSON_HISTORY", "depends_on_step": 1, "fan_out": True},
+        ])
+        assert result.plan_steps[1]["depends_on_step"] == 1
+        assert result.plan_steps[1]["fan_out"] is True
+        assert result.plan_steps[1]["subject_id"] is None
+
+    def test_depends_on_step_must_name_an_earlier_step(self):
+        with pytest.raises(ValueError, match="depends_on_step"):
+            si._build_plan_request([
+                {**_STEP_BASE, "operation": "PERSON_NETWORK", "subject_type": "none"},
+                {**_STEP_BASE, "operation": "PERSON_HISTORY", "depends_on_step": 2},
+            ])
+
+    def test_fan_out_without_depends_on_step_is_silently_coerced_to_false(self):
+        """fan_out only means something relative to a dependency — setting it with
+        no depends_on_step is a model quirk, not an invalid response worth
+        rejecting the whole plan over."""
+        v = si._validate_llm_step(
+            {**_STEP_BASE, "operation": "PERSON_HISTORY", "fan_out": True}, 1, 0)
+        assert v["fan_out"] is False
+
+    def test_position_out_of_range_is_rejected(self):
+        with pytest.raises(ValueError, match="position"):
+            si._validate_llm_step(
+                {**_STEP_BASE, "operation": "PERSON_HISTORY", "position": 999}, 1, 0)
+
+    def test_a_hallucinated_operation_in_one_step_invalidates_the_whole_plan(self):
+        """One bad step must not partially execute — the same all-or-nothing
+        contract _validate_llm_result already has for the flat single-op shape."""
+        with pytest.raises(ValueError, match="allowlist"):
+            si._build_plan_request([
+                {**_STEP_BASE, "operation": "PERSON_HISTORY"},
+                {**_STEP_BASE, "operation": "lookup_case"},
+            ])
+
+    def test_interpret_falls_back_to_deterministic_on_a_malformed_plan(self, monkeypatch):
+        """interpret()'s existing try/except around _interpret_llm already treats
+        ANY ValueError as 'fall back to deterministic' — a malformed multi-step
+        plan must degrade exactly like a malformed single-op response, never
+        raise out to the caller or half-execute."""
+        monkeypatch.setattr(si.llm, "available", lambda: True)
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "CASE_CONTEXT", "subject_type": "case",
+            "reference_kind": "explicit", "confidence": 0.9,
+            "steps": [
+                {**_STEP_BASE, "operation": "PERSON_HISTORY"},
+                {**_STEP_BASE, "operation": "not_a_real_operation"},
+            ],
+        })
+        result = si.interpret("some genuinely unseen multi-step phrasing", "en",
+                              _make_state(), None)
+        assert isinstance(result, SemanticRequest)
+        assert result.plan_steps == []
+
+    def test_plan_length_is_capped_even_if_the_model_ignores_the_schema_maxitems(self):
+        raw = [{**_STEP_BASE, "operation": "PERSON_HISTORY"} for _ in range(8)]
+        result = si._build_plan_request(raw[:si._MAX_PLAN_STEPS])
+        assert len(result.plan_steps) == si._MAX_PLAN_STEPS
+
+
+# ============================================================================
+# SEMANTIC, NON-PHRASE-SPECIFIC CORRECTION HANDLING — the previous turn's own
+# STRUCTURED request (not just its prose) is given to the model so a correction
+# ("actually Bengaluru, not Mysuru") is a merge of two objects, not a regex.
+# ============================================================================
+
+class TestCorrectionContext:
+    def test_prior_structured_request_reaches_the_prompt_when_recorded(self, monkeypatch):
+        captured = {}
+
+        def fake_generate_json(prompt, schema):
+            captured["prompt"] = prompt
+            return {"operation": "CRIME_SEARCH", "subject_type": "none",
+                    "reference_kind": "implicit_from_focus", "confidence": 0.8}
+        monkeypatch.setattr(si, "generate_json", fake_generate_json)
+
+        prior = ConversationTurn(
+            turn_index=0, query="how many theft cases in Mysuru", language="en",
+            final_answer="12 case(s) theft in Mysuru are recorded...",
+            citations=[], evidence_items=[], visualization={}, agent_trace=[],
+            created_at=datetime.utcnow(),
+            result_context={"last_request": {
+                "operation": "CRIME_SEARCH", "subject_type": "none", "subject_text": None,
+                "subject_id": None, "constraints": {"crime_type": "Theft", "district": "Mysuru"},
+            }},
+        )
+        si._interpret_llm("actually Bengaluru, not Mysuru", "en", _make_state(), prior)
+        assert "Previous turn's structured request" in captured["prompt"]
+        assert "Mysuru" in captured["prompt"]
+        assert "CRIME_SEARCH" in captured["prompt"]
+
+    def test_no_prior_request_recorded_is_handled_without_crashing(self, monkeypatch):
+        """An OLDER stored turn (before this feature existed) has no 'last_request'
+        key in result_context at all — must degrade to prose-only context, not KeyError."""
+        captured = {}
+        monkeypatch.setattr(si, "generate_json", lambda p, s: (
+            captured.__setitem__("prompt", p) or
+            {"operation": "CASE_CONTEXT", "subject_type": "case",
+             "reference_kind": "implicit_from_focus", "confidence": 0.8}
+        ))
+        prior = ConversationTurn(
+            turn_index=0, query="what happened", language="en", final_answer="...",
+            citations=[], evidence_items=[], visualization={}, agent_trace=[],
+            created_at=datetime.utcnow(), result_context={},
+        )
+        result = si._interpret_llm("and after that", "en", _make_state(), prior)
+        assert isinstance(result, SemanticRequest)
+        # The static instruction paragraph always mentions "structured request" —
+        # what must be ABSENT is the actual injected dict, which only appears
+        # when result_context["last_request"] was recorded.
+        assert "Previous turn's structured request: {" not in captured["prompt"]

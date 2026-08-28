@@ -226,6 +226,11 @@ REFUSAL_MESSAGES: dict[str, str] = {
         "A timeline needs a case or a person to build it around: open a case, name "
         "someone, or ask this right after I've shown you one."
     ),
+    "plan_step_unresolved": (
+        "One step of this multi-step investigation could not safely resolve who or "
+        "what it should look at next — I will not guess. Try naming that step's "
+        "subject directly, or ask it as separate questions."
+    ),
     "timeline_connection_no_subjects": (
         "I need two people to check for a connection between them — name them both, "
         "or ask this right after I've listed several people on a case so 'both of "

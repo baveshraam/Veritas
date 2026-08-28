@@ -426,7 +426,7 @@ def run_local(scenarios: list[Scenario]) -> tuple[int, list[ScenarioResult]]:
                 evidence_items=[e.model_dump(mode="json") for e in result.evidence_items],
                 visualization=result.visualization.model_dump(),
                 agent_trace=[t.model_dump() for t in result.agent_trace],
-                result_context=result.result_context,
+                result_context={**(result.result_context or {}), "last_request": result.last_request},
             )
             tr = TurnResult(
                 query=query, answer=result.final_answer or "",

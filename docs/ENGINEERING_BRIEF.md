@@ -767,6 +767,112 @@ compatibility layer, valid values for the `operation` field.
       multi-hop composition engine, and building the latter honestly needs
       its own design pass rather than being rushed into a single-day push.
 
+11. **The general N-step investigation planner named as deferred above, built —
+    and, alongside it, a genuinely semantic fix for the correction gap item 10
+    left open on purpose.** Both extend the existing seam (`SemanticRequest`,
+    `node_orchestrate`, `_run_specialists`) rather than replacing it: nothing
+    about what an operation *does* changed, only how many of them one turn can
+    chain, and how a turn is interpreted relative to the one before it.
+    - **`SemanticRequest.plan_steps`**: the LLM path's JSON schema gained an
+      optional `steps` array, each item shaped exactly like the existing flat
+      single-op response plus three fields — `depends_on_step` (reuse an
+      EARLIER step's own resolved subject), `fan_out` (repeat this step once
+      per entity that earlier step's operation actually found — bounded to 5,
+      `orchestrator._MAX_FAN_OUT`), and `position` (the Nth item in the
+      PREVIOUS turn's own citation list). Absent, or a single item, the schema
+      is byte-for-byte what it always was — a plan is opt-in generalization,
+      not a rewrite of the common case. Every step's `operation` is validated
+      against the exact same `intents.ALL_OPERATIONS` allowlist the flat shape
+      always used (`_validate_llm_step` wraps `_validate_llm_result`); one bad
+      step invalidates the WHOLE plan (`_build_plan_request`), the same
+      all-or-nothing contract a malformed flat response already had — never a
+      partially-executed plan with an unvalidated step silently dropped. The
+      model never supplies a subject id anywhere in a step, exactly as it
+      never could in the flat shape — `_resolve_person_by_text` (extracted
+      from the flat path, now shared) is the one DB-grounded resolution step,
+      for both.
+    - **`orchestrator._run_plan`** executes a validated plan by calling
+      `_run_specialists` once per (step, resolved subject) pair — the exact
+      function every ordinary single-op turn already uses, so a plan adds no
+      new way to reach the record layer, no new RBAC surface, and no new CRAG
+      path: all steps' evidence merges into one batch and passes through the
+      SAME evaluator node a single-op turn's evidence does. A step that cannot
+      safely resolve its subject (an unresolved dependency, a `position` with
+      nothing at that index, a tied name search) stops the WHOLE plan with a
+      clarification (`plan_step_unresolved` or `ambiguous_person`) rather than
+      guessing or silently skipping that step. This generalizes, and sits
+      alongside without replacing, the existing bounded two-entity
+      `_handle_comparison` path (`semantic_interpreter._COORDINATION_RE`,
+      deterministic, free, still the fast path for "either of them"/"both of
+      them"): a plan can chain 3+ subjects, DIFFERENT operations per subject,
+      and fan out over a dynamically-sized result set, none of which the
+      bounded 2-entity path can express by construction.
+    - **Corrections made semantic, not phrase-matched — item 10's own
+      deliberately-left-open gap.** `state.last_request` (new
+      `InvestigationState` field) snapshots THIS turn's own structured
+      request in `node_orchestrate`, untouched by every specialist branch
+      that overwrites `result_context` wholesale; `apps/api/routers/chat.py`
+      merges it into the persisted turn's `result_context` at the one point a
+      turn is actually written, so it round-trips through Data Store like any
+      other field — no schema migration, no second persisted object. The
+      NEXT turn's `_interpret_llm` reads it back and hands the model BOTH the
+      previous turn's prose AND its structured request, with an explicit
+      instruction to return a MERGED, corrected request — carrying forward
+      every field the new query doesn't itself override — when the query
+      reads as an adjustment rather than a fresh question. "Actually
+      Bengaluru, not Mysuru" is now the model's own semantic judgment over
+      two structured objects, validated by the identical allowlist/type
+      checks as everything else it returns, not a new regex — precisely the
+      "general and semantic, not phrase-specific" bar this was held to.
+    - **Temporal corrections ("same thing but earlier") actually reach the
+      database.** `sql_agent.search_firs` had accepted `date_from`/`date_to`
+      since it was written; nothing above it ever read a date constraint, so
+      a temporal correction could only repeat the SAME window. `count_firs`
+      gained the identical two `WHERE` clauses `search_firs` already had (so
+      the count and the samples shown can never silently stop matching each
+      other), and the `CRIME_SEARCH` branch of `_run_specialists` now reads
+      `constraints.date_before`/`date_after` (parsed leniently via `ds.to_dt`,
+      dropped rather than failing the turn if unparseable) into both calls.
+    - **A held-out GENERALIZATION evaluation**, distinct in kind from item 9's
+      conversational-surface evaluation: `test_generalization_evaluation.py`
+      (20 tests, one per category in this pass's own brief — unseen
+      single-step, unseen multi-step, previous-result references, pronouns,
+      corrections, 3+ subjects, multi-dimensional constraints, temporal
+      relations, cross-operation comparisons, Kannada, Kannada-English
+      switching, ambiguous references/clarification, malformed plans,
+      unsupported operations, RBAC denial, empty evidence, conflicting
+      evidence, model timeout, restart/state recovery). Two real bugs found
+      and fixed while writing it, not after: (1) a 3-subject plan test
+      revealed that a raw step-dict `subject_id` is — correctly, by the same
+      "the model never supplies an id" rule the flat shape enforces — always
+      ignored in favor of `subject_text` resolution, which the first draft of
+      the test had gotten backwards; (2) an "empty evidence" plan test
+      initially asserted `requires_escalation` after a single `node_retrieve`
+      pass, missing that the compiled graph's own `_after_evaluate` edge
+      widens once (REFINE) before rejecting — the same two-pass semantics
+      `test_empty_first_attempt_widens_before_giving_up` already documents for
+      a single-op turn, now exercised for a plan too.
+    - **Test suite**: 559 collected (up from the stale 403 this document's
+      companion `CLAUDE.md` had been carrying — recount via
+      `pytest --collect-only -q`, not trusted from an earlier changelog
+      entry), zero regressions — the same two pre-existing, unrelated
+      `test_acceptance.py` failures as every prior pass in this document.
+    - **Deployed and live-verified**: see the changelog entry below for the
+      new deployment id, `/health`, and the live multi-step/correction/RBAC
+      checks run against production.
+    - **Not done this pass, named rather than silently skipped**: arbitrary
+      graph-shaped plans (a step depending on TWO earlier steps, or a
+      diamond-shaped dependency) — the implemented plan is linear with
+      bounded fan-out, which covers every example this pass's own brief
+      gave; a step's `constraints` still cannot express an explicit date
+      *range* with both ends at once in one field name (`date_before`/
+      `date_after` are two separate keys, not a single `date_range` tuple);
+      and the deterministic path was not taught to attempt ANY multi-step
+      composition beyond the existing bounded two-entity case — a genuinely
+      unseen multi-step question always costs one QuickML round trip, by
+      design (that is precisely the kind of question the deterministic
+      classifier cannot honestly attempt).
+
 ## 13. Failure behavior
 
 | Situation | What happens | Where |
@@ -845,6 +951,30 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   model before being called done.
 
 ## 16. Changelog (append here; do not create a new file)
+
+- **2026-08-28 — the general N-step investigation planner, and a semantic fix
+  for the correction gap named-and-deferred by the previous pass.** Full
+  detail in §12 item 11. Summary: `SemanticRequest.plan_steps` (a validated,
+  optional multi-op plan from the LLM path — chained subjects, bounded
+  fan-out, citation-position references) and `orchestrator._run_plan`
+  (executes it via the exact same `_run_specialists`/RBAC/CRAG path every
+  single-op turn already uses); `state.last_request` + `apps/api/routers/
+  chat.py`'s merge into persisted `result_context` so the NEXT turn's
+  interpreter can read the PRIOR turn's structured request, not just its
+  prose, making "actually Bengaluru, not Mysuru" the model's own semantic
+  merge rather than a new regex; `date_before`/`date_after` constraints wired
+  into `CRIME_SEARCH` (both `count_firs` and `search_firs`, kept consistent)
+  so a temporal correction ("same thing but earlier") narrows the real query,
+  not just the model's stated intent. 37 new tests across three files (5
+  orchestrator-level plan-execution tests in `test_engine.py`, 12
+  interpretation/validation tests in `test_semantic_interpreter.py`, and a
+  new 20-scenario held-out GENERALIZATION evaluation,
+  `test_generalization_evaluation.py`, one per category this pass's own
+  brief specified) — 559 collected, zero regressions, the same two
+  pre-existing `test_acceptance.py` failures as every prior pass. Deployed
+  and live-verified; see §12 item 11 for what was deliberately left out
+  (arbitrary graph-shaped plan dependencies, a single `date_range` constraint
+  field, deterministic-path multi-step attempts).
 
 - **2026-08-27 — final architectural push: QuickML root-caused precisely, and a
   genuine adversarial pass on the compositional layer.** Not a new architecture —

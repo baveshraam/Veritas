@@ -135,6 +135,12 @@ NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
 NEEDS_NARRATIVE_SYNTHESIS = {
     "PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK", "CAUSAL",
     "SIMILAR_CASES", "NEXT_STEPS", "BRIEFING", "TIMELINE_CONNECTION",
+    # Set by orchestrator._run_plan once a general multi-step plan (see
+    # semantic_interpreter's SemanticRequest.plan_steps) finishes executing —
+    # never produced by classify() or the model directly. A plan's whole point is
+    # tying several steps' evidence together ("here's what connects them"), which
+    # is exactly the narrative case, not a single direct-retrieval fact.
+    "INVESTIGATION_PLAN",
 }
 
 # Questions asking the system to nominate a suspect. The records hold who was accused,

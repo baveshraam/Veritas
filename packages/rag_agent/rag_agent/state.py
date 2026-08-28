@@ -127,6 +127,21 @@ class InvestigationState(BaseModel):
     # semantic_interpreter._COORDINATION_RE / orchestrator._handle_comparison.
     # Empty for every ordinary single-subject turn.
     comparison_subject_ids: list[str] = Field(default_factory=list)
+    # A general N-step investigation plan, set only by semantic_interpreter's LLM
+    # path (see SemanticRequest.plan_steps) — each dict already carries a validated
+    # operation from intents.ALL_OPERATIONS plus a subject reference. Empty for
+    # every ordinary single-op turn and for the bounded deterministic two-entity
+    # comparison above, which is unrelated and unchanged. See
+    # orchestrator._run_plan.
+    plan_steps: list[dict[str, Any]] = Field(default_factory=list)
+    # This turn's own structured request (operation/subject/constraints), snapshotted
+    # once in node_orchestrate and never touched by any specialist branch — unlike
+    # result_context, which several branches overwrite wholesale to record a bounded/
+    # sampled result. apps/api's chat router merges this into the persisted turn's
+    # result_context under "last_request", so the NEXT turn's interpreter can read
+    # what was actually asked (not just the prose answer) when deciding whether this
+    # turn is a correction to it. See semantic_interpreter._interpret_llm.
+    last_request: dict[str, Any] = Field(default_factory=dict)
 
     final_answer: Optional[str] = None
     citations: list[Citation] = Field(default_factory=list)

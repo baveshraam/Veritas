@@ -146,6 +146,7 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
     state.constraints = sem_req.constraints
     state.comparison_subject_ids = (
         sem_req.comparison_entities if len(sem_req.comparison_entities) == 2 else [])
+    state.plan_steps = sem_req.plan_steps
 
     # Resolve subject if present
     resolved_note = ""
@@ -174,6 +175,18 @@ def node_orchestrate(state: InvestigationState) -> InvestigationState:
     if resolved_note:
         detail += f"; {resolved_note}"
     _trace(state, "Orchestrator (semantic)", detail, t0, confidence=sem_req.confidence)
+
+    # Snapshot of THIS turn's own structured request — never touched by any
+    # specialist branch below (unlike state.result_context, which several
+    # overwrite wholesale). apps/api's chat router persists it so the NEXT turn's
+    # interpreter can read what was actually asked, not just the prose answer,
+    # when deciding whether a new query is a correction to it. See
+    # semantic_interpreter._interpret_llm.
+    state.last_request = {
+        "operation": sem_req.operation, "subject_type": sem_req.subject_type,
+        "subject_text": sem_req.subject_text, "subject_id": sem_req.subject_id,
+        "constraints": sem_req.constraints,
+    }
 
     # Persist focus so the *next* turn can resolve against it
     try:
@@ -272,7 +285,8 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
         _handle_timeline_connection(state, t0)
         return state
 
-    if state.intent in intents.NEEDS_CASE and not state.active_entities.active_fir and not state.refusal_reason:
+    if (state.intent in intents.NEEDS_CASE and not state.active_entities.active_fir
+            and not state.refusal_reason and not state.plan_steps):
         state.refusal_reason = "no_case"
         _trace(state, "Orchestrator",
                f"{state.intent} needs an open case; none given", t0)
@@ -287,7 +301,7 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     # ordinary no_subject refusal below unchanged.
     if (state.intent in intents.NEEDS_SUBJECT and not pid
             and not state.comparison_subject_ids and not state.refusal_reason
-            and state.active_entities.active_fir):
+            and not state.plan_steps and state.active_entities.active_fir):
         _resolve_subject_from_open_case(state)
         pid = state.active_entities.active_person
         if state.refusal_reason:  # ambiguous_person -- decided, not merely unresolved
@@ -297,7 +311,8 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
             return state
 
     if (state.intent in intents.NEEDS_SUBJECT and not pid
-            and not state.comparison_subject_ids and not state.refusal_reason):
+            and not state.comparison_subject_ids and not state.refusal_reason
+            and not state.plan_steps):
         state.refusal_reason = "no_subject"
         _trace(state, "Orchestrator",
                f"{state.intent} needs a named subject; none given", t0)
@@ -310,6 +325,16 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     # they already skip it for a refusal decided before retrieval ran.
     if state.intent.startswith("BOARD_"):
         _handle_board_intent(state, t0)
+        return state
+
+    # General N-step investigation plan (semantic_interpreter's LLM path only —
+    # see SemanticRequest.plan_steps). Checked before the bounded two-entity
+    # comparison below: the two are mutually exclusive in practice (comparison_
+    # subject_ids only ever comes from the deterministic _COORDINATION_RE path,
+    # plan_steps only from the model), but a plan is the more general mechanism
+    # and does its own per-step subject/refusal handling.
+    if state.plan_steps:
+        _run_plan(state, widen, t0)
         return state
 
     # Bounded deterministic multi-step composition (design spec §3) — sequences
@@ -501,7 +526,21 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         ct = state.constraints.get("crime_type") or semantic_interpreter.crime_type_from_query(
             state.original_query or "")
         district_name = state.constraints.get("district") or state.active_entities.active_location
-        count = sql_agent.count_firs(role, ps, crime_type=ct, district=district_name)
+        # date_before/date_after: a relative-time constraint the model can propose
+        # when a query reads as a corrected/narrowed repeat of a previous search
+        # ("same thing but earlier") — see semantic_interpreter._interpret_llm's
+        # correction handling. sql_agent.search_firs/count_firs have always taken
+        # date_from/date_to; nothing before this read constraints for either, so
+        # a temporal correction silently repeated the SAME window instead of a
+        # narrowed one. Parsed leniently (ds.to_dt already handles the live Data
+        # Store's string-typed dates); an unparseable value is dropped rather than
+        # failing the whole turn — a best-effort filter, not a hard requirement.
+        date_before = ds.to_dt(state.constraints.get("date_before"))
+        date_after = ds.to_dt(state.constraints.get("date_after"))
+        date_to = date_before.date() if date_before else None
+        date_from = date_after.date() if date_after else None
+        count = sql_agent.count_firs(role, ps, crime_type=ct, district=district_name,
+                                     date_from=date_from, date_to=date_to)
         scope_bits = [x for x in (ct, f"in {district_name}" if district_name else None) if x]
         scope_desc = " ".join(scope_bits) if scope_bits else "within your access scope"
         out.append(EvidenceItem(
@@ -513,7 +552,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         samples: list[dict] = []
         if count:
             samples = sql_agent.search_firs(role, ps, crime_type=ct, district=district_name,
-                                            limit=5)
+                                            date_from=date_from, date_to=date_to, limit=5)
             state.sql_query_results += samples
             out += [EvidenceItem(
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
@@ -1009,6 +1048,188 @@ def _handle_comparison(state: InvestigationState, widen: bool, t0: float) -> Non
     _trace(state, "Orchestrator (bounded comparison)",
            f"Compared {len(state.comparison_subject_ids)} subject(s): "
            f"{', '.join(labels)} — {len(all_evidence)} evidence item(s) total", t0)
+
+
+# Bound on how many entities a fan_out plan step will actually run — see _run_plan.
+# "which of them appear in other cases" over a PERSON_NETWORK result genuinely could
+# mean dozens of associates; running a full retrieval pass per associate is the same
+# cost/latency tradeoff TOG_CONFIDENCE_FLOOR and _run_specialists' own top_k caps
+# already make elsewhere, applied to the same problem one layer up.
+_MAX_FAN_OUT = 5
+
+
+def _resolve_step_position(state: InvestigationState, position: int
+                           ) -> Optional[tuple[str, str]]:
+    """(kind, id_or_name) for a plan step's 'position' reference — the Nth citation
+    from the PREVIOUS turn, via the exact resolution semantic_interpreter's own
+    single-turn ordinal follow-up already uses for 'the second one'."""
+    prior = _last_turn(state.session_id)
+    if not prior:
+        return None
+    for c in prior.citations:
+        if c.get("index") == position:
+            return semantic_interpreter._citation_subject(c)
+    return None
+
+
+def _run_plan(state: InvestigationState, widen: bool, t0: float) -> None:
+    """Execute a general N-step investigation plan (semantic_interpreter's LLM
+    path — see SemanticRequest.plan_steps). Each step reuses the EXACT same
+    per-operation retrieval every ordinary turn already uses (_run_specialists) —
+    a plan only sequences and chains subjects across calls to it; it never adds a
+    new way to reach the record layer, and every step's own operation is still
+    the one validated against intents.ALL_OPERATIONS before this ever runs.
+
+    Three ways a step names its subject, checked in this order:
+      1. depends_on_step — reuse (or fan out over) an EARLIER step's own
+         resolved subject(s): 'go deeper on the second person', 'which of them
+         appear in other cases'. fan_out sources up to _MAX_FAN_OUT entities from
+         the referenced step's own graph_query_results delta (e.g. PERSON_
+         NETWORK's associates); without fan_out, reuses that step's one subject.
+      2. position — the Nth item in the PREVIOUS TURN's own citation list
+         ('compare the first and third').
+      3. subject_text/subject_id, resolved by semantic_interpreter at
+         interpretation time exactly like an ordinary single-op turn.
+
+    Any step that cannot safely resolve a subject (an unresolved dependency, a
+    position with nothing at that index, or a tied name search) stops the WHOLE
+    plan with a clarification rather than guessing or silently skipping that
+    step — the same "ask, don't guess" discipline _resolve_subject_from_open_case
+    and the ambiguous-name check elsewhere in this module already apply. A
+    partially-answered multi-step question with no indication which step failed
+    would be a worse outcome than an honest refusal.
+    """
+    original_pid = state.active_entities.active_person
+    original_fir = state.active_entities.active_fir
+    original_location = state.active_entities.active_location
+    original_constraints = dict(state.constraints)
+
+    step_subject_ids: dict[int, Optional[str]] = {}
+    step_person_pool: dict[int, list[str]] = {}
+    all_evidence: list[EvidenceItem] = []
+    labels: list[str] = []
+
+    for i, step in enumerate(state.plan_steps, start=1):
+        step_label = step.get("subject_text") or ""
+        depends_on = step.get("depends_on_step")
+        position = step.get("position")
+        # None (not [None]) is the "this step names no subject of its own" sentinel
+        # -- resolved below to whatever is CURRENTLY in focus, exactly like an
+        # ordinary single-op turn reads state.active_entities.active_person
+        # unchanged. A step that explicitly resolves to "no one" (a district-only
+        # HOTSPOT/FORECAST/CRIME_SEARCH step) sets subject_ids = [None] itself, and
+        # that None must NOT be reinterpreted as "fall back to focus" below.
+        subject_ids: Optional[list[Optional[str]]] = None
+
+        if depends_on is not None:
+            if depends_on not in step_subject_ids:
+                state.refusal_reason = "plan_step_unresolved"
+                _trace(state, "Orchestrator (multi-step plan)",
+                       f"Step {i} depends on step {depends_on}, which resolved no "
+                       f"usable subject", t0)
+                return
+            if step.get("fan_out"):
+                subject_ids = step_person_pool.get(depends_on, [])[:_MAX_FAN_OUT]
+                if not subject_ids:
+                    state.refusal_reason = "plan_step_unresolved"
+                    _trace(state, "Orchestrator (multi-step plan)",
+                           f"Step {i} fans out over step {depends_on}'s results, "
+                           f"which found no entities to fan out over", t0)
+                    return
+            else:
+                subject_ids = [step_subject_ids[depends_on]]
+        elif position is not None:
+            resolved = _resolve_step_position(state, position)
+            if not resolved:
+                state.refusal_reason = "plan_step_unresolved"
+                _trace(state, "Orchestrator (multi-step plan)",
+                       f"Step {i} refers to position {position} in the previous "
+                       f"answer, which has no citation there", t0)
+                return
+            kind, ident = resolved
+            if kind == "person_name":
+                pid_i, ambiguous = semantic_interpreter._resolve_person_by_text(ident)
+                if ambiguous:
+                    state.refusal_reason = "ambiguous_person"
+                    state.ambiguous_candidates = ambiguous
+                    _trace(state, "Orchestrator (multi-step plan)",
+                           f"Step {i}'s position reference names {len(ambiguous)} "
+                           f"equally-matching people", t0)
+                    return
+                subject_ids = [pid_i]
+                step_label = ident
+            elif kind == "person":
+                subject_ids = [ident]
+            elif kind == "case":
+                state.active_entities.active_fir = ident
+        elif step.get("ambiguous_candidates"):
+            state.refusal_reason = "ambiguous_person"
+            state.ambiguous_candidates = step["ambiguous_candidates"]
+            _trace(state, "Orchestrator (multi-step plan)",
+                   f"Step {i} names {len(step['ambiguous_candidates'])} equally-"
+                   f"matching people", t0)
+            return
+        elif step.get("subject_id"):
+            subject_ids = [step["subject_id"]]
+
+        if subject_ids is None:
+            # Named no subject of its own — use whatever is CURRENTLY in focus
+            # (the pre-plan focus for step 1, or unchanged from a prior step),
+            # exactly like an ordinary single-op turn. Must not be confused with
+            # a step that resolved TO "no one" (a district-only HOTSPOT/FORECAST/
+            # CRIME_SEARCH step already produces its own [None] above via the
+            # depends_on/position branches when applicable).
+            subject_ids = [state.active_entities.active_person]
+
+        step_constraints = dict(original_constraints)
+        step_constraints.update(step.get("constraints") or {})
+        if step.get("subject_type") == "location" and step_label:
+            step_constraints.setdefault("district", step_label)
+
+        found_person_ids: list[str] = []
+        for sid in subject_ids:
+            state.intent = step["operation"]
+            state.constraints = step_constraints
+            if step.get("subject_type") != "case":
+                state.active_entities.active_person = sid
+            before = len(state.graph_query_results)
+
+            sub_evidence: list[EvidenceItem] = []
+            if sid:
+                rows, ev = hipporag.retrieve([step_label or (_person_name(sid) or "")],
+                                             top_k=15)
+                state.graph_query_results += rows
+                sub_evidence += ev
+            sub_evidence += _run_specialists(state, widen)
+
+            found_person_ids += [str(r["person_id"]) for r in state.graph_query_results[before:]
+                                 if "person_id" in r]
+            name = _person_name(sid) if sid else None
+            prefix = f"[Step {i}: {step['operation']}" + (f" — {name}" if name else "") + "]"
+            all_evidence += [e.model_copy(update={
+                "evidence_id": f"{e.evidence_id}#plan:{i}:{sid or 'none'}",
+                "content": f"{prefix} {e.content}",
+            }) for e in sub_evidence]
+            if name:
+                labels.append(name)
+
+        step_subject_ids[i] = subject_ids[0] if subject_ids else None
+        step_person_pool[i] = list(dict.fromkeys(found_person_ids))[:_MAX_FAN_OUT]
+
+    state.active_entities.active_person = original_pid
+    state.active_entities.active_fir = original_fir
+    state.active_entities.active_location = original_location
+    state.constraints = original_constraints
+    # A stable marker for synthesis/visualization, distinct from any single step's
+    # own operation — see intents.NEEDS_NARRATIVE_SYNTHESIS, which includes it so
+    # QuickML weaves the steps together instead of the extractive template
+    # rendering them as an unconnected list of per-step facts.
+    state.intent = "INVESTIGATION_PLAN"
+    state.evidence_items = _dedupe(state.evidence_items + all_evidence)
+    _trace(state, "Orchestrator (multi-step plan)",
+           f"Executed {len(state.plan_steps)} step(s)"
+           + (f": {', '.join(labels)}" if labels else "")
+           + f" — {len(all_evidence)} evidence item(s) total", t0)
 
 
 _TIMELINE_BEFORE_RE = re.compile(r"\bbefore\b", re.I)
