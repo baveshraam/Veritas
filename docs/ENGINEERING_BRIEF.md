@@ -1044,6 +1044,83 @@ Not keyword tests. Representative of what an officer would actually say, and wha
 
 ## 16. Changelog (append here; do not create a new file)
 
+- **2026-08-29 — the semantic fallback tier, and six defects found by driving the
+  deployed system rather than re-reading it.** Full detail in §12 item 13.
+  - **A third understanding tier** (`rag_agent/operation_semantics.py`). Understanding
+    had exactly two: lexical keyword/regex, and QuickML. Anything the first missed cost
+    a 20-35s model round trip, or a flat refusal when the provider was cooling down.
+    The new tier resolves an operation by MEANING using the embedding model the
+    container already runs warm (bge-small — the vector index's own model), in ~3.5ms.
+    It emits only an operation string, validated against the same
+    `intents.ALL_OPERATIONS` allowlist the model path uses; subject resolution, RBAC,
+    retrieval, CRAG and citations are untouched. Its confidence sits BELOW
+    `_LLM_ROUTING_THRESHOLD` deliberately, so it is a floor rather than a replacement:
+    where QuickML is reachable it is still consulted and still wins (it contributes
+    more than the operation — constraints, relative date ranges — which an argmax over
+    ~35 prototypes cannot); where QuickML is not, the turn is answered instead of
+    refused.
+  - **Why it has an explicit reject class, measured rather than assumed**: raw
+    similarity does not separate in-domain from out-of-domain input for this model
+    (real questions 0.59-0.85, nonsense 0.51-0.72 — fully overlapping; the
+    first-to-second margin separates no better, 0.02-1.57 vs 0.02-2.56). No threshold
+    works. Modelling the reject case explicitly does: it declines nonsense including
+    the "what is the weather today" → HOTSPOT case no threshold caught, and declines
+    bare references ("tell me about X") that must keep the richest-profile default.
+    `tests/test_operation_semantics.py` is a held-out battery asserting RATES, not
+    per-query results, so it cannot be satisfied by tuning a prototype at a query it
+    evaluates on; the measured misses are named in the file rather than tuned away.
+  - **Six defects, each root-caused before being fixed.** (1) `person_not_on_file` had
+    been unreachable since the semantic-interpreter migration dropped its only
+    assignment — the specific message sat in `evaluator.py` with no caller, and a
+    named-but-unknown person swept the vector index instead. (2) A query naming no
+    record identifier could still become a `FIR_LOOKUP` on the bare word "FIR", whose
+    branch then matched nothing and dropped the turn into unscoped semantic search —
+    answering a case-scoped question with cases from other districts. (3) A correction
+    naming only new constraints ("actually Mysuru, not Bengaluru Urban") classified as
+    UNKNOWN and lost the turn. (4) `cannot_understand` had no message and fell back to
+    one about the records, when nothing had been looked up. (5) The reasoning trace did
+    not stream — see below. (6) The console had no standing indicator of which
+    case/person the session was about.
+  - **The trace genuinely streams now.** §12 item 12 recorded this as checked and fine
+    ("confirmed by reading the code path"). What was read was `apps/web`, which does
+    handle incremental frames. The API ran the engine to completion and only then
+    replayed the whole trace, so a QuickML turn showed 20-35s of spinner with nothing
+    behind it. Reading the consumer proved nothing about the producer. Fixed with
+    `orchestrator.live_trace()` (thread-local, because LangGraph owns the state objects
+    between nodes) plus a 200ms poll in the SSE generator. And because the model call
+    is the FIRST step, its own trace entry could only ever appear after the wait — so
+    `interpret()` now takes an `on_model_call` callback fired BEFORE the round trip.
+    Verified against a real streaming connection, not TestClient (which buffers and
+    would have shown this passing either way): frames at +0.9s, +1.3s, +3.2s of a 3.2s
+    turn. Confirmed again on the deployed build.
+  - **Two of the six were found only by running against production.** A live judge
+    battery (`scripts/judge_flows.py`, 16 realistic multi-turn sessions, 26 turns)
+    caught a regression this same pass had introduced: restoring `person_not_on_file`
+    made the Kannada "ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?" refuse outright,
+    because it translates to "...in District Mandya" and NER reads "District" as a
+    person. The refusal is now scoped to `intents.NEEDS_SUBJECT` + UNKNOWN — turns that
+    actually depend on that person. It also exposed a plain asymmetry: the
+    richest-profile default existed for a resolved person but not for an open case, so
+    an unclassified question asked while a case was open refused after spending 30s
+    reaching QuickML's timeout.
+  - **Two "pre-existing and unrelated" test failures were neither.** Every prior pass
+    recorded the two `test_acceptance.py` failures as background noise. One was defect
+    (1) above; the other was a stale test helper matching the orchestrator's trace step
+    by exact name after it had been renamed to "Orchestrator (semantic)". The suite is
+    now 598 collected, zero failures — the first time this repository has been fully
+    green in this document's history.
+  - **Cleanup and security**: the throwaway QuickML probe app/function removed from
+    `catalyst.json` and the tree (their finding is recorded in §12 item 4; the deployed
+    probe resources were left in place so it stays independently re-checkable). No
+    credentials in tracked files or git history — `.env` has never been tracked.
+    `scripts/rotate_secrets.py` added and used to rotate `VERITAS_JWT_SECRET` and
+    `VERITAS_JOB_TOKEN`, which had been exposed in local tool output by an Admin API
+    config read (the same leak §12 item 12 flagged and did not act on). It rotates the
+    app environment and both Cron entries' headers together, because the job token
+    lives in both and changing one without the other is exactly how those jobs silently
+    failed 20 times (v12). QuickML's client id/secret/refresh token are NOT rotatable
+    from here — a Zoho self-client secret is regenerable only in the API Console UI.
+
 - **2026-08-28 — freeze pass: a live judge simulation against production, and
   the one real defect it found.** Full detail in §12 item 12. A 16-category
   fresh-officer-session judge simulation run directly against the deployed

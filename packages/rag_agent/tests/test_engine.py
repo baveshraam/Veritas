@@ -2239,3 +2239,36 @@ def test_an_unresolvable_name_only_refuses_when_the_turn_needs_that_person(index
     asked = _run("Does Zzyzx Nonexistentperson have priors?")
     assert asked.intent in intents.NEEDS_SUBJECT
     assert asked.refusal_reason == "person_not_on_file"
+
+
+def test_a_case_with_no_accused_says_so_rather_than_doubting_the_record(indexed):
+    """"No accused are recorded on this case" is a finding, not an absence of one.
+
+    Found live: FIR 100010101202300001 genuinely has no accused, so "who else was
+    involved in it?" produced an empty list, fell through to the generic CRAG refusal,
+    and told the officer to "check whether the record exists in the system" — about a
+    case they were looking at, whose record had just been read successfully. Same
+    distinction ALIAS_CHECK, FINANCIAL and NEXT_STEPS already make for their own
+    negative results.
+    """
+    from data import ds
+    from rag_agent.orchestrator import node_retrieve
+    from rag_agent.state import InvestigationState
+
+    empty = ds.query(
+        'SELECT "CaseMasterID" AS cid FROM "CaseMaster" WHERE "CaseMasterID" NOT IN '
+        '(SELECT "CaseMasterID" FROM "Accused") LIMIT 1')
+    if not empty:
+        import pytest
+        pytest.skip("this generated dataset has no case without an accused")
+
+    st = InvestigationState(session_id="noacc", officer_id="1", officer_role="IG",
+                            original_query="Who else was involved in it?")
+    st.intent = "CASE_PEOPLE"
+    st.active_entities.active_fir = str(empty[0]["cid"])
+    st = node_retrieve(st)
+
+    stated = [e for e in st.evidence_items if e.evidence_id.startswith("no_accused:")]
+    assert stated, "the empty accused list was dropped instead of being stated"
+    assert stated[0].authoritative, "a negative finding must be authoritative evidence"
+    assert "no accused person is recorded" in stated[0].content.lower()

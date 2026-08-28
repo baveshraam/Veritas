@@ -772,6 +772,23 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             # person instead of asking which of THIS case's several accused is meant.
             state.active_entities.active_person = (
                 str(accused[0]["PersonUID"]) if len(accused) == 1 else None)
+            # "Nobody is recorded as accused on this case" is a FINDING, and an
+            # authoritative one — the same distinction ALIAS_CHECK ("no alias"),
+            # FINANCIAL ("no account linked") and NEXT_STEPS ("no co-accused to lead
+            # from") already make. Without it the empty list falls through to the
+            # generic CRAG refusal, which tells the officer to "check whether the
+            # record exists in the system" — about a case they are currently looking
+            # at. Found live: FIR 100010101202300001 has no accused, and "who else was
+            # involved in it?" answered with exactly that false statement.
+            if not accused:
+                out.append(EvidenceItem(
+                    evidence_id=f"no_accused:{case_rows[0]['fir_id']}",
+                    source_type="FIR_RECORD", source_id=str(case_rows[0]["fir_id"]),
+                    source_query='"Accused" WHERE "CaseMasterID" = :cid',
+                    content=(f"No accused person is recorded on FIR "
+                             f"{case_rows[0].get('fir_number') or case_rows[0]['fir_id']}. "
+                             "The case exists and is readable; its accused list is empty."),
+                    confidence=0.95, authoritative=True))
             _trace(state, "SQL Agent (accused on case)",
                    f"{len(accused)} accused person(s) on the open case", t0)
         else:
