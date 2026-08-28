@@ -463,7 +463,10 @@ class TestLLMPathValidation:
         """interpret() (not _interpret_llm directly) must recover from the exact bug
         found live: the LLM path returning something that means nothing to the
         dispatcher. The public interpret() should silently fall back rather than
-        propagate or misroute."""
+        propagate or misroute. llm.available() is forced True since the low-confidence
+        deterministic result for this phrasing (see TestLLMRouting below) is what would
+        normally gate whether the LLM path is even attempted."""
+        monkeypatch.setattr(si.llm, "available", lambda: True)
         monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
             "operation": "lookup_case", "subject_type": "case",
             "reference_kind": "explicit", "confidence": 0.9,
@@ -473,3 +476,65 @@ class TestLLMPathValidation:
         # not raise, and must still produce a real (deterministic-path) answer.
         result = si.interpret("Tell me more about that case", "en", focus, None)
         assert isinstance(result, SemanticRequest)
+
+
+# ============================================================================
+# HYBRID ROUTING — found live, 2026-08-28, the day QuickML first went into
+# production: interpret() called the LLM path FIRST, unconditionally, on
+# EVERY query, so even an exact `FIR 100222201202600022` lookup paid a real
+# 16.8s QuickML round trip before ever reaching the deterministic answer that
+# was going to win anyway (confidence 1.0, exact match). The architecture
+# brief always specified "deterministic fast path for obvious requests,
+# QuickML for genuine ambiguity" — this is the fix that actually makes that
+# true, not just documented.
+# ============================================================================
+
+class TestLLMRouting:
+    def test_a_confident_deterministic_result_never_calls_the_model(self, monkeypatch):
+        calls = {"n": 0}
+        monkeypatch.setattr(si.llm, "available", lambda: True)
+
+        def fail_if_called(*a, **k):
+            calls["n"] += 1
+            return {}
+        monkeypatch.setattr(si, "generate_json", fail_if_called)
+
+        focus = _make_state()
+        result = si.interpret("does he have priors", "en", focus, None)
+        assert calls["n"] == 0
+        assert isinstance(result, SemanticRequest)
+
+    def test_an_unconfident_deterministic_result_does_try_the_model(self, monkeypatch):
+        """The exact case the routing exists to fix: unseen colloquial phrasing that
+        the keyword classifier can't place scores UNKNOWN (confidence 0.3), which is
+        below the routing threshold — QuickML is exactly where this kind of phrasing
+        is supposed to add value."""
+        monkeypatch.setattr(si.llm, "available", lambda: True)
+        calls = {"n": 0}
+
+        def fake_generate_json(*a, **k):
+            calls["n"] += 1
+            return {"operation": "CASE_CONTEXT", "subject_type": "none",
+                     "reference_kind": "implicit_from_focus", "confidence": 0.85}
+        monkeypatch.setattr(si, "generate_json", fake_generate_json)
+
+        focus = _make_state()
+        result = si.interpret("Give me the lowdown on whatever case just came up.",
+                               "en", focus, None)
+        assert calls["n"] == 1
+        assert result.operation == "CASE_CONTEXT"
+
+    def test_a_lower_confidence_llm_result_loses_to_the_deterministic_one(self, monkeypatch):
+        """The LLM is a second opinion, not an automatic override — invoked here because
+        the deterministic path is already below the routing threshold (UNKNOWN, 0.3),
+        but if the model is even LESS sure, its guess must not replace the (already
+        honest) UNKNOWN rather than silently downgrading a refusal into a wrong answer."""
+        monkeypatch.setattr(si.llm, "available", lambda: True)
+        monkeypatch.setattr(si, "generate_json", lambda *a, **k: {
+            "operation": "CRIME_SEARCH", "subject_type": "none",
+            "reference_kind": "implicit_from_focus", "confidence": 0.05,
+        })
+        focus = _make_state()
+        result = si.interpret("xyzzy qwerty nonsense", "en", focus, None)
+        assert result.operation == "UNKNOWN"
+        assert result.confidence == 0.3  # the deterministic UNKNOWN, not the 0.05 guess

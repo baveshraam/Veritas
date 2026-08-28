@@ -17,8 +17,16 @@ from data.models import ConversationTurn
 from data.nlp import ner_extract
 
 from . import intents
+from . import llm
 from .agents import sql_agent
 from .llm import LLMUnavailable, generate_json
+
+# Below this deterministic confidence, the keyword/regex classifier found nothing (or
+# next to nothing) worth trusting — genuine unseen-phrasing/ambiguity territory, which
+# is exactly where a semantic model adds value over a confident structural match or a
+# confident structural refusal. See interpret()'s docstring for the live-measured
+# latency reason this routing exists.
+_LLM_ROUTING_THRESHOLD = 0.75
 
 
 class SemanticRequest:
@@ -67,19 +75,31 @@ def interpret(
 ) -> SemanticRequest:
     """Interpret a query as a structured semantic request.
 
-    Tries LLM path first (QuickML generate_json); falls back to deterministic
-    intents.classify() on any LLM failure. Both paths produce identical
-    SemanticRequest shape.
+    Deterministic first, always — it costs microseconds and is what
+    result-set/positional/pronoun/repeat-cue resolution and every FIR-number exact
+    match already run on. QuickML is only invoked when that result is NOT confident
+    (below _LLM_ROUTING_THRESHOLD): unseen phrasing, genuinely ambiguous requests, or
+    anything the keyword/regex classifier scored as UNKNOWN. This is the hybrid
+    routing the architecture always specified but the code never actually did — every
+    query, including an exact `FIR 100222201202600022` lookup, was paying a full
+    14-30s QuickML round trip before ever reaching the instant deterministic answer
+    (measured live 2026-08-28, the day QuickML first went live in production). A
+    confident deterministic result — including a confident REFUSAL like an ambiguous-
+    name tie, which the model cannot resolve any better since it's a real database
+    fact — is used as-is; the LLM is tried only when there is genuine uncertainty for
+    it to add value to, falling back to the deterministic result on any LLM failure
+    or invalid output either way.
     """
-    # Try LLM path if available — falls through to the deterministic path whenever
-    # QuickML is unconfigured, cooling down, or fails (see llm.py: available()/
-    # LLMUnavailable). Activates with no further code change once QUICKML_REFRESH_TOKEN
-    # (the one human-only setup step — see llm.py module docstring) is set.
+    det = _interpret_deterministic(query, language, focus, prior_turn)
+    if det.confidence >= _LLM_ROUTING_THRESHOLD:
+        return det
+    if not llm.available():
+        return det
     try:
-        return _interpret_llm(query, language, focus, prior_turn)
+        llm_result = _interpret_llm(query, language, focus, prior_turn)
     except (LLMUnavailable, ValueError, KeyError):
-        # LLM unavailable or returned malformed output; use deterministic path
-        pass
+        return det
+    return llm_result if llm_result.confidence >= det.confidence else det
 
     return _interpret_deterministic(query, language, focus, prior_turn)
 

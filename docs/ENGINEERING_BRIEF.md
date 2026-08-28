@@ -551,27 +551,60 @@ questions:
         tested live end-to-end and correctly returned a populated
         `SemanticRequest` (`operation=lookup_case, subject_type=case,
         confidence=0.9`) for "Tell me more about that case".
-   - **The one remaining requirement is a human-only, one-time action**:
-     Zoho's self-client OAuth flow requires generating a short-lived
-     ("grant") token in the API Console UI (Self Client tab, scope
-     `QuickML.deployment.READ`) and exchanging it immediately for a
-     `refresh_token` — no programmatic path can produce or simulate this
-     interactive step. `QUICKML_REFRESH_TOKEN` is the only missing config
-     value; until it exists, `llm.available()` is `False` everywhere and
-     behavior is byte-for-byte identical to before this pass (verified: full
-     suite green, only 2 pre-existing unrelated failures in
-     `test_acceptance.py`, confirmed present on unmodified HEAD too).
    - 12 new/rewritten tests in `test_engine.py` cover the token cache, the
      `<think>`-stripping fix (both with and without a matching opening tag),
      the refusal-retry-then-degrade path on `generate()` directly (not just
      `generate_json()`), and the JSON-parse retry.
-
-**The semantic-interpreter layer (§5.1 migration) runs in fully-degraded mode**: it
-calls `llm.py:generate_json()` and catches `LLMUnavailable`, falling back to
-deterministic `intents.classify()`/the structural extractors in §5 on any failure.
-When `QUICKML_ENDPOINT_KEY` is set, the corrected LLM path activates with zero
-further code change — and now, for the first time, activates against a request
-shape that actually matches what the SDK sends.
+6. **The operation-allowlist validator, and a real bug it exists to catch.**
+   `_interpret_llm`'s prompt told the model to return operations like
+   `lookup_person`/`count_crimes` — but `orchestrator.py` only ever dispatches
+   on the real uppercase constants in `intents.py` (`CASE_CONTEXT`,
+   `PERSON_HISTORY`, ...). A live call for "Tell me more about that case"
+   returned `operation=lookup_case`, which matches nothing downstream and
+   would have silently misrouted every LLM-interpreted turn with no error
+   anywhere. Fixed at two layers: `intents.ALL_OPERATIONS` (computed from the
+   real dispatch table, not hand-duplicated, so it can't drift) is now the
+   schema's own `enum`, and `semantic_interpreter._validate_llm_result()`
+   rejects (`ValueError` -> `interpret()`'s existing fallback) anything
+   outside it regardless of what the model actually returns, with
+   case-normalization for a formatting slip (`case_context` -> `CASE_CONTEXT`)
+   versus a hallucinated capability (`lookup_case`, rejected). Also validates
+   subject_type/reference_kind/constraints/comparison_entities types and
+   clamps (not rejects) out-of-range confidence. Structurally, not just by
+   convention, the model has no field this validator ever reads as
+   `subject_id` — resolution is always a real `sql_agent.person_by_name`
+   lookup, so a planted id in the model's JSON has zero effect (tested). 15
+   new tests in `test_semantic_interpreter.py`.
+7. **The refresh token was obtained and QuickML is live in production**,
+   verified by more than `/health` reporting configured. `/health`'s `llm`
+   field went `"quickml (glm-4.7-flash) — configured, not yet contacted"` ->
+   `"quickml (glm-4.7-flash)"` (the latter only ever set by
+   `_ever_succeeded=True` inside `_chat()`, i.e. a real completion) the moment
+   the first live conversational query ran post-deploy. Live-tested
+   end-to-end, real HTTP through `/chat`, not a probe script: **"Give me the
+   lowdown on whatever case just came up."** (deliberately unseen colloquial
+   phrasing, no keyword in any `INTENTS` list) correctly interpreted as
+   `CASE_CONTEXT` at confidence 0.8 by the real model, and correctly refused
+   ("no case is open") rather than guessing one — the deterministic safety
+   guard downstream of the semantic layer working exactly as designed.
+8. **A second real bug found by this same live test, more serious than a
+   wrong answer: latency.** `interpret()` called the LLM path unconditionally
+   on *every* query, including an exact `FIR 100222201202600022` lookup —
+   paying a full 16.8s QuickML round trip before ever reaching the
+   deterministic exact-match answer (confidence 1.0) that was always going to
+   win. The architecture brief always specified "deterministic fast path for
+   obvious requests, QuickML only for genuine ambiguity"; the code never
+   actually implemented that hybrid routing. Fixed: `interpret()` now runs
+   `_interpret_deterministic()` first (microseconds), and only calls the LLM
+   when that result's confidence is below `_LLM_ROUTING_THRESHOLD` (0.75) —
+   below that line is genuinely UNKNOWN/low-confidence territory, which is
+   exactly where a semantic model adds value over a confident structural
+   match *or* a confident structural refusal (e.g. an ambiguous-name tie,
+   which the model cannot resolve any better since it is a real database
+   fact, not a phrasing problem). The LLM result only wins if it is at least
+   as confident as the deterministic one it is being compared against — a
+   second opinion, not an automatic override. 3 new tests in
+   `TestLLMRouting` (`test_semantic_interpreter.py`).
 
 The architecture in §6 was correct; it is live via the deterministic path.
 `rag_agent/semantic_interpreter.py` (`interpret()` function, `SemanticRequest`
