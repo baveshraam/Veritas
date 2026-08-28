@@ -198,6 +198,59 @@ body::after {
 }
 @media (max-width: 1280px) { .status { display: none; } }
 
+/* What the CONVERSATION is about, as opposed to who is signed in. This is the
+ * standing answer to "which record am I in" — a follow-up like "does she have
+ * priors?" or "what happened in it?" resolves against exactly this, so it has to be
+ * visible without opening anything. Given the brass the same way rank is in
+ * .officer-chip, and for the same reason: it is the fact that changes what the next
+ * answer means. */
+.focus-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: 16px;
+  padding: 5px 12px;
+  min-width: 0;
+  border: 1px solid var(--accent-line, var(--glass-line));
+  border-radius: 999px;
+  background: var(--tint);
+}
+.focus-label {
+  font-family: var(--font-label);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+.focus-item {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  padding-left: 10px;
+  border-left: 1px solid var(--glass-line);
+}
+.focus-kind {
+  font-family: var(--font-label);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+.focus-val {
+  font-size: 12px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 22ch;
+}
+.focus-val.mono { font-family: var(--font-rec); font-variant-numeric: tabular-nums; }
+.focus-sub { font-size: 10.5px; color: var(--text-faint); white-space: nowrap; }
+@media (max-width: 1280px) { .focus-sub { display: none; } }
+@media (max-width: 900px) { .focus-chip { display: none; } }
+
 /* Who is signed in. Rank is the load-bearing fact — the console masks and scopes by
  * it — so rank is what gets the brass, not the name. */
 .officer-chip {

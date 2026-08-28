@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getHealth, type Health } from "@/lib/api";
-import type { Officer } from "@/lib/types";
+import type { Officer, SessionFocusView } from "@/lib/types";
 
 /** Console-wide controls and identity.
  *
@@ -14,8 +14,10 @@ import type { Officer } from "@/lib/types";
  *  set is not decoration — it is the scope of what any answer can be drawn from. */
 export default function CommandBar({
   officer, language, onLanguage, voiceOut, onVoiceOut, onExport, canExport, exportNote, onSignOut,
+  focus,
 }: {
   officer: Officer;
+  focus?: SessionFocusView;
   language: "en" | "kn";
   onLanguage: (l: "en" | "kn") => void;
   voiceOut: boolean;
@@ -52,6 +54,30 @@ export default function CommandBar({
           <span className="status-txt">{down ? "API unreachable" : "Checking records…"}</span>
         )}
       </div>
+
+      {/* What the conversation is currently ABOUT. A follow-up ("does she have
+          priors?", "what happened in it?") is answered against this, so it has to be
+          on screen standing rather than buried in a collapsed reasoning trace —
+          otherwise the officer cannot tell which record the last three answers were
+          about. Names arrive already masked for this rank. */}
+      {(focus?.case || focus?.person) && (
+        <div className="focus-chip" title="What this conversation is currently about">
+          <span className="focus-label">Examining</span>
+          {focus.case && (
+            <span className="focus-item">
+              <span className="focus-kind">FIR</span>
+              <span className="focus-val mono">{focus.case.fir_number ?? focus.case.fir_id}</span>
+              {focus.case.district && <span className="focus-sub">{focus.case.district}</span>}
+            </span>
+          )}
+          {focus.person && (
+            <span className="focus-item">
+              <span className="focus-kind">Person</span>
+              <span className="focus-val">{focus.person.name ?? `#${focus.person.person_id}`}</span>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="bar-spacer" />
 

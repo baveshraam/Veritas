@@ -75,6 +75,18 @@ export type FinalEvent = {
   // from citations.length alone (a CAPABILITY answer or a successful board
   // confirmation also carries zero citations without being a refusal).
   refused: boolean;
+  // What the SESSION is about after this turn — the case and/or person the engine
+  // resolved against. Names are already masked by the officer's rank server-side.
+  focus?: SessionFocusView;
+};
+
+/** The standing answer to "which case / which person am I in", which a multi-turn
+ *  conversation is unreadable without: "does she have priors?" answers about
+ *  somebody, and until this existed the only place that said who was the reasoning
+ *  trace's "resolved 'X'" line, collapsed by default. */
+export type SessionFocusView = {
+  case?: { fir_id: string; fir_number?: string; district?: string; crime_type?: string };
+  person?: { person_id: string; name?: string };
 };
 
 export type Turn = {
@@ -87,6 +99,7 @@ export type Turn = {
   citations: Citation[];
   evidence: EvidenceItem[];
   visualization: Visualization;
+  focus?: SessionFocusView;
 };
 
 export type Officer = { badge_no: string; name: string; role: string; ps_code: string };

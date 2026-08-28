@@ -44,6 +44,38 @@ class ChatRequest(BaseModel):
     active_evidence_id: Optional[str] = None
 
 
+def _focus_view(result: InvestigationState, officer: Officer) -> dict:
+    """The case and person this session is currently about, named rather than by id.
+
+    Best-effort by construction: a lookup failure must cost the officer a chip, never
+    the answer they already have. Both lookups hit the local mirror on an indexed key.
+    """
+    from policy import mask_person_name
+    from rag_agent.agents import sql_agent
+
+    focus: dict = {}
+    entities = result.active_entities
+    try:
+        if entities.active_fir:
+            rows = sql_agent.fir_by_id(str(entities.active_fir), officer.role, officer.ps_code)
+            if rows:
+                focus["case"] = {"fir_id": str(rows[0]["fir_id"]),
+                                 "fir_number": rows[0].get("fir_number"),
+                                 "district": rows[0].get("district"),
+                                 "crime_type": rows[0].get("crime_type")}
+    except Exception:                             # noqa: BLE001
+        pass
+    try:
+        if entities.active_person:
+            name = sql_agent.person_name(str(entities.active_person))
+            if name:
+                focus["person"] = {"person_id": str(entities.active_person),
+                                   "name": mask_person_name(officer.role, name)}
+    except Exception:                             # noqa: BLE001
+        pass
+    return focus
+
+
 def _next_turn_index(session_id: str) -> int:
     from data import get_conversation_history
     try:
@@ -151,6 +183,16 @@ async def chat(req: ChatRequest, officer: Officer = Depends(current_officer)):
             # alone, which rendered every successful board action in the same red
             # styling as "I could not find this in the records."
             "refused": result.answer_is_refusal,
+            # What the session is now ABOUT, after this turn. The console had no way to
+            # show it: a follow-up like "does she have priors?" answers about somebody,
+            # and the only place the officer could see who was the reasoning trace's
+            # "resolved 'X'" line, which is collapsed by default. Multi-turn work is
+            # unreadable without a standing answer to "which case/person am I in".
+            #
+            # Read from the same SessionFocus the engine resolved against, and masked by
+            # the same rank rule every other surface uses — an identity an officer
+            # cannot see on /person must not appear in a chip on the way past.
+            "focus": _focus_view(result, officer),
         }
         yield {"data": json.dumps(final)}
 

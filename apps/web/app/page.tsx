@@ -29,6 +29,10 @@ export default function Console() {
   const latest = turns[turns.length - 1];
   const viz: Visualization = latest?.visualization ?? { kind: "none", data: {} };
   const evidence = latest?.evidence ?? [];
+  // The most recent turn that actually resolved a subject. Not `latest?.focus`: a
+  // refusal or a capability answer resolves nothing, and blanking the chip on those
+  // turns would tell the officer the case they are working had been closed.
+  const focus = [...turns].reverse().find((t) => t.focus && (t.focus.case || t.focus.person))?.focus;
 
   const send = useCallback(
     async (input: { query?: string; audio?: string; activeEvidenceId?: string }) => {
@@ -62,6 +66,7 @@ export default function Console() {
               citations: f.citations,
               evidence: f.evidence_items,
               visualization: f.visualization,
+              focus: f.focus,
             })),
           (audio) => playBase64Audio(audio),
         );
@@ -114,6 +119,7 @@ export default function Console() {
         canExport={turns.length > 0}
         exportNote={exportNote}
         onSignOut={() => { setToken(null); setOfficer(null); setTurns([]); }}
+        focus={focus}
       />
 
       <main className="console">
