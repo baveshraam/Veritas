@@ -333,6 +333,49 @@ def test_a_successful_chat_call_is_parsed_and_marks_the_llm_available(monkeypatc
     assert llm.status() == f"quickml ({llm.MODEL})"
 
 
+def test_warm_mints_the_access_token_off_the_request_path(monkeypatch):
+    """Live defect: Copilot's brief is the one path that unconditionally calls the
+    LLM (most `/chat` turns route around it when deterministic confidence is high
+    enough), so the FIRST real QuickML call in a container's life was the OAuth
+    token exchange plus a real completion, together slow enough that a 30s
+    client-side timeout gave up on it — while a second call moments later (cached
+    token) answered in under half a second. Same class of bug as BUG-016 (a cold
+    NLLB/whisper load). `warm()` must mint the token proactively, and must NOT
+    spend a real QuickML request doing it — cost discipline, not just latency."""
+    from rag_agent import llm
+
+    _configure(monkeypatch)
+    calls = {"token": 0, "chat": 0}
+
+    def fake_post(url, headers, body, timeout):
+        if "/oauth/v2/token" in url:
+            calls["token"] += 1
+            return {"access_token": "tok", "expires_in": 3600}
+        calls["chat"] += 1
+        return {"response": "should never be called by warm()"}
+
+    monkeypatch.setattr(llm, "_http_post_json", fake_post)
+    llm.warm()
+    assert calls == {"token": 1, "chat": 0}
+    assert llm._access_token == "tok"
+
+    # A second warm() reuses the cached token — no second network call.
+    llm.warm()
+    assert calls == {"token": 1, "chat": 0}
+
+
+def test_warm_is_a_silent_noop_when_unconfigured_or_failing(monkeypatch):
+    from rag_agent import llm
+
+    monkeypatch.setattr(llm, "REFRESH_TOKEN", "")
+    llm.warm()                        # must not raise
+
+    _configure(monkeypatch)
+    monkeypatch.setattr(llm, "_get_access_token",
+                        lambda: (_ for _ in ()).throw(RuntimeError("network error")))
+    llm.warm()                        # must not raise either
+
+
 def test_think_block_is_stripped_from_the_reply(monkeypatch):
     """The model emits its own chain-of-thought inline before the real answer, ended
     (only) by a bare </think> marker — verified live 2026-08-28. There is no matching
@@ -1148,20 +1191,61 @@ def test_an_empty_money_trail_states_the_absence_rather_than_leaving_it_unsaid()
     state.intent = "FINANCIAL"
     state.active_entities.active_person = "803"
 
-    saved = (orch.graph_agent.money_trail, orch.vector_agent.search, orch._officer_ps)
+    saved = (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+             orch.vector_agent.search, orch._officer_ps)
     orch.graph_agent.money_trail = lambda *a, **k: []
+    orch.graph_agent.owned_accounts = lambda *a, **k: []
     orch.vector_agent.search = lambda *a, **k: ([], [])
     orch._officer_ps = lambda _oid: ""
     try:
         out = orch._run_specialists(state, widen=False)
     finally:
-        orch.graph_agent.money_trail, orch.vector_agent.search, orch._officer_ps = saved
+        (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+         orch.vector_agent.search, orch._officer_ps) = saved
 
     assert len(out) == 1
     assert out[0].evidence_id == "flow:none:803"
     assert "No bank account is linked" in out[0].content
     # and it must not overclaim: absence in the records is not absence in the world
     assert "not a finding that no money moved" in out[0].content
+
+
+def test_a_money_trail_with_no_outbound_hop_does_not_claim_no_account_exists():
+    """Live defect: `money_trail` follows OUTGOING transfers only (by design — see
+    its own docstring), so a person who only ever RECEIVES money has a real owned
+    account and real inbound transfers, yet zero trail rows. The old unconditional
+    message ("No bank account is linked to this person") was FALSE in exactly this
+    case — reproduced live: a person's own Timeline showed several real inbound
+    transfers on their account in the same session this message denied one existed.
+    Owning an account with no outbound trail must read differently from owning no
+    account at all."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                               original_query="Show me the money trail for Usha Naika")
+    state.intent = "FINANCIAL"
+    state.active_entities.active_person = "803"
+
+    saved = (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+             orch.vector_agent.search, orch._officer_ps, orch.prediction_agent.transactions)
+    orch.graph_agent.money_trail = lambda *a, **k: []
+    orch.graph_agent.owned_accounts = lambda *a, **k: ["acct1"]
+    orch.vector_agent.search = lambda *a, **k: ([], [])
+    orch._officer_ps = lambda _oid: ""
+    orch.prediction_agent.transactions = lambda *a, **k: (None, [])
+    try:
+        out = orch._run_specialists(state, widen=False)
+    finally:
+        (orch.graph_agent.money_trail, orch.graph_agent.owned_accounts,
+         orch.vector_agent.search, orch._officer_ps,
+         orch.prediction_agent.transactions) = saved
+
+    assert len(out) == 1
+    assert out[0].evidence_id == "flow:none:803"
+    assert "No bank account is linked" not in out[0].content
+    assert "owns 1 account(s)" in out[0].content
+    assert "Timeline" in out[0].content
 
 
 # --- BUG-008: "how many" answered with narratives and never a number ---------

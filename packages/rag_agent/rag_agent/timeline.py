@@ -77,10 +77,24 @@ def _case_core_events(case: dict) -> list[dict]:
     return events
 
 
-def _arrest_events(fir_id: str, fir_number: str, officer_role: str) -> list[dict]:
+def _arrest_events(fir_id: str, fir_number: str, officer_role: str,
+                   subject_person_id: str | None = None) -> list[dict]:
     """Per-accused arrest/surrender events for ONE case, tagged with the RESOLVED
     person where identity resolution reached one, so a later filter ("events
-    involving Person X") can find them — falls back to the as-filed name otherwise."""
+    involving Person X") can find them — falls back to the as-filed name otherwise.
+
+    `subject_person_id` disambiguates a real confusion `person_timeline` otherwise
+    creates: a co-accused's arrest is legitimate context on a person's own timeline
+    (who else was picked up on their case), but the co-accused's AS-FILED name can
+    read as a near-miss on the subject's own name — live-observed: "Usha Naika"'s
+    own timeline showed "Usha Neik D/o Srinivas arrested" with nothing marking that
+    as a different person, not a spelling of the subject. When the resolved person
+    on this row IS the subject, use their canonical name (consistent with every
+    other event on their timeline); when it's someone else, label them explicitly
+    as a co-accused rather than leaving two similar names to be told apart by eye.
+    `case_timeline` (subject_person_id=None) is unaffected — every accused there is
+    equally "the subject", so the as-filed name stays as it was.
+    """
     rows = ds.query(
         'SELECT "ArrestSurrender"."ArrestSurrenderDate", '
         '       "ArrestSurrender"."ArrestSurrenderTypeID", "Accused"."AccusedName", '
@@ -96,11 +110,21 @@ def _arrest_events(fir_id: str, fir_number: str, officer_role: str) -> list[dict
         if not d:
             continue
         verb = "surrendered" if a["ArrestSurrenderTypeID"] == 2 else "arrested"
-        who = mask_person_name(officer_role, a["AccusedName"])
         pid = a.get("PersonUID")
+        is_subject = subject_person_id is not None and str(pid) == str(subject_person_id)
+        if is_subject:
+            canonical = ds.one('SELECT "CanonicalName" FROM "vx_person" WHERE "PersonUID" = :p',
+                               {"p": pid})
+            who = mask_person_name(officer_role, canonical["CanonicalName"]) if canonical \
+                else mask_person_name(officer_role, a["AccusedName"])
+            phrase = f"{who} {verb} — FIR {fir_number}"
+        else:
+            who = mask_person_name(officer_role, a["AccusedName"])
+            prefix = "Co-accused " if subject_person_id is not None else ""
+            phrase = f"{prefix}{who} {verb} — FIR {fir_number}"
         events.append(_event(
             d, "person" if pid else "case", pid or fir_id, who, f"person_{verb}",
-            f"{who} {verb} — FIR {fir_number}", ref_type="fir", ref_id=fir_id,
+            phrase, ref_type="fir", ref_id=fir_id,
             source_query='SELECT "ArrestSurrenderDate" FROM "ArrestSurrender" '
                          'WHERE "CaseMasterID" = :cid'))
     return events
@@ -228,7 +252,8 @@ def person_timeline(person_id: str, officer_role: str, officer_ps_code: str) -> 
         if not can_view_fir(officer_role, officer_ps_code, c["ps_code"]):
             continue
         events += _case_core_events(c)
-        events += _arrest_events(c["fir_id"], c["fir_number"], officer_role)
+        events += _arrest_events(c["fir_id"], c["fir_number"], officer_role,
+                                 subject_person_id=str(person["PersonUID"]))
         entities.append({"entity_type": "case", "entity_id": c["fir_id"],
                          "entity_name": f'FIR {c["fir_number"]}'})
     events += _financial_events(person, officer_role)

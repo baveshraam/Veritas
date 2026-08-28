@@ -85,6 +85,15 @@ async def _catalyst_context(request: Request, call_next):
             except Exception:
                 pass
 
+            # Same reasoning as the NLLB/whisper warm-up above, for QuickML's own
+            # cold path: mint the OAuth access token now, off the request path,
+            # rather than on whichever officer's Copilot request is first to need it.
+            try:
+                from rag_agent.llm import warm as _warm_llm
+                _warm_llm()
+            except Exception:
+                pass
+
         threading.Thread(target=_warm, name="warm", daemon=True).start()
 
     return await call_next(request)

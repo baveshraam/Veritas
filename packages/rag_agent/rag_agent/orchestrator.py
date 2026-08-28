@@ -570,14 +570,33 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             # with a summary of X's theft cases: a real record, cited, and not about
             # money at all. Measured live as visualization=none with zero flow evidence
             # and a confident answer on top of it.
+            #
+            # But "no rows" has two different real causes, and they are not the same
+            # finding. `money_trail` walks OUTGOING TRANSFERRED_TO edges only (money
+            # OUT of this person's accounts, by design — see its own docstring), so a
+            # person who only ever RECEIVES money has real owned accounts and real
+            # inbound transfers, yet zero rows here. Live-observed: a person's own
+            # Timeline showed several real inbound transfers on their account, while
+            # this branch's old unconditional message claimed "no bank account is
+            # linked to this person" — false, and contradicting the Timeline's own
+            # citations for the identical person in the identical session.
+            owned = graph_agent.owned_accounts(pid)
+            if owned:
+                content = (
+                    f"This person owns {len(owned)} account(s) on record, but no outbound "
+                    "transfer trail was found from them within policy depth. This means "
+                    "money is not documented as moving FROM their accounts onward — it does "
+                    "not mean no account exists or that no money ever moved through it; any "
+                    "incoming transfers are on their Timeline, not this trail.")
+            else:
+                content = ("No bank account is linked to this person in the records, and "
+                           "no transfers are traceable to them. This is an absence in the "
+                           "financial layer, not a finding that no money moved.")
             out.append(EvidenceItem(
                 evidence_id=f"flow:none:{pid}", source_type="GRAPH_RELATIONSHIP",
                 source_id=str(pid),
                 source_query="MATCH (p)-[:OWNS_ACCOUNT]->(a)-[:TRANSFERRED_TO*1..n]->(b)",
-                content=("No bank account is linked to this person in the records, and "
-                         "no transfers are traceable to them. This is an absence in the "
-                         "financial layer, not a finding that no money moved."),
-                confidence=0.9, authoritative=True))
+                content=content, confidence=0.9, authoritative=True))
         _trace(state, "Cypher Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
         # AML detection runs against the accounts this PERSON owns, not the trail's
         # `from_account` — which for a multi-hop transfer can be an intermediate

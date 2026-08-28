@@ -147,6 +147,33 @@ def test_person_timeline_is_chronologically_ordered(dataset):
     assert dates == sorted(dates)
 
 
+def test_person_timeline_marks_a_co_accuseds_arrest_as_co_accused_not_the_subject(dataset):
+    """Live defect: a subject's own timeline includes co-accused arrest events for
+    context (by design — who else was picked up on their case), but a co-accused's
+    AS-FILED name can read as a near-miss on the subject's own name ("Usha Naika"
+    vs. a co-accused recorded as "Usha Neik D/o Srinivas") with nothing marking them
+    as different people. The subject's own arrest event must use their canonical
+    name (consistent with the rest of their timeline); anyone else's must say
+    "Co-accused"."""
+    from data import ds
+    a, b = _co_accused_pair(dataset)
+    a_name = ds.one('SELECT "CanonicalName" FROM "vx_person" WHERE "PersonUID" = :p',
+                    {"p": a})["CanonicalName"]
+
+    result = timeline.person_timeline(str(a), "IG", "")
+    arrest_events = [e for e in result["events"] if e["event_type"].startswith("person_")]
+    assert arrest_events, "no arrest/surrender event in this fixture's co-accused pair"
+
+    for e in arrest_events:
+        if str(e.get("entity_id")) == str(a):
+            assert a_name.split()[0] in e["description"], \
+                f"the subject's own arrest event should use their canonical name: {e['description']}"
+            assert "Co-accused" not in e["description"]
+        else:
+            assert e["description"].startswith("Co-accused "), \
+                f"a different person's arrest on the subject's timeline must say so: {e['description']}"
+
+
 # --- connection_between -----------------------------------------------------
 
 def test_connection_between_co_accused_people_is_direct_and_authoritative(dataset):

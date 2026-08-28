@@ -201,6 +201,31 @@ def _get_access_token() -> str:
     return _access_token
 
 
+def warm() -> None:
+    """Mint the OAuth access token proactively, off the request path.
+
+    Measured live: the FIRST real QuickML call on a container — Copilot's brief is
+    the one path that unconditionally calls the LLM, since most `/chat` turns
+    deliberately route around it when deterministic confidence is high enough
+    (`_get_access_token` reuses a cached token, so no other turn had paid this
+    cost) — took long enough that a client-side 30s timeout gave up on it, while
+    a second call moments later (cached token) answered in under half a second.
+    Same class of bug as BUG-016 (a cold NLLB/whisper load), same fix: pay the
+    cost once during startup instead of on whichever officer's Copilot request
+    happens to be first. Deliberately does NOT warm the GLM chat call itself —
+    that would spend a real QuickML request/credit for a warm-up nobody asked
+    for; the OAuth exchange alone is a Zoho-accounts call, not a billed QuickML
+    one. Best-effort: a query must never fail because warm-up is still running
+    or failed, and the token refresh has its own client-side error handling.
+    """
+    if not _configured():
+        return
+    try:
+        _get_access_token()
+    except Exception:
+        pass                          # the request path retries and degrades honestly
+
+
 def _chat(messages: list[dict], temperature: float | None = None) -> str:
     """One real call to QuickML's GLM chat endpoint. Returns the reply text with any
     <think>...</think> reasoning trace stripped."""
