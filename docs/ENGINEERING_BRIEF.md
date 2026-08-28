@@ -10,11 +10,18 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `e0d982f`, live-deployed at AppSail
-deployment `52852000000353049`. Test count (581, `pytest --collect-only -q`), the
-16-category live judge simulation, and the correction-routing fix in §12 item 12
-were confirmed directly against the running code and the real deployed service on
-2026-08-28, not copied from an earlier document.
+Last verified against the repository at commit `aadcb12` on 2026-08-29. Test count
+(599, `pytest --collect-only -q`), the 16-scenario / 26-turn live judge battery
+(`scripts/judge_flows.py`, run against the deployed service, not the local mirror),
+the measured latency figures in §12 item 13, and the browser session in §14 were all
+confirmed directly against the running code and the real deployed service — not
+copied from an earlier document.
+
+**The suite is fully green for the first time in this document's history.** Every
+prior pass recorded two `apps/api/tests/test_acceptance.py` failures as "pre-existing
+and unrelated". They were neither: one was a real product regression (a specific
+refusal message had become unreachable), the other a stale test helper. Both are
+fixed. Treat a red suite as a finding from now on, not as background noise.
 
 ---
 
@@ -965,6 +972,65 @@ compatibility layer, valid values for the `operation` field.
       time, with a recommendation to rotate `VERITAS_JWT_SECRET` and
       `VERITAS_JOB_TOKEN`; nothing was committed or persisted.
 
+13. **The third understanding tier, and what driving the deployed system found that
+    reading it did not.** Full narrative in the changelog; this records the
+    architecture and the measurements.
+    - **`rag_agent/operation_semantics.py`** sits between `intents.classify()` and
+      QuickML. It resolves an operation by meaning, using `data.vectors`' already-warm
+      `bge-small-en-v1.5` — ~3.5ms, no new dependency, no new service, nothing leaving
+      Catalyst compute. It emits one thing (an operation string), validated against the
+      same `intents.ALL_OPERATIONS` allowlist the model path uses. Subject resolution,
+      RBAC, retrieval, CRAG and citations are byte-for-byte the path a keyword match
+      takes. It cannot cause an answer the evidence chain does not support.
+    - **It is a floor, not a replacement.** `CONFIDENCE` (0.70) sits BELOW
+      `_LLM_ROUTING_THRESHOLD` (0.75) deliberately. Where QuickML is reachable it is
+      still consulted and still wins on ties, because the model contributes more than
+      an operation — `constraints`, relative date ranges — which an argmax over ~35
+      prototypes cannot express. Where QuickML is down or cooling, the turn is answered
+      from this tier instead of refused, which is the whole point.
+    - **The reject class is the load-bearing part, and it was arrived at by
+      measurement.** Raw similarity does not separate in-domain from out-of-domain for
+      this model: real questions 0.59-0.85, nonsense 0.51-0.72, fully overlapping.
+      First-to-second margin separates no better (0.02-1.57 vs 0.02-2.56). No threshold
+      works. An explicit `NO_OPERATION` prototype class does: it declines nonsense —
+      including "what is the weather today", which every threshold variant answered
+      with a confident cited hotspot map — and declines bare references ("tell me about
+      X"), which must keep the richest-profile default rather than being pushed onto
+      whichever facet the noise favours. One measured miss is named in
+      `tests/test_operation_semantics.py` rather than tuned away, and it fails safe.
+    - **Latency, measured live over the 26-turn battery against production**:
+      **p50 0.53s, p95 12.82s, max 31.25s.** The deterministic and embedding paths are
+      sub-second; the tail is QuickML, whose 30s timeout is the max. For comparison,
+      §12 item 12 measured deterministic p50 1.6s and QuickML-invoked p50 21.4s / p95
+      34.4s on the same kind of run.
+    - **The trace streams now, and §12 item 12's claim that it already did was wrong.**
+      That claim was made by reading `apps/web` (which does handle incremental frames)
+      and concluding the whole path streamed. The API ran the engine to completion and
+      replayed the trace afterwards. Fixed with `orchestrator.live_trace()` (thread-
+      local — LangGraph owns the state objects between nodes and may hand each node a
+      copy, so an object the caller holds is not guaranteed to be the one appended to)
+      plus a 200ms poll in the SSE generator. And since the model call is the FIRST
+      step, its own entry could only ever appear after the wait — `interpret()` now
+      takes `on_model_call`, fired BEFORE the round trip, so the officer reads
+      "Semantic model (QuickML) — this is the slow step" while it happens. Verified on
+      a real streaming connection (TestClient buffers and would have shown either
+      behaviour as passing) and again live.
+    - **Six defects, four found by running the system rather than reading it.**
+      `person_not_on_file` had been unreachable since the semantic-interpreter
+      migration; a query naming no identifier could still become a `FIR_LOOKUP` on the
+      bare word "FIR" and fall through to unscoped search; a correction naming only new
+      constraints lost the turn; `cannot_understand` had no message of its own; a
+      Kannada `CRIME_SEARCH` refused because "District Mandya" made NER invent a person
+      (a regression from this pass's own first fix, caught by the live battery); and
+      `CASE_PEOPLE` dropped an empty accused list into the generic "check whether the
+      record exists" refusal instead of stating the negative finding §4 claims the
+      system makes.
+    - **Session focus is now on screen.** The console had no standing indicator of
+      which case or person the conversation was about — a follow-up resolves against
+      `SessionFocus`, and the only thing that named it was a collapsed trace line. The
+      `final` frame carries `focus`, masked by the same `policy.mask_person_name` rank
+      rule every other surface uses (verified: an IO sees "[name withheld — rank]").
+
 ## 13. Failure behavior
 
 | Situation | What happens | Where |
@@ -1029,6 +1095,34 @@ Not keyword tests. Representative of what an officer would actually say, and wha
 
 ---
 
+### 14a. What was actually driven, 2026-08-29
+
+Two independent surfaces, both against production (`veritas-api-50043864344...`,
+`veritas-60077763394...`), neither against the local sqlite mirror.
+
+**API — `scripts/judge_flows.py`, 16 scenarios / 26 turns, 25 passing.** Simple lookup,
+unseen phrasing, follow-up + pronoun, previous-result reference ("Only these?" then
+"where are those concentrated?"), semantic correction ("Actually Mysuru, not Bengaluru
+Urban"), multi-step, network, financial, timeline, pure Kannada, Kannada-English
+code-switching, ambiguity, no-evidence refusal, RBAC denial, capability, safety
+(suspect nomination refused), continuity. The one non-passing turn is an accepted
+degraded outcome documented in the file, not a failure to answer.
+
+**Browser — headless Chrome over CDP against the deployed console.** Signed in as IG,
+then a four-turn conversation: an FIR lookup, a pronoun follow-up, a named person, and
+an unseen phrasing ("Who does she run with?" — no keyword in any INTENTS list) which
+resolved through the embedding tier to `PERSON_NETWORK` and returned real associates.
+The session-focus chip read "EXAMINING · FIR 100010101202300001 · Bagalkot" after turn
+1 and "· PERSON · Soom Nadkarni" after turn 3, i.e. it tracks both subjects across
+turns. A genuine refusal rendered with the `msg-a refusal` class and a successful
+answer with plain `msg-a`, read from the live DOM — the v16 distinction still holds.
+
+**What this pass did NOT drive**, named rather than implied: voice input/ASR (no
+microphone in a headless browser), PDF export (still blocked on SmartBrowz, §12),
+the investigation board's full UI flow (its API path is covered by
+`test_board_acceptance.py`), and the map/Sankey/forecast visualizations were confirmed
+present but not re-screenshotted — v15's own basemap verification stands.
+
 ## 15. How to use this document going forward
 
 - **When you fix a bug**: don't write a new failure-log entry format. If it changes
@@ -1041,6 +1135,16 @@ Not keyword tests. Representative of what an officer would actually say, and wha
   *any* LLM-routed claim in this document can be called verified. Everything else that
   currently says "degrades to deterministic" should be re-tested against the real
   model before being called done.
+- **Verify the producer, not the consumer.** §12 item 12 recorded the reasoning trace
+  as streaming during a turn. It was not. The check that produced that claim read
+  `apps/web`, which handles incremental frames correctly — and concluded the whole path
+  streamed. Reading one end of a pipe tells you nothing about the other. The same shape
+  of error is available anywhere in this document: if a claim is about behaviour, the
+  evidence has to be observed behaviour.
+- **A red test is a finding.** Two `test_acceptance.py` failures were carried across
+  several passes as "pre-existing and unrelated". One was a real product regression
+  that had made a specific refusal message unreachable in production; the other was a
+  stale helper. Nothing in this suite is background noise.
 
 ## 16. Changelog (append here; do not create a new file)
 
