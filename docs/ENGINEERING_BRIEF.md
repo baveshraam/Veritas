@@ -10,11 +10,11 @@ bottom. `CLAUDE.md` stays authoritative for *why* the platform is built the way 
 document is authoritative for *how well it currently serves an investigator's
 conversation*, which is the harder, faster-moving question.
 
-Last verified against the repository at commit `610f0f7`, live-deployed at AppSail
-deployment `52852000000361014`. Test count, file:line references and the QuickML/
-mixed-script translation findings in §10/§12 were confirmed directly against the
-running code and the real installed SDK on 2026-08-27, not copied from an earlier
-document.
+Last verified against the repository at commit `382c94d`, live-deployed at AppSail
+deployment `52852000000351032`. Test count (559, `pytest --collect-only -q`), the
+general N-step planner, and the live correction/RBAC findings in §12 item 11 were
+confirmed directly against the running code and the real deployed service on
+2026-08-28, not copied from an earlier document.
 
 ---
 
