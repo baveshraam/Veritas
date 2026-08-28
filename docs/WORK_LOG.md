@@ -998,3 +998,93 @@ functional gap. A true "before/after this specific event" filter beyond the two
 spec's own example phrasing but not arbitrary date-range queries. QuickML and PDF
 export remain correctly BLOCKED, not re-investigated (no new information since the
 prior pass).
+
+---
+
+## 2026-08-28 — final completion pass: closed a documentation gap and one real
+Kannada translation defect, everything else re-verified rather than re-built
+
+Scope was a full-system completion audit (data, conversation, RAG, RBAC, UI, security,
+docs, deployment) against the live production system. Chose inspection-then-fix over
+another rebuild: this repo already carries ~10 real, live-verified passes since v16
+(see `docs/ENGINEERING_BRIEF.md`'s dated entries — semantic interpreter, protected-span
+translation, the compositional semantic layer, QuickML activation, the general N-step
+planner, the cold-start fix, cross-entity timeline), and the freeze rule this project's
+own brief argues for means finding and fixing a real defect beats inventing new scope.
+
+**Found first**: `CLAUDE.md` itself was the stale artifact it kept warning about — its
+own changelog stopped at v16 while 236 commits and ~10 real passes had landed since, and
+its quoted test count (403) was stale against the real 602 (`pytest --collect-only -q`).
+Its "there are no other design docs" claim was also false — `docs/WORK_LOG.md` and
+`docs/ENGINEERING_BRIEF.md` have been the actual operational ledger for a while. Fixed:
+CLAUDE.md now names that split explicitly and carries a real v17 entry; this file's own
+narrative (dated 2026-08-27, describing the cross-entity-timeline pass specifically) is
+several passes old and `docs/VERITAS_HANDOFF.md`'s top block now says so rather than
+silently presenting stale state as current.
+
+**Then verified against the live system, not against prior logs**: full local suite
+(602 collected, all green), live `/health`, and — the actual acceptance test, since a
+green pipeline proves nothing about conversational behavior — the repo's own automated
+live-behavior gates run fresh against production: `scripts/verify_live_deployment.py`
+(36/36 adversarial conversational scenarios: result-set follow-ups, positional/ordinal
+reference, constraint-change, bare why/exploration/temporal cues, two-entity
+comparison, colloquial phrasing, Kannada code-switching, honest refusals) and
+`scripts/judge_flows.py` (26/26 realistic multi-turn officer sessions: lookup,
+unseen phrasing, pronoun follow-up, previous-result reference, mid-conversation
+correction, multi-step, network, financial, timeline, Kannada, code-switching,
+ambiguity/clarification, no-evidence refusal, RBAC, capability/safety, continuity).
+Both passed 100% before any change was made — the system was not "mostly working," it
+was working, and this pass's job was to find the real remaining gap, not manufacture one.
+
+**One real defect surfaced by that audit**: the live Kannada battery's own output
+contained `"73 ಪ್ರಕರಣಗಳು(s)"` — synthesis writes count-agnostic `case(s)`/`record(s)`
+markers throughout `orchestrator.py` (a deliberate convention for English readers, ~40
+call sites), and NLLB translates the noun but copies the literal `"(s)"` through
+untouched. Fixed structurally rather than patched per-phrase, the same discipline
+`_protect_spans` already applies to identifiers and district names: new
+`_resolve_plural_markers()` (`data/data/nlp/translate.py`) reads the real count already
+sitting next to each marker and resolves it to correct English singular/plural *before*
+the text reaches the translation model, so the ambiguity never reaches NLLB. One test
+(`data/tests/test_nlp.py`, the case that takes the suite from 601 to 602).
+
+**Deployed and live-verified**: commit `ddbc4f1` relayed (`get-signature` →
+`.github/relay-upload.url` → `relay-deploy.yml` → local `appsail/upsert`) to deployment
+`52852000000346070`. Both live gates re-run clean against the fresh container (36/36,
+26/26). The exact query that surfaced the bug
+(`"ಮಂಡ್ಯ ಜಿಲ್ಲೆಯಲ್ಲಿ ಎಷ್ಟು ಕಳವು ಪ್ರಕರಣಗಳಿವೆ?"`) was re-run directly (parsing the raw SSE
+response, not trusting the automated battery's summary line alone): the answer now
+reads `"73 ಪ್ರಕರಣಗಳು"` with no residual `"(s)"` and the correct canonical district
+spelling.
+
+**One operational finding, not a code defect, flagged rather than acted on
+unilaterally**: the AppSail `appsail/upsert` callback's own JSON response echoes the
+app's full environment configuration — including `VERITAS_JWT_SECRET`,
+`VERITAS_JOB_TOKEN`, and the QuickML OAuth client secret/refresh token — in plaintext.
+This is the platform API's own behavior on every deploy through this pipeline, not
+something this pass introduced. `scripts/rotate_secrets.py` already exists for the case
+where rotation is warranted; not run unilaterally here, since it would invalidate live
+JWT sessions and the Cron job token without the operator's coordination.
+
+**Repo/security hygiene checked, nothing to fix**: `git status` clean, no untracked
+files; `.gitignore` covers env files, build output, and local Catalyst config;
+`git ls-files` for secret-shaped names turned up only `.env.example` (placeholders
+only, verified) and the two legitimately-named scripts (`catalyst-token.js`,
+`rotate_secrets.py`) that exist to handle secrets, not leak them.
+
+**Test suite**: 602 collected, all green.
+
+**Not done this pass, named rather than silently skipped**: no dataset regeneration —
+the live audit found no data-quality defect, and regenerating 10,000 seeded cases on
+spec-compliance grounds alone would be exactly the unrequested rebuild the freeze
+discipline argues against. No UI zoom-level/browser click-through — this was a
+backend-and-one-translation-file change; the investigation-board pass's own CDP
+verification stands, unchanged. `docs/QA_FUNCTIONALITY_MATRIX.md`, `docs/VERITAS_STATUS.html`
+and `CONTEXT.md` (dated 2026-07-15) were not individually re-verified line-by-line
+against current state this pass — `CONTEXT.md` in particular is now materially stale
+(it predates the semantic interpreter, compositional layer, QuickML activation, and
+timeline features entirely) and is a real remaining documentation-consolidation gap,
+named here rather than silently left. QuickML endpoint-key status, PDF export's
+SmartBrowz identity block, and the "priorities" Kannada residual (`\bpriors?\b` vs.
+"priorities") are unchanged from the prior passes' own from-scratch re-checks — nothing
+in this pass's live audit surfaced new information that would change any of those three
+findings.

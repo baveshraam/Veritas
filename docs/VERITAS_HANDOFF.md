@@ -5,28 +5,34 @@ changelog and `docs/WORK_LOG.md`. This file answers "where do things stand right
 what's next," and should be updated after any meaningful pass rather than left stale.
 
 ## Current HEAD
-`e66e5a3` — "deploy: relay a fresh signed upload URL for the cross-entity timeline
-feature" (main, `github.com/baveshraam/Veritas`). Feature commit below it: `6da6b85`
-("feat: cross-entity investigation timeline"). Below that: `86b4dd8` (docs: investigation-
-board pass — handoff, work log, QA matrix, status page), `efc6472`/`e7c3842`/`856f581`/
-`af3ad7a` (the investigation-board feature and its live-judge fixes).
+`dca3739` — "docs: bring CLAUDE.md's changelog and test count current" (main,
+`github.com/baveshraam/Veritas`). Feature commit below it: `ddbc4f1` ("fix: resolve
+English plural markers before Kannada translation"). This handoff's own narrative
+below (cross-entity investigation timeline) is now several passes old — kept as
+accurate history of that specific pass, not of current HEAD. For the real pass-by-pass
+record between then and now (semantic interpreter, compositional semantic layer,
+QuickML activation, the general N-step planner, the cold-start fix), read
+`docs/ENGINEERING_BRIEF.md`'s dated entries directly rather than trusting a summary
+here — this file is a pointer, not the ledger.
 
 ## Current live deployment
-- **API**: AppSail deployment `52852000000345002` (appComputeId `52852000000204688`,
-  app id `50043864344`). Carries the cross-entity timeline feature plus everything
-  from every prior pass.
-- **Console**: redeployed this pass (`scripts/deploy-console.sh`). Live at
+- **API**: AppSail deployment `52852000000346070` (appComputeId `52852000000204688`,
+  app id `50043864344`) — the Kannada plural-marker fix, relayed and live-verified
+  2026-08-28 (see CLAUDE.md's v17 entry). Carries every prior pass's work.
+- **Console**: unchanged this pass (backend/translation-only change); last redeployed
+  during the investigation-board pass. Live at
   `https://veritas-60077763394.development.catalystserverless.in/app/index.html`.
 
 ## Date/time of last verification
-2026-08-27, this session ("cross-entity investigation timeline" pass). Both curl/HTTP
-and real headless-Chrome CDP (Chrome launched with `--headless=new
---remote-debugging-port`, driven over Node 22's global `WebSocket`) were used against
-**both** a local dev stack (uvicorn + `next dev`, pointed at the real 10k-case sqlite
-dataset with `VERITAS_DS_BACKEND=sqlite VERITAS_DEV_MODE=1`) **and** the live production
-deployment. Full details in `docs/WORK_LOG.md`'s newest entry.
+2026-08-28 (final completion pass). `python -m pytest` — 602 collected, all green.
+Live, against the fresh deployment above: `scripts/verify_live_deployment.py`
+(36/36 adversarial conversational scenarios) and `scripts/judge_flows.py` (26/26
+realistic officer sessions), both via real HTTP/SSE against production, plus a direct
+parse of the raw SSE response for the exact Kannada query that surfaced this pass's
+bug. Console/UI was NOT re-driven via CDP this pass (no frontend change) — the
+investigation-board pass's own CDP verification stands for the UI surfaces it covers.
 
-## What this pass did, and why
+## What the cross-entity-timeline pass did, and why (historical — see above for current state)
 Built `docs/INDUSTRY_GAP_ANALYSIS.md` §7 item 3 — cross-entity timeline correlation,
 the analysis's next-ranked recommendation, explicitly named as deferred by the
 investigation-board pass immediately before this one. The concrete capability: pick a

@@ -1,15 +1,26 @@
-# CONTEXT.md — session state snapshot (2026-07-15)
+# CONTEXT.md — session state snapshot (2026-07-15, STATE below superseded 2026-08-28)
 
-Read this + CLAUDE.md at the start of any new thread. CLAUDE.md = design truth;
-this file = operational truth from the deployment sessions. If they conflict, this is newer.
+Read this + CLAUDE.md at the start of any new thread. **This file's own "if they
+conflict, this is newer" claim stopped being true long ago** — it is dated 2026-07-15
+and was never updated while ~236 commits and roughly a dozen real passes landed on
+`main`. For current state, trust CLAUDE.md's changelog (newest entry wins) and
+`docs/WORK_LOG.md`/`docs/ENGINEERING_BRIEF.md` for pass-by-pass detail, not the STATE
+block below. The **DEPLOY PIPELINE, MEASURED PLATFORM CONSTRAINTS, WHAT FAILED, and
+STANDING USER DIRECTIVES sections below remain accurate** — re-confirmed working
+verbatim during the 2026-08-28 pass (a full `get-signature` → relay → `appsail/upsert`
+deploy cycle) — and are kept for that reason; only the dated STATE snapshot is stale.
 
-## STATE: FULLY DEPLOYED AND VERIFIED ✅
+## STATE (2026-07-15 snapshot — stale; see note above)
 
 - **API**: https://veritas-api-50043864344.development.catalystappsail.in
 - **Console**: https://veritas-60077763394.development.catalystserverless.in/app/index.html
-- `/health`: llm=quickml(glm-4.7-flash) · datastore=catalyst · firs=10000 · graph 16,918n/87,120e · vectors 13,835 docs · cache=catalyst
-- Verified live: /auth/token (badge `KGID000301`), /cases, /fir/1, /person/10, /copilot/1, /chat (streams LangGraph trace), 401 without auth. All 6 roles resolve.
-- 190 tests green locally. All work committed & pushed to `main`.
+- `/health` (2026-08-28, current): firs=10000 · graph 16,918n/87,120e · vectors 13,835 docs
+  · llm=quickml(glm-4.7-flash) configured · datastore=catalyst · cache=catalyst
+- Verified live, 2026-08-28: `scripts/verify_live_deployment.py` 36/36,
+  `scripts/judge_flows.py` 26/26, both fresh against production.
+- **602 tests green locally** (this file's "190" was the 2026-07-15 count; see
+  CLAUDE.md for the current number, since this line will drift stale again).
+  All work committed & pushed to `main`.
 
 ## WHAT'S USABLE (features, live)
 
