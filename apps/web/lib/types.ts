@@ -94,7 +94,16 @@ export type Turn = {
   query: string;
   answer: string;
   streaming: boolean;
+  /** The ENGINE's own answer to "did this turn refuse" — a first-class product
+   *  state, not an error. Never derived from citations.length: a capability
+   *  answer and a successful board confirmation both carry zero citations
+   *  without being refusals. */
   refused: boolean;
+  /** The turn did not complete at all — transport died, or the engine sent an
+   *  `error` frame. Distinct from `refused`: a refusal is the system working
+   *  correctly and declining to guess; this is the system failing, and the two
+   *  must not look the same on screen. */
+  failed?: boolean;
   trace: TraceEntry[];
   citations: Citation[];
   evidence: EvidenceItem[];

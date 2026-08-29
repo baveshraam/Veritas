@@ -1,0 +1,123 @@
+"use client";
+import { band, CONF_NAME, PROV_LABEL, provenanceOf, showsPercent, summarise } from "@/lib/evidence";
+import type { EvidenceItem } from "@/lib/types";
+
+/** The evidence column.
+ *
+ *  It used to be nine identical cards, every one of them stamped "100% evidence
+ *  strength" in the same green. That reads as a system proving how much data it
+ *  has, not as a set of sources an officer can check — and it made the strongest
+ *  record indistinguishable from the weakest.
+ *
+ *  So the column now leads with a summary of the evidence AS A SET (how many
+ *  authoritative records, how many corroborating findings, how many model
+ *  outputs), and the sources themselves are compact rows. The full record, its
+ *  provenance and the query that produced it live in the inspector, one click
+ *  away — a citation you cannot inspect is a citation you cannot check, but the
+ *  inspection does not have to be permanently on screen to be available. */
+export default function EvidencePanel({
+  evidence, active, onOpen,
+}: {
+  evidence: EvidenceItem[];
+  active: string | null;
+  onOpen: (id: string) => void;
+}) {
+  if (!evidence.length) {
+    return (
+      <section className="col col-evidence" aria-label="Evidence">
+        <div className="col-head"><span className="label">Evidence</span></div>
+        <div className="col-body">
+          <div className="empty">
+            <span className="empty-mark" aria-hidden>◎</span>
+            <h3>No sources yet</h3>
+            <p>
+              Ask a question and every claim in the answer will appear here as the record
+              it rests on.
+            </p>
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  const s = summarise(evidence);
+
+  return (
+    <section className="col col-evidence" aria-label="Evidence">
+      <div className="col-head">
+        <span className="label">Evidence</span>
+        <div className="col-head-right">
+          <span className="meta">{s.total} {s.total === 1 ? "source" : "sources"}</span>
+        </div>
+      </div>
+
+      <div className="evidence-summary">
+        <div className="support-head">
+          <span className="label">Support</span>
+          <span className={`support-verdict is-${s.band}`}>{s.verdict}</span>
+        </div>
+        <div className={`support-bar support-verdict is-${s.band}`}>
+          {[0, 1, 2, 3].map((i) => <i key={i} className={i < s.steps ? "on" : ""} />)}
+        </div>
+        <div className="evidence-breakdown">
+          {s.authoritative > 0 && (
+            <div className="evidence-breakdown-row" title="Stated directly in the case records">
+              <span className="prov prov-record">{PROV_LABEL.record}</span>
+              <span>authoritative records</span>
+              <span className="mono">{s.authoritative}</span>
+            </div>
+          )}
+          {s.corroborating > 0 && (
+            <div className="evidence-breakdown-row" title="Inferred by Veritas from the records">
+              <span className="prov prov-derived">{PROV_LABEL.derived}</span>
+              <span>corroborating findings</span>
+              <span className="mono">{s.corroborating}</span>
+            </div>
+          )}
+          {s.modelled > 0 && (
+            <div className="evidence-breakdown-row" title="Computed by a model — decision support">
+              <span className="prov prov-model">{PROV_LABEL.model}</span>
+              <span>model outputs</span>
+              <span className="mono">{s.modelled}</span>
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div className="col-body ev-list">
+        {evidence.map((e, i) => {
+          const p = provenanceOf(e);
+          const b = band(e.confidence);
+          return (
+            <button
+              key={e.evidence_id}
+              // The evidence thread anchors its line on this id. Keep it.
+              id={`ev-${e.evidence_id}`}
+              className={`ev rail-${p} ${active === e.evidence_id ? "on" : ""}`}
+              onClick={() => onOpen(e.evidence_id)}
+              aria-label={`Source ${i + 1}, ${PROV_LABEL[p]}`}
+            >
+              <div className="ev-head">
+                <span className="ev-idx">{i + 1}</span>
+                <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
+                <span className="mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--t-4)" }}>
+                  {e.source_id}
+                </span>
+              </div>
+              <div className="ev-body">{e.content}</div>
+              <div className="ev-foot">
+                <span className="meta">{CONF_NAME[e.confidence_kind]}</span>
+                {showsPercent(e.confidence_kind) && (
+                  <span className={`ev-strength support-verdict is-${b}`}>
+                    <i><b style={{ width: `${Math.round(e.confidence * 100)}%` }} /></i>
+                    {(e.confidence * 100).toFixed(0)}%
+                  </span>
+                )}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </section>
+  );
+}

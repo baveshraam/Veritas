@@ -1,15 +1,22 @@
 "use client";
 import ReactECharts from "echarts-for-react";
-import { CHART_BASE, ACCENT, TEXT_DIM, ramp, rgba } from "./palette";
+import { CHART_BASE, PRIMARY, TEXT_DIM, ramp, rgba } from "./palette";
 
-/** Money-flow Sankey. Deliberately distinct from the criminal-network view: a
- *  transfer has direction and magnitude, which a force graph cannot show. */
-// Above this many nodes on one side, every label at a fixed 10px row height no
-// longer fits the chart's height without overlapping (measured live: a 60-
-// destination-account trail became unreadable, UI-26). Rather than shrink text
-// past legibility or add a scrollable canvas ECharts' sankey series doesn't
-// support, only the highest-value nodes keep a label — still every node stays
-// hoverable via the tooltip, so no information is lost, just decluttered.
+/** The money trail.
+ *
+ *  Deliberately distinct from the network graph: a transfer has direction and
+ *  magnitude, which a force layout cannot show. Left is where money came from,
+ *  right is where it went, and that is never reversed — reversing it would
+ *  invent a payment that never happened.
+ *
+ *  Flow colour is the SEVERITY ramp here, and that is the correct scale: a large
+ *  transfer in a laundering trail genuinely is the thing to look at first. */
+
+// Above this many nodes on one side, every label at a fixed row height stops
+// fitting the chart's height without overlapping (measured live: a 60-account
+// trail became unreadable). Rather than shrink text past legibility, only the
+// highest-value nodes keep a label — every node stays hoverable, so nothing is
+// lost, just decluttered.
 const LABEL_ALL_BELOW = 25;
 const MAX_LABELS_WHEN_CROWDED = 20;
 
@@ -38,36 +45,48 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
       ...CHART_BASE.tooltip,
       formatter: (p: any) =>
         p.dataType === "edge"
-          ? `₹${Number(p.data.value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}<br/>` +
-            `${short(p.data.source)} → ${short(p.data.target)}`
-          : `<b>${short(p.name)}</b>`,
+          ? `<b>₹${Number(p.data.value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</b><br/>` +
+            `<span style="color:#64768a">${short(p.data.source)} → ${short(p.data.target)}</span>`
+          : `<b>${short(p.name)}</b><br/><span style="color:#64768a">₹${Math.round(flowOf.get(p.name) ?? 0).toLocaleString("en-IN")} through this account</span>`,
     },
     series: [{
       type: "sankey",
-      left: 18, right: 18, top: 18, bottom: 18,
-      nodeWidth: 12,
+      left: 16, right: 16, top: 16, bottom: 16,
+      nodeWidth: 10,
       nodeGap: 10,
       emphasis: { focus: "adjacency" },
       label: {
         color: TEXT_DIM, fontSize: 10,
+        fontFamily: "var(--font-mono), ui-monospace, monospace",
         formatter: (p: any) => (labeled && !labeled.has(p.name) ? "" : short(p.name)),
       },
       lineStyle: { curveness: 0.5 },
       itemStyle: { borderWidth: 0 },
-      data: nodes.map((n) => ({
-        name: n.name,
-        itemStyle: { color: rgba(ACCENT, 0.6) },
-      })),
+      data: nodes.map((n) => ({ name: n.name, itemStyle: { color: rgba(PRIMARY, 0.75) } })),
       links: links.map((l) => ({
         ...l,
-        lineStyle: { color: ramp((l.value ?? 0) / max), opacity: 0.42 },
+        lineStyle: { color: ramp((l.value ?? 0) / max), opacity: 0.38 },
       })),
     }],
   };
-  return <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge />;
+
+  return (
+    <div style={{ position: "relative", height: "100%", width: "100%" }}>
+      <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge />
+      <div className="viz-legend">
+        <span className="label">Transfer size</span>
+        <div className="viz-legend-row">
+          <span className="viz-legend-scale"
+            style={{ background: "linear-gradient(90deg, #3f9d6d, #d4883c, #dc5b5f)" }} />
+          <span>smaller → larger</span>
+        </div>
+        <span className="meta" style={{ color: "var(--t-4)" }}>Left to right is the direction of payment.</span>
+      </div>
+    </div>
+  );
 }
 
-/** Account ids are UUIDs — showing 36 chars per node makes the diagram unreadable. */
+/** Account ids are UUIDs — 36 characters per node makes the diagram unreadable. */
 function short(id: string): string {
   return typeof id === "string" && id.length > 12 ? `${id.slice(0, 8)}…` : id;
 }

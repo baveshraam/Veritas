@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ramp, rgba, ACCENT, MAP_POINT } from "./palette";
@@ -106,6 +106,7 @@ export default function MapView({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
+  const [showHotspots, setShowHotspots] = useState(true);
   // Latest callback without re-registering the click handler on every render —
   // interactions are wired up ONCE (see addInteractions below).
   const onSelectRef = useRef(onSelect);
@@ -409,26 +410,61 @@ export default function MapView({
     m.setFilter("fir-pts-selected-halo", filter);
   }, [activeEvidenceId, data]);
 
+  // Layer visibility. The two things on this map are different KINDS of claim —
+  // a case is a record, a hotspot region is model output — so being able to see
+  // one without the other is not a convenience, it is how an officer checks
+  // whether the density surface is actually sitting on the cases it claims to.
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    const apply = () => {
+      for (const id of ["hot-fill", "hot-line"]) {
+        if (m.getLayer(id)) m.setLayoutProperty(id, "visibility", showHotspots ? "visible" : "none");
+      }
+    };
+    m.isStyleLoaded() ? apply() : m.once("idle", apply);
+  }, [showHotspots, data]);
+
+  const hasHotspots = (data.polygons ?? []).length > 0;
+
   return (
-    <div style={{ position: "relative", height: "100%", width: "100%" }}>
-      <div ref={ref} style={{ height: "100%", width: "100%", borderRadius: 14 }} />
+    <div className="map-shell">
+      <div ref={ref} className="map-canvas" />
+
+      {hasHotspots && (
+        <div style={{ position: "absolute", left: 10, top: 10, zIndex: 2 }}>
+          <button
+            className="btn btn-sm"
+            onClick={() => setShowHotspots((v) => !v)}
+            aria-pressed={showHotspots}
+            style={{ background: "rgba(15,20,27,0.94)" }}
+          >
+            {showHotspots ? "Hide density" : "Show density"}
+          </button>
+        </div>
+      )}
+
       <div className="map-legend">
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--case" />
-          <span>Case — click to select</span>
+          <span>Case</span>
+          <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--cluster">N</span>
-          <span>Cluster — click to explore</span>
+          <span>Cases here — click to expand</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--selected"><i /></span>
-          <span>Selected case</span>
+          <span>Selected</span>
         </div>
-        <div className="map-legend-row">
-          <span className="map-legend-ramp" />
-          <span>Hotspot density</span>
-        </div>
+        {hasHotspots && (
+          <div className="map-legend-row">
+            <span className="map-legend-ramp" />
+            <span>Hotspot density</span>
+            <span className="prov prov-model" style={{ marginLeft: "auto" }}>Model</span>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -405,20 +405,40 @@ every 12 hours, because a tamper check nobody runs is not a tamper check.
 
 ## 8. Console — `apps/web/`
 
-Futuristic minimalist: glassmorphism over a deep gradient mesh, rendered in **dark glass** so
-it stays legible for dense command-console work. Three floating panes:
+An investigative intelligence workstation (see v18): a restrained enterprise dark theme,
+~90% neutral, hierarchy from layout rather than from cards. A global bar, a persistent
+investigation header carrying the workspace tabs, and three hairline-divided columns:
 
-- **Left — chat**: streaming SSE, push-to-talk with a live waveform, EN/KN toggle.
-- **Centre — context view**: swaps by query type — map (MapLibre, KDE heatmap + case points),
-  force-directed network graph, Sankey money flow, ECharts forecast bands. Soft cross-fade
-  between them, never a hard cut.
-- **Right — evidence rail**: every citation chip renders as its 1-based `[index]` and opens
-  the matching evidence item as a floating glass drawer.
+- **Left — copilot**: streaming SSE, push-to-talk with a live waveform, EN/KN toggle. An
+  answer renders as a *finding* — the claim with its clickable `[n]` citations, a
+  structured module where the result has structure (the strongest connections in a
+  network), and a support strip — not as a chat bubble.
+- **Centre — workspace**: one primary surface, chosen by the tab in the investigation
+  header (Overview · Timeline · Network · Geography · Financial · Board). A new answer
+  pulls the workspace to the view it produced; an empty view hands over the exact
+  question that fills it. Each carries an analysis header stating the figures the
+  visualization contains — *"600 cases located · 4 hotspots · 1.00 peak density"*.
+- **Right — evidence**: the sources as a SET first ("Moderate · 5 authoritative records ·
+  4 model outputs"), then compact rows. A row opens the **inspector** — the full record,
+  its provenance, what its confidence number actually measures, and the query that
+  retrieved it — over the workbench, never navigating away from the investigation.
+
+**Provenance is a visual primitive**, and it is the same one on every surface — evidence,
+board, timeline, briefing, chart legends: ■ RECORD (stated in the file) · ◆ DERIVED
+(inferred by Veritas) · ▲ MODEL (computed). A model estimate must never be able to look
+like a record, so it gets its own channel rather than a word inside body text. The three
+things `confidence` can mean are named apart for the same reason: **evidence support** ≠
+**text match** ≠ **model output**.
 
 **Reasoning Trace panel** (expandable, off by default) renders the agent trace in plain
 language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) →
 Evidence Evaluator: 3 corroborating records → Synthesis."* Explainability made visible rather
-than merely logged.
+than merely logged. While a turn runs, the same trace drives a four-stage progress readout
+(understanding → retrieving → verifying → preparing) instead of a bare spinner.
+
+**Refusal is a designed state**, not an error: a calm amber-ruled panel saying what could
+not be established and what that does and does not mean. A transport or engine *failure*
+is a separate, genuinely red state — the two must never look alike.
 
 The basemap is a real MapLibre style served by **OpenFreeMap** (`tiles.openfreemap.org`,
 OSM-derived, no API key or registration — the fifth documented exception, §2). What crosses
@@ -1133,3 +1153,82 @@ volume justifies the training cost.
     Kannada residual (`\bpriors?\b` vs. "priorities") are unchanged from the
     prior passes' own from-scratch re-checks — no new information surfaced this
     pass that would change any of those three findings.
+- **v18 (console redesign) — an investigative workstation instead of three panes of
+  cards.** Frontend only: no backend, RBAC, evidence-semantics or orchestration change,
+  and no new endpoint. `apps/web` was the part of this platform that still looked like a
+  data-science demo, and the gap between what the engine does and what the screen claims
+  was itself a defect.
+  - **The shell.** Three co-equal floating glass panes became a top bar, a persistent
+    **investigation header**, and three full-bleed hairline-divided columns (copilot /
+    workspace / evidence). Nothing floats except the two things that genuinely do — the
+    evidence inspector and the case overlay. The gradient mesh, the glass blur and the
+    glow are gone; hierarchy comes from layout, and the palette is ~90% neutral.
+  - **The top bar stopped advertising the deployment.** `10,000 FIRs · 16,918 nodes ·
+    13,835 indexed` is a true fact about the *stack*, not investigator context, and it
+    was holding the best strip on the screen. It moved behind the system indicator, one
+    click away (`19-system-status.png`). Its place went to ⌘K search and the officer.
+  - **Provenance became a visual primitive** (`apps/web/lib/evidence.ts`, `.prov-*` /
+    `.rail-*`). Every surface that shows a fact — an evidence row, a board item, a
+    timeline event, a briefing section, a chart legend — carries the same rail and glyph:
+    ■ RECORD (blue, stated in the file) · ◆ DERIVED (amber, inferred by Veritas) ·
+    ▲ MODEL (violet, computed). The platform's strongest claim is that a model's estimate
+    can never look like a record; that is now a dedicated visual channel rather than a
+    word inside body text. `confidence_kind` is likewise split by name: **evidence
+    support** ≠ **text match** ≠ **model output**, so a 66% wording similarity can no
+    longer read as authoritative as 100% corroboration.
+  - **Evidence stopped being nine identical cards.** The column leads with the evidence
+    AS A SET — "Moderate · 5 authoritative records · 4 model outputs" — and the sources
+    are compact rows; the full record, its provenance, its retrieval query and its
+    actions live in an **inspector** drawer (Esc / ↑↓ navigable) that never leaves the
+    investigation. Support counts SOURCES, never an average over scores measuring
+    different things, and only `support`-kind confidences can move the verdict.
+  - **The workspace has tabs**, and they are views of the investigation, not
+    destinations: Overview · Timeline · Network · Geography · Financial · Board. A new
+    answer pulls the workspace to the view it produced; a view with nothing loaded states
+    what it is for and hands over the exact question that fills it. Each carries an
+    **analysis header** naming the figures the visualization contains but never stated
+    ("600 cases located · 4 hotspots · 1.00 peak density").
+  - **Two real defects the redesign surfaced and fixed**, both category errors of the
+    kind §12 exists to prevent:
+    1. **The network painted PageRank on the SEVERITY ramp**, so every ordinary
+       co-accused rendered somewhere on the crimson end — the graph asserted a threat
+       score this platform does not compute for those nodes. Influence now has its own
+       steel→blue scale (`palette.ts`), labelled *"connectedness within this graph — not
+       a risk score"*.
+    2. **The root node's `pagerank: 1.0` is a display sentinel** (`synthesis_agent.py`
+       says so), and it was inside the max-normalisation — so every genuinely measured
+       centrality (0.003–0.01 in a real co-offending network) collapsed to the bottom of
+       the ramp and twenty distinguishable associates rendered as twenty identical dots.
+       Scaled on the real values now, with the subject sized and coloured explicitly and
+       **named** (it used to render as the literal string "subject").
+  - **The evidence thread survived a shell rename it would have died silently in.**
+    `EvidenceThread` anchors on `chip.closest(".pane")`; `.pane` no longer exists, and
+    `closest()` returning null draws nothing at all — indistinguishable from the feature
+    having been removed. Caught in a screenshot, not by a test or the type checker;
+    now anchored on `.col` with a comment saying why the selector is load-bearing.
+  - **Refusal is a designed state**, not a red error box: calm amber-ruled panel, "No
+    supporting records", plus what that does and does not mean. A transport/engine
+    failure is a *separate*, genuinely red state — `Turn.failed` is new, because the old
+    code set `refused: true` on a caught exception and made the system working correctly
+    look identical to the system breaking.
+  - **Loading names its stages** (`Progress.tsx`) — understanding → retrieving →
+    verifying → preparing — derived from the trace the engine already emits, so it
+    reports what is actually happening and exposes nothing the trace panel didn't.
+  - **Also**: ⌘K command palette over the rank-scoped case register plus real actions;
+    the case register is rows, not cards (three buttons per card became row actions on
+    hover); alerts moved out of the evidence column into a counter that can never cover a
+    record; the board is a first-class workspace with a compose rail; forecast intervals
+    read as intervals (dashed bounds) instead of a slab; the map gained a density
+    layer toggle and provenance labels in its legend.
+  - **Verified by driving the real console over CDP**, not by reading the diff: 19 states
+    captured in `docs/screenshots/2026-08-29-workstation-redesign/`, and the interactions
+    a screenshot cannot prove — graph node click, inspector ↑↓/Esc, ⌘K, alerts, system
+    popover, Kannada round trip (`73 ಪ್ರಕರಣಗಳು`, no residual `(s)`) — all driven with real
+    input events and asserted on live DOM. Zero console errors. `npx tsc --noEmit` clean;
+    static export re-verified against both v9 invariants (`/app`-prefixed assets, no
+    `localhost` in the bundle).
+  - **Not done this pass, named rather than silently skipped**: not deployed — this is a
+    console-only change and `scripts/deploy-console.sh` is the one command it needs, but
+    pushing to the live URL is the operator's call. The backend is untouched, so the 602
+    Python tests are unaffected and were not re-run against a change that cannot reach
+    them. `apps/web` has no test suite of its own and this pass did not add one.

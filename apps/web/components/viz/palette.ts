@@ -1,37 +1,58 @@
-/* One severity/threat palette, shared by every view.
+/* Visualization colour, derived from the same tokens as the rest of the console
+ * (globals.css). Charts are part of the product, not four libraries that happen
+ * to share a page, so nothing here invents a hue.
  *
- * The same amber->rose ramp colours a hotspot, a high-PageRank graph node, and a
- * large money flow. That is what makes the console read as one instrument instead
- * of four charts that happen to sit on the same page — a "high" looks like a high
- * everywhere. */
+ * TWO SCALES, AND THEY MEAN DIFFERENT THINGS.
+ *
+ *   SEVERITY  green -> amber -> red. Used ONLY where the quantity really is
+ *             "how bad": hotspot density, transfer magnitude in a laundering
+ *             trail. A high looks like a high everywhere it appears.
+ *
+ *   INFLUENCE steel -> blue. Used for graph centrality.
+ *
+ * They were the same scale, and that was a category error with a visible cost:
+ * every associate in a co-offending network rendered somewhere on the red end,
+ * so a graph of twenty ordinary co-accused looked like twenty dangerous people.
+ * PageRank measures how connected somebody is inside the network on screen. It
+ * is not a threat score, the platform does not compute one for these nodes, and
+ * colouring it in crimson asserted one anyway. */
+
 export const SEV = {
-  low: "#35c08a",
-  med: "#ee8b4b",
-  high: "#f2555a",
+  low: "#3f9d6d",
+  med: "#d4883c",
+  high: "#dc5b5f",
 } as const;
 
-export const ACCENT = "#d8a657";
-// A located case record reads as "ink on paper" — a deliberate cartographic navy,
-// outside the warm green->amber->red severity ramp a hotspot is drawn in, and
-// deliberately NOT brass: brass/ACCENT is this console's one existing "selected/
-// primary" signal everywhere else (focus chips, active tabs, the citation-selected
-// state), and reusing it for every ordinary case mark at rest would dilute the one
-// thing that makes a SELECTED case legible at a glance — that it, alone, wears the
-// console's accent colour. Two colours, two meanings, never overlapping. Navy over
-// the previous cyan because the map basemap is now light (Positron): cyan reads as
-// a glow against dark ground and as a pastel smudge against pale cropland — navy is
-// what reads as "precise data mark" on paper-toned cartography.
-export const MAP_POINT = "#1e4a78";
-export const MAP_POINT_DIM = "rgba(30, 74, 120, 0.16)";
-export const GRID = "rgba(255,255,255,0.07)";
-export const TEXT_DIM = "#9fb1be";
-export const TEXT_FAINT = "#63757f";
+export const ACCENT = "#c9a44c";     // identity + selection. Never a severity.
+export const PRIMARY = "#4084d8";    // neutral analytical
+export const VIOLET = "#8b82d8";     // model output
 
-/** Map a 0-1 intensity onto the shared ramp. */
+// A located case reads as ink on paper — cartographic navy against the light
+// basemap, outside the warm severity ramp a hotspot is drawn in, and outside
+// gold, which is reserved for the selected mark.
+export const MAP_POINT = "#1e4a78";
+
+export const GRID = "rgba(255,255,255,0.055)";
+export const TEXT_DIM = "#9aabbd";
+export const TEXT_FAINT = "#64768a";
+export const SURFACE = "#151c25";
+
+/** Map a 0-1 intensity onto the SEVERITY ramp. Only for quantities that mean
+ *  "how bad". */
 export function ramp(t: number): string {
-  const x = Math.max(0, Math.min(1, t));
-  if (x < 0.5) return mix(SEV.low, SEV.med, x / 0.5);
-  return mix(SEV.med, SEV.high, (x - 0.5) / 0.5);
+  const x = clamp(t);
+  return x < 0.5 ? mix(SEV.low, SEV.med, x / 0.5) : mix(SEV.med, SEV.high, (x - 0.5) / 0.5);
+}
+
+/** Map a 0-1 centrality onto the INFLUENCE ramp: quiet steel for a peripheral
+ *  node, saturated blue for a hub. Reads as "more connected", not "more
+ *  dangerous", which is the only claim the data supports. */
+export function influence(t: number): string {
+  return mix("#5b7288", PRIMARY, clamp(t));
+}
+
+function clamp(t: number): number {
+  return Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
 }
 
 function mix(a: string, b: string, t: number): string {
@@ -53,9 +74,11 @@ export const CHART_BASE = {
     fontFamily: "var(--font-sans), ui-sans-serif, system-ui",
   },
   tooltip: {
-    backgroundColor: "rgba(12,19,25,0.95)",
-    borderColor: "rgba(255,255,255,0.14)",
-    textStyle: { color: "#e9eff4", fontSize: 12 },
-    extraCssText: "backdrop-filter: blur(10px); border-radius: 10px;",
+    backgroundColor: SURFACE,
+    borderColor: "#2a3746",
+    borderWidth: 1,
+    padding: [8, 11],
+    textStyle: { color: "#e8eef5", fontSize: 12 },
+    extraCssText: "border-radius: 6px; box-shadow: 0 12px 30px rgba(0,0,0,0.45);",
   },
 } as const;

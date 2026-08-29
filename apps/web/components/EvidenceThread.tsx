@@ -33,11 +33,15 @@ export default function EvidenceThread({ evidenceId }: { evidenceId: string | nu
       // and a rect of zero area would otherwise anchor the curve at the origin.
       if (!a.width || !b.width) return setGeom(null);
 
-      // Leave from the EDGE of the conversation pane, not from the chip itself. Drawn
+      // Leave from the EDGE of the copilot column, not from the chip itself. Drawn
       // chip-first the line runs straight back across the sentence it is citing and
       // reads as a strikethrough — the one thing it must not look like. The chip is
       // already marked by its lit state, so the claim end is not ambiguous.
-      const pane = chip.closest(".pane")?.getBoundingClientRect();
+      //
+      // This selector is load-bearing and silently fatal when wrong: `closest()`
+      // returning null draws nothing at all, which looks exactly like "the feature
+      // was removed". It broke once already when the shell stopped using `.pane`.
+      const pane = chip.closest(".col")?.getBoundingClientRect();
       if (!pane) return setGeom(null);
       const x1 = pane.right + 3;
       // Clamp to the pane so a citation scrolled out of view does not anchor the

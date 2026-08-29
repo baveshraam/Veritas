@@ -7,14 +7,11 @@ import type { CopilotBrief, TimelineResult } from "@/lib/types";
 
 const TimelineView = dynamic(() => import("./viz/TimelineView"), { ssr: false });
 
-/** Investigation Copilot — the "Monday morning" brief for one FIR (timeline,
- * MO-similar past cases, ranked leads, a paste-ready case-diary draft) AND, on the
- * Board/Timeline tabs, the persistent investigation board and the cross-entity
- * timeline for the same case. One overlay, three views of the same case, not
- * three destinations — an officer opening a case should never have to choose
- * which surface holds the thing they want. Floats over the console as a glass
- * overlay rather than a route, so an officer never loses the conversation
- * underneath. */
+/** The per-case deep dive: the Monday-morning briefing, the board and the
+ *  chronology for ONE case — which may not be the case the conversation is
+ *  currently about, which is exactly why it is an overlay and not the workspace.
+ *  It floats over the console rather than replacing it, so an officer checking
+ *  another case never loses the investigation underneath. */
 export default function Copilot({
   firId, onClose, onAsk, onPin, turnsVersion, initialTab = "brief",
 }: {
@@ -35,118 +32,157 @@ export default function Copilot({
   useEffect(() => { setTab(initialTab); }, [firId, initialTab]);
 
   useEffect(() => {
-    setBrief(null);
-    setError(null);
+    setBrief(null); setError(null);
     getCopilotBrief(firId).then(setBrief).catch((e) => setError(e.message));
   }, [firId]);
 
   useEffect(() => {
     if (tab !== "timeline") return;
-    setTl(null);
-    setTlError(null);
+    setTl(null); setTlError(null);
     getCaseTimeline(firId).then(setTl).catch((e) => setTlError(e.message));
   }, [firId, tab]);
+
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [onClose]);
 
   const copy = () => {
     if (!brief) return;
     navigator.clipboard.writeText(brief.draft_summary).then(() => {
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      setTimeout(() => setCopied(false), 1600);
     });
   };
 
+  const TABS = [
+    { k: "brief", label: "Briefing" },
+    { k: "board", label: "Board" },
+    { k: "timeline", label: "Timeline" },
+  ] as const;
+
   return (
-    <div className="copilot-overlay" onClick={onClose}>
-      <div className="pane glass copilot-panel" onClick={(e) => e.stopPropagation()}>
-        <div className="pane-head">
-          <span className="pane-title">Case {firId.slice(0, 8)}</span>
-          <div className="tabs">
-            <button className={`tab ${tab === "brief" ? "on" : ""}`} onClick={() => setTab("brief")}>
-              Briefing
-            </button>
-            <button className={`tab ${tab === "board" ? "on" : ""}`} onClick={() => setTab("board")}>
-              Investigation Board
-            </button>
-            <button className={`tab ${tab === "timeline" ? "on" : ""}`} onClick={() => setTab("timeline")}>
-              Timeline
-            </button>
+    <div className="overlay" onClick={onClose}>
+      <div className="overlay-panel" onClick={(e) => e.stopPropagation()} role="dialog"
+        aria-label="Case briefing">
+        <div className="overlay-head">
+          <div className="overlay-title">
+            Case <span className="mono" style={{ color: "var(--t-2)" }}>{firId}</span>
           </div>
-          <button className="btn" onClick={onClose}>Close</button>
+          <nav className="overlay-tabs">
+            {TABS.map((t) => (
+              <button key={t.k} className={`inv-tab ${tab === t.k ? "on" : ""}`}
+                onClick={() => setTab(t.k)}>{t.label}</button>
+            ))}
+          </nav>
+          <button className="btn btn-sm" style={{ alignSelf: "center", marginBottom: 12 }}
+            onClick={onClose}>Close</button>
         </div>
-        <div className="pane-body">
-          {tab === "board" && <Board firId={firId} onAsk={onAsk} refreshToken={turnsVersion} />}
-          {tab === "timeline" && tlError && <div className="msg-a refusal">{tlError}</div>}
-          {tab === "timeline" && !tl && !tlError && (
-            <div className="spinner" style={{ margin: "20px auto" }} />
-          )}
-          {tab === "timeline" && tl && (
-            <TimelineView data={tl} onPin={onPin} />
-          )}
-          {tab === "brief" && error && <div className="msg-a refusal">{error}</div>}
-          {tab === "brief" && !brief && !error && (
-            <div className="dim" style={{ textAlign: "center", padding: "24px 16px" }}>
-              <div className="spinner" style={{ margin: "0 auto 10px" }} />
-              {/* The brief's diary paragraph is the one Copilot output that calls the
-                  reasoning model unconditionally. Measured live: the first such call on
-                  a container pays real cold-inference latency (~30s) that a warmed
-                  OAuth token alone doesn't remove — spending a real model call just to
-                  pre-pay that cost would trade money for speed the cost directive rules
-                  out, so the honest fix is telling the officer what is actually
-                  happening instead of a bare spinner with no explanation. */}
-              Generating the case briefing — this calls the reasoning model for the
-              diary paragraph and can take up to 30 seconds on a cold start.
+
+        <div className="overlay-body">
+          {tab === "board" && (
+            <div style={{ height: "100%" }}>
+              <Board firId={firId} onAsk={onAsk} refreshToken={turnsVersion} />
             </div>
           )}
-          {tab === "brief" && brief && (
-            <>
-              <section className="copilot-section">
-                <h3>Timeline</h3>
-                {brief.timeline.length === 0 && <p className="dim">No dated events on record.</p>}
-                {brief.timeline.map((ev, i) => (
-                  <div key={i} className="copilot-row">
-                    <span className="copilot-date">{ev.date}</span>
-                    <span>{ev.event}</span>
-                  </div>
-                ))}
-              </section>
 
-              <section className="copilot-section">
-                <h3>MO-similar cases</h3>
-                {brief.similar_cases.length === 0 && <p className="dim">No similar cases found.</p>}
-                {brief.similar_cases.map((c, i) => (
-                  <div key={i} className="copilot-row">
-                    <span className="copilot-date">{c.fir_number}</span>
-                    <span>
-                      {c.crime_type} · {c.district} — <span className="chip chip-low">{c.outcome}</span>
-                    </span>
-                    {/* WHY these two cases are similar, not a bare embedding score —
-                        "same crime type" alone is a weak reason, and a raw percentage
-                        cannot tell an officer whether it's method, section, or
-                        district that actually lined up. */}
-                    <div className="dim" style={{ fontSize: 12, marginTop: 2 }}>
-                      {c.explanation}
-                      {typeof c.similarity === "number" && (
-                        <span> · {Math.round(c.similarity * 100)}% text similarity</span>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </section>
+          {tab === "timeline" && (
+            <div style={{ padding: 16, height: "100%" }}>
+              {tlError && <div className="failure"><b>Timeline unavailable.</b> {tlError}</div>}
+              {!tl && !tlError && <div className="empty"><span className="spinner" /><p>Building the chronology…</p></div>}
+              {tl && <TimelineView data={tl} onPin={onPin} />}
+            </div>
+          )}
 
-              <section className="copilot-section">
-                <h3>Leads</h3>
-                {brief.leads.length === 0 && <p className="dim">No leads generated.</p>}
-                <ul>{brief.leads.map((l, i) => <li key={i}>{l}</li>)}</ul>
-              </section>
+          {tab === "brief" && (
+            <div style={{ padding: 18 }}>
+              {error && <div className="failure"><b>The briefing could not be prepared.</b> {error}</div>}
 
-              <section className="copilot-section">
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                  <h3>Draft case-diary summary</h3>
-                  <button className="btn" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+              {!brief && !error && (
+                <div className="empty" style={{ paddingTop: 50 }}>
+                  <span className="spinner" />
+                  <h3>Preparing the briefing</h3>
+                  {/* The diary paragraph is the one Copilot output that calls the
+                      reasoning model unconditionally, and the first such call on a
+                      cold container pays real inference latency. Saying so is more
+                      useful than a spinner that looks stuck. */}
+                  <p>
+                    The case-diary paragraph is written by the reasoning model. On a cold
+                    start this takes up to 30 seconds.
+                  </p>
                 </div>
-                <p className="copilot-draft">{brief.draft_summary}</p>
-              </section>
-            </>
+              )}
+
+              {brief && (
+                <>
+                  <section className="section">
+                    <div className="section-head">
+                      <span className="label">Chronology</span>
+                      <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+                    </div>
+                    {brief.timeline.length === 0 && <p className="dim">No dated events on record.</p>}
+                    {brief.timeline.map((ev, i) => (
+                      <div key={i} className="brief-row">
+                        <span className="brief-date">{ev.date}</span>
+                        <span className="brief-main">{ev.event}</span>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section className="section">
+                    <div className="section-head">
+                      <span className="label">Cases with a similar method</span>
+                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>Derived</span>
+                    </div>
+                    {brief.similar_cases.length === 0 && <p className="dim">No comparable case found.</p>}
+                    {brief.similar_cases.map((c, i) => (
+                      <div key={i} className="brief-row">
+                        <span className="brief-date">{c.fir_number}</span>
+                        <span className="brief-main">
+                          <div>
+                            {c.crime_type} · {c.district}
+                            {c.outcome && <span className="pill pill-neutral" style={{ marginLeft: 8 }}>{c.outcome}</span>}
+                          </div>
+                          {/* WHY these two line up, not a bare embedding score. A raw
+                              percentage cannot tell an officer whether it was the
+                              method, the section or the district that matched. */}
+                          <div className="brief-why">
+                            {c.explanation}
+                            {typeof c.similarity === "number" &&
+                              ` · ${Math.round(c.similarity * 100)}% text match`}
+                          </div>
+                        </span>
+                      </div>
+                    ))}
+                  </section>
+
+                  <section className="section">
+                    <div className="section-head">
+                      <span className="label">Recommended next steps</span>
+                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>Derived</span>
+                    </div>
+                    {brief.leads.length === 0 && <p className="dim">No lead could be drawn from the records.</p>}
+                    <div className="lead-list">
+                      {brief.leads.map((l, i) => <div className="lead-item" key={i}><span>{l}</span></div>)}
+                    </div>
+                  </section>
+
+                  <section className="section" style={{ marginBottom: 0 }}>
+                    <div className="section-head">
+                      <span className="label">Draft case-diary entry</span>
+                      <span className="prov prov-model" style={{ marginLeft: "auto" }}>Model</span>
+                      <button className="btn btn-sm" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+                    </div>
+                    <p className="brief-draft">{brief.draft_summary}</p>
+                    <div className="meta" style={{ marginTop: 8 }}>
+                      Written by the reasoning model from the records above. Read it before
+                      it goes in the diary.
+                    </div>
+                  </section>
+                </>
+              )}
+            </div>
           )}
         </div>
       </div>
