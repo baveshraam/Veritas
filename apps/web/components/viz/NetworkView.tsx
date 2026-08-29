@@ -12,6 +12,22 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
   const edges = data.edges ?? [];
   const max = Math.max(1e-6, ...nodes.map((n) => n.pagerank ?? 0));
 
+  // Live defect: a single-hub network with a dozen+ similarly-ranked associates has
+  // no real separation at the 40%-of-max cutoff below (they're all close to each
+  // other, just not close to the hub), so that threshold alone let every one of them
+  // keep a static label — wider spacing helped, but 20+ labels radiating from one
+  // point still crowded into each other in the centre. Capping the ALWAYS-labelled
+  // set to the dozen highest-influence nodes (a fixed, small number, not a
+  // percentage of an unbounded node count) keeps the static view legible; every
+  // other node still gets its label on hover (`emphasis.label.show` below) — the
+  // information isn't hidden, just not fighting for the same pixels at once.
+  const MAX_STATIC_LABELS = 12;
+  const alwaysLabeled = new Set(
+    nodes.length <= 15 ? nodes.map((n) => n.id)
+      : [...nodes].sort((a, b) => (b.pagerank ?? 0) - (a.pagerank ?? 0))
+          .slice(0, MAX_STATIC_LABELS).map((n) => n.id),
+  );
+
   // Two distinct people can share a display name (a real, unremarkable fact about
   // Indian names, not a data bug) — the evidence rail already disambiguates that
   // case in prose ("Suma Nadkarni (person 7334)"). The graph didn't: two nodes
@@ -51,8 +67,7 @@ export default function NetworkView({ data }: { data: { nodes: Node[]; edges: Ed
         // layout still can't fully separate two nodes' text — readable in front
         // of another label or an edge line instead of dissolving into either.
         backgroundColor: rgba("#0a0e14", 0.72), padding: [1, 4], borderRadius: 3,
-        formatter: (p: any) =>
-          nodes.length <= 15 || p.data.value > max * 0.4 ? p.data.name : "",
+        formatter: (p: any) => (alwaysLabeled.has(p.data.id) ? p.data.name : ""),
       },
       emphasis: { focus: "adjacency", label: { show: true } },
       lineStyle: { color: "source", opacity: 0.35, curveness: 0.12 },

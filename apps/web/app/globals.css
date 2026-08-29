@@ -44,12 +44,12 @@
   --sev-med: #ee8b4b;
   --sev-high: #f2555a;
 
-  /* A located case reads as cool, factual data — deliberately outside the warm
-   * severity ramp above (a hotspot's colour), and deliberately not brass: brass is
-   * this console's one reserved "selected" signal everywhere else, so a case mark
-   * at rest has to be a different colour or the selected state on the map would
-   * mean nothing. Keep this in sync with viz/palette.ts's MAP_POINT. */
-  --map-point: #6fd3e8;
+  /* A located case reads as "ink on paper" — a cartographic navy, deliberately
+   * outside the warm severity ramp above (a hotspot's colour), and deliberately not
+   * brass: brass is this console's one reserved "selected" signal everywhere else,
+   * so a case mark at rest has to be a different colour or the selected state on
+   * the map would mean nothing. Keep this in sync with viz/palette.ts's MAP_POINT. */
+  --map-point: #1e4a78;
 
   --radius: 16px;
   --radius-sm: 10px;
@@ -642,28 +642,27 @@ body::after {
   flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
   width: 15px; height: 15px;
 }
-/* Case: a ring around a core — the same two-layer mark drawn on the map itself. */
-.map-legend-mark--case { position: relative; }
-.map-legend-mark--case i {
-  position: absolute; inset: 0; border-radius: 50%;
-  background: var(--map-point); opacity: 0.16;
-  border: 1.3px solid rgba(111, 211, 232, 0.85);
+/* Case: the same compact navy glyph with a white keyline drawn on the map itself. */
+.map-legend-mark--case {
+  width: 9px; height: 9px; border-radius: 50%;
+  background: var(--map-point);
+  box-shadow: 0 0 0 1.5px #ffffff, 0 0 0 2.5px rgba(20, 30, 45, 0.18);
 }
-.map-legend-mark--case i::after {
-  content: ""; position: absolute; inset: 0; margin: auto;
-  width: 4px; height: 4px; border-radius: 50%; background: #d8f5fc;
-}
-/* Cluster: a wider ring badge carrying a count — never a solid filled bubble. */
+/* Cluster: a solid navy badge with a white ring, carrying a count — never a
+ * translucent bubble, which reads as a grey smudge on a light basemap. */
 .map-legend-mark--cluster {
-  border-radius: 50%; background: rgba(111, 211, 232, 0.17);
-  border: 1.4px solid rgba(111, 211, 232, 0.9);
-  font-family: var(--font-rec); font-size: 8px; font-weight: 700; color: #eef8fb;
+  border-radius: 50%; background: var(--map-point);
+  box-shadow: 0 0 0 2px #ffffff, 0 0 0 3px rgba(20, 30, 45, 0.14);
+  font-family: var(--font-rec); font-size: 8px; font-weight: 700; color: #ffffff;
 }
-/* Selected: the console's one reserved accent colour, nowhere else on the map. */
+/* Selected: the console's one reserved accent colour, nowhere else on the map —
+ * lifted off the pale basemap with the same soft dark shadow ring the map itself
+ * draws behind the selection, so the legend teaches the real contrast trick. */
 .map-legend-mark--selected { position: relative; }
 .map-legend-mark--selected i {
-  position: absolute; inset: 2px; border-radius: 50%;
+  position: absolute; inset: 1px; border-radius: 50%;
   border: 2px solid var(--accent);
+  box-shadow: 0 0 0 2.5px rgba(20, 30, 45, 0.14);
 }
 .map-legend-ramp {
   width: 26px; height: 7px; border-radius: 3px; flex: 0 0 auto;
@@ -672,13 +671,16 @@ body::after {
 }
 
 /* District reference label — quiet by design (see MapView.tsx's own hierarchy note):
- * geography for orientation, never competing with an investigative mark. */
+ * geography for orientation, never competing with an investigative mark. A light,
+ * barely-there chip on the light basemap reads as quieter than a dark one would — a
+ * dark chip on pale cartography draws the eye precisely because of the contrast,
+ * which is the opposite of what a reference label is for. */
 .map-district-label {
   font-size: 10px; font-family: var(--font-label); letter-spacing: 0.02em;
-  color: rgba(233, 239, 244, 0.55); white-space: nowrap;
-  background: rgba(6, 10, 14, 0.55);
+  color: rgba(74, 85, 104, 0.85); white-space: nowrap;
+  background: rgba(255, 255, 255, 0.72);
   padding: 1px 5px; border-radius: 4px;
-  border: 1px solid rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(20, 30, 45, 0.08);
   transform: translateY(5px); pointer-events: none;
 }
 

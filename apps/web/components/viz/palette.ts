@@ -11,16 +11,18 @@ export const SEV = {
 } as const;
 
 export const ACCENT = "#d8a657";
-// A located case record reads as "cool, factual data" — deliberately outside the
-// warm green->amber->red severity ramp a hotspot is drawn in, and deliberately NOT
-// brass: brass/ACCENT is this console's one existing "selected/primary" signal
-// everywhere else (focus chips, active tabs, the citation-selected state), and
-// reusing it for every ordinary case mark at rest would dilute the one thing that
-// makes a SELECTED case legible at a glance — that it, alone, wears the console's
-// accent colour. A case mark is cyan; the selected one is brass. Two colours, two
-// meanings, never overlapping.
-export const MAP_POINT = "#6fd3e8";
-export const MAP_POINT_DIM = "rgba(111, 211, 232, 0.5)";
+// A located case record reads as "ink on paper" — a deliberate cartographic navy,
+// outside the warm green->amber->red severity ramp a hotspot is drawn in, and
+// deliberately NOT brass: brass/ACCENT is this console's one existing "selected/
+// primary" signal everywhere else (focus chips, active tabs, the citation-selected
+// state), and reusing it for every ordinary case mark at rest would dilute the one
+// thing that makes a SELECTED case legible at a glance — that it, alone, wears the
+// console's accent colour. Two colours, two meanings, never overlapping. Navy over
+// the previous cyan because the map basemap is now light (Positron): cyan reads as
+// a glow against dark ground and as a pastel smudge against pale cropland — navy is
+// what reads as "precise data mark" on paper-toned cartography.
+export const MAP_POINT = "#1e4a78";
+export const MAP_POINT_DIM = "rgba(30, 74, 120, 0.16)";
 export const GRID = "rgba(255,255,255,0.07)";
 export const TEXT_DIM = "#9fb1be";
 export const TEXT_FAINT = "#63757f";

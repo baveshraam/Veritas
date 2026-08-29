@@ -5,7 +5,11 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { ramp, rgba, ACCENT, MAP_POINT } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
-type Point = { lat: number; lng: number; fir_id: string; crime_no?: string | null; filed?: string | null };
+type Point = {
+  lat: number; lng: number; fir_id: string;
+  crime_no?: string | null; filed?: string | null;
+  crime_type?: string | null; district?: string | null;
+};
 
 // Karnataka's 31 real districts — code, name, and the same real centroid the
 // generator's own geo sampling uses (data/data/seed/derived/district_centroids.csv),
@@ -56,20 +60,21 @@ const DISTRICTS: { code: string; name: string; lat: number; lng: number }[] = [
 // What crosses the network is a tile z/x/y for the current viewport — never an FIR's
 // exact coordinates or any investigative text.
 //
-// "dark" over "liberty": Veritas's entire console is ink-dark glass with a brass
-// accent (the "Registry" identity — CLAUDE.md §8), and the light "liberty" basemap
-// sat in the middle of it as a bright cutout window that every overlay colour then
-// had to fight for contrast against. "dark" (background rgb(12,12,12) — confirmed
-// directly, not assumed) is close to the console's own --bg, so the map now reads as
-// part of the instrument instead of a foreign widget floating on it, and every
-// investigative mark gets to be genuinely LUMINOUS against it rather than merely
-// higher-contrast than cropland.
-const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/dark";
+// "positron" over "liberty"/"dark": a v1 pass tried "liberty" (too saturated — bright
+// cream/yellow roads competed with every overlay colour) and then "dark" (unified with
+// the console's own ink chrome, but read as a second dark instrument stacked on the
+// first, and this product's own design review called for the map to go back to a
+// LIGHT analytical basemap). "positron" is CartoDB's classic muted-cartography style —
+// background rgb(242,243,240), park fill rgb(230,233,229) — confirmed directly, not
+// assumed: low-saturation land, pale water, subdued grey labels, the register used by
+// analytics tools specifically because it gets out of the way of data drawn on top of
+// it. "bright" (OpenFreeMap's other light option) is closer to liberty's saturation and
+// was rejected for the same reason liberty was.
+const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/positron";
 
-const CASE_RING_R = 6;
-const CASE_CORE_R = 2.25;
-const SELECT_RING_R = CASE_RING_R + 4;
-const SELECT_HALO_R = CASE_RING_R + 9;
+const CASE_R = 4.5;
+const SELECT_RING_R = CASE_R + 4.5;
+const SELECT_HALO_R = CASE_R + 8;
 
 function fmtDate(d?: string | null): string {
   if (!d) return "";
@@ -84,13 +89,13 @@ function escapeHtml(s: string): string {
 
 /**
  * The investigative map layer. Visual hierarchy, back to front, is deliberate:
- * geography (basemap) -> hotspot density (soft, ambient) -> clusters (aggregate
- * chips) -> individual cases (precise marks) -> the selected case (the one thing
- * that should out-rank everything else on screen). One shape grammar — a ring
- * around a core — expresses all three investigative mark types at different scales
- * and weights (a case is a small ring+dot; a cluster is a wider ring+count; the
- * selection is the widest ring of all, in the console's one reserved accent colour)
- * rather than three unrelated treatments bolted together.
+ * geography (the light basemap) -> hotspot density (soft, ambient) -> clusters
+ * (aggregate badges) -> individual cases (compact glyphs) -> the selected case (the
+ * one thing that should out-rank everything else on screen). A case is a small
+ * navy glyph with a white keyline; a cluster is the same navy, larger, carrying a
+ * count instead of a dot; the selection is brass — the console's one reserved
+ * "active" colour, lifted off the pale basemap with a soft dark shadow ring rather
+ * than invented as a fourth hue.
  */
 export default function MapView({
   data, onSelect, activeEvidenceId,
@@ -136,15 +141,17 @@ export default function MapView({
         },
       });
       // District reference geography sits at the QUIET end of the hierarchy — small,
-      // desaturated, present for orientation only. Investigative marks are drawn in
-      // later draw() calls and layer on top, so they always read as the foreground.
+      // muted, present for orientation only. Investigative marks are drawn in later
+      // draw() calls and layer on top, so they always read as the foreground. On a
+      // light basemap a dark dot (not white — white would nearly vanish on pale
+      // land) with a white keyline keeps it legible without competing for attention.
       m.addLayer({
         id: "district-dot", type: "circle", source: "districts",
         paint: {
-          "circle-radius": 2.25,
-          "circle-color": rgba("#ffffff", 0.55),
+          "circle-radius": 2,
+          "circle-color": rgba("#4a5568", 0.55),
           "circle-stroke-width": 1,
-          "circle-stroke-color": rgba("#000000", 0.6),
+          "circle-stroke-color": rgba("#ffffff", 0.9),
         },
       });
       for (const d of DISTRICTS) {
@@ -167,7 +174,7 @@ export default function MapView({
       const m = map.current;
       if (!m) return;
       const popup = new maplibregl.Popup({
-        closeButton: false, closeOnClick: false, offset: 14, className: "veritas-map-popup",
+        closeButton: false, closeOnClick: false, offset: 12, className: "veritas-map-popup",
       });
       const show = (e: maplibregl.MapLayerMouseEvent, html: string) => {
         m.getCanvas().style.cursor = "pointer";
@@ -175,18 +182,19 @@ export default function MapView({
       };
       const hide = () => { m.getCanvas().style.cursor = ""; popup.remove(); };
 
-      // The ring layer (radius CASE_RING_R) is the interactive target, not the
-      // smaller solid core — a bigger hit area is more forgiving to hover/click
-      // without changing what's visually the "precise" mark (the core).
-      m.on("mouseenter", "fir-pts-ring", (e) => {
+      m.on("mouseenter", "fir-pts", (e) => {
         const p = e.features?.[0]?.properties ?? {};
         const crimeNo = p.crime_no ? `FIR ${escapeHtml(String(p.crime_no))}` : `Case ${escapeHtml(String(p.fir_id))}`;
-        const filed = p.filed ? `<div class="veritas-map-popup-sub">Filed ${escapeHtml(fmtDate(p.filed))}</div>` : "";
-        show(e, `<div class="veritas-map-popup-title mono">${crimeNo}</div>${filed}` +
+        const metaBits = [p.crime_type, p.district].filter(Boolean).map(String).map(escapeHtml);
+        const meta = metaBits.length
+          ? `<div class="veritas-map-popup-sub">${metaBits.join(" · ")}</div>` : "";
+        const filed = p.filed
+          ? `<div class="veritas-map-popup-sub">Filed ${escapeHtml(fmtDate(p.filed))}</div>` : "";
+        show(e, `<div class="veritas-map-popup-title mono">${crimeNo}</div>${meta}${filed}` +
           `<div class="veritas-map-popup-hint">Click to select</div>`);
       });
-      m.on("mouseleave", "fir-pts-ring", hide);
-      m.on("click", "fir-pts-ring", (e) => {
+      m.on("mouseleave", "fir-pts", hide);
+      m.on("click", "fir-pts", (e) => {
         const fid = e.features?.[0]?.properties?.fir_id;
         if (fid != null) onSelectRef.current?.(`fir:${fid}`);
       });
@@ -220,8 +228,8 @@ export default function MapView({
 
     const draw = () => {
       for (const id of [
-        "hot-glow", "hot-fill", "hot-line", "clusters", "cluster-count",
-        "fir-pts-ring", "fir-pts-core", "fir-pts-selected-halo", "fir-pts-selected",
+        "hot-fill", "hot-line", "clusters", "cluster-ring", "cluster-count",
+        "fir-pts", "fir-pts-selected-halo", "fir-pts-selected",
       ]) {
         if (m.getLayer(id)) m.removeLayer(id);
       }
@@ -242,25 +250,18 @@ export default function MapView({
             })),
           },
         });
-        // Hotspot density is analytical CONTEXT, not a record — it has to read as
-        // ambient background the eye settles past, never as a shape competing with
-        // the discrete case/cluster marks drawn on top of it. A soft blurred glow
-        // line (native `line-blur`, no extra layer machinery beyond one more line
-        // layer) reads as "heat" the way a filled polygon alone does not.
-        m.addLayer({
-          id: "hot-glow", type: "line", source: "hotspots",
-          paint: {
-            "line-color": ["get", "color"], "line-width": 14,
-            "line-opacity": 0.16, "line-blur": 10,
-          },
-        });
+        // Hotspot density is analytical CONTEXT, not a record — a restrained warm
+        // translucent surface that stays low enough for the basemap's own roads and
+        // place names to read through it, and never resembles a case marker (cases
+        // are navy/cool; a hotspot is always somewhere on the green->amber->red
+        // severity ramp — hue alone keeps the two unmistakable from each other).
         m.addLayer({
           id: "hot-fill", type: "fill", source: "hotspots",
-          paint: { "fill-color": ["get", "color"], "fill-opacity": 0.24 },
+          paint: { "fill-color": ["get", "color"], "fill-opacity": 0.22 },
         });
         m.addLayer({
           id: "hot-line", type: "line", source: "hotspots",
-          paint: { "line-color": ["get", "color"], "line-width": 1.5, "line-opacity": 0.85 },
+          paint: { "line-color": ["get", "color"], "line-width": 1.5, "line-opacity": 0.8 },
         });
       }
 
@@ -268,41 +269,51 @@ export default function MapView({
       if (pts.length) {
         // Clustering (native MapLibre/GL-JS GeoJSON source option, not a new
         // dependency): the failure mode this fixes is a dense area — dozens of FIRs
-        // in one taluk — rendering as one indistinct smear with no way to tell "12
+        // in one taluk — rendering as an indistinct smear with no way to tell "12
         // cases here" from "40". Below `clusterMaxZoom` the source aggregates nearby
         // points into a cluster feature carrying `point_count`; zooming in (or
         // clicking a cluster) breaks it apart into sub-clusters or real, individually
-        // selectable points.
+        // selectable points — progressive disclosure: broad scale shows aggregate
+        // density, close scale reveals individual cases, never both at once.
         m.addSource("firs", {
           type: "geojson",
           cluster: true,
           clusterMaxZoom: 12,
-          clusterRadius: 44,
+          clusterRadius: 50,
           data: {
             type: "FeatureCollection",
             features: pts.map((p) => ({
               type: "Feature" as const,
-              properties: { fir_id: p.fir_id, crime_no: p.crime_no ?? null, filed: p.filed ?? null },
+              properties: {
+                fir_id: p.fir_id, crime_no: p.crime_no ?? null, filed: p.filed ?? null,
+                crime_type: p.crime_type ?? null, district: p.district ?? null,
+              },
               geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
             })),
           },
         });
 
-        // A cluster is a ring-badge, not a filled bubble: a wide stroke at high
-        // opacity carries the shape, a LOW-opacity fill keeps the interior reading
-        // as glass rather than a solid disc, so even a 500-case cluster stays calm.
-        // Radius steps with count (restrained top end — a huge cluster gets visibly
-        // bigger, never dominant) and the count label's own size steps with it, the
-        // "intelligent size/weight progression" a flat size can't communicate.
+        // A cluster is a solid navy badge with a white ring for separation from the
+        // basemap — NOT a translucent bubble (that technique read as "glass" against
+        // the dark v1 basemap; against light cartography a low-opacity fill reads as
+        // a grey smudge instead). Radius steps with count, restrained at the top end
+        // — a 500-case cluster gets visibly bigger than a 5-case one, never
+        // dominant — and the count label's own size steps with it too.
         m.addLayer({
           id: "clusters", type: "circle", source: "firs",
           filter: ["has", "point_count"],
           paint: {
             "circle-radius": ["step", ["get", "point_count"], 11, 10, 14, 50, 17, 200, 20],
             "circle-color": MAP_POINT,
-            "circle-opacity": 0.17,
-            "circle-stroke-width": ["step", ["get", "point_count"], 1.4, 50, 1.8],
-            "circle-stroke-color": rgba(MAP_POINT, 0.9),
+          },
+        });
+        m.addLayer({
+          id: "cluster-ring", type: "circle", source: "firs",
+          filter: ["has", "point_count"],
+          paint: {
+            "circle-radius": ["step", ["get", "point_count"], 11, 10, 14, 50, 17, 200, 20],
+            "circle-color": "rgba(0,0,0,0)",
+            "circle-stroke-width": 2, "circle-stroke-color": "#ffffff",
           },
         });
         m.addLayer({
@@ -313,50 +324,44 @@ export default function MapView({
             "text-size": ["step", ["get", "point_count"], 10, 10, 11, 50, 12, 200, 13],
             "text-font": ["Noto Sans Bold"],
           },
+          paint: { "text-color": "#ffffff" },
+        });
+
+        // An individual case: a compact navy glyph with a white keyline — the
+        // keyline is what separates it cleanly from a road or a label underneath
+        // rather than a generic filled dot melting into the basemap. One layer,
+        // deliberately: hundreds of these have to sit on the map at once without
+        // reading as visual noise, and the case mark's whole job here is to be
+        // quiet until it's the thing being inspected or selected. A gentle zoom
+        // interpolation (smaller/fainter just as clusters start breaking apart,
+        // full size once you're clearly at case-inspection scale) makes that
+        // transition a reveal rather than a hard pop-in.
+        m.addLayer({
+          id: "fir-pts", type: "circle", source: "firs",
+          filter: ["!", ["has", "point_count"]],
           paint: {
-            "text-color": "#eef8fb",
-            "text-halo-color": "rgba(6,12,16,0.9)", "text-halo-width": 1,
+            "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, CASE_R * 0.6, 13, CASE_R],
+            "circle-color": MAP_POINT,
+            "circle-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.55, 13, 1],
+            "circle-stroke-width": 1.5, "circle-stroke-color": "#ffffff",
           },
         });
 
-        // An individual case is a ring around a core — the signature mark of this
-        // whole system, reused at larger scale for a cluster (ring+count) and again
-        // for the selection (ring alone, in brass). The ring is deliberately the
-        // INTERACTIVE layer (a 6px-radius hit target is far more forgiving than a
-        // 2px dot) while the core is what the eye actually resolves as "the point".
-        m.addLayer({
-          id: "fir-pts-ring", type: "circle", source: "firs",
-          filter: ["!", ["has", "point_count"]],
-          paint: {
-            "circle-radius": CASE_RING_R,
-            "circle-color": MAP_POINT, "circle-opacity": 0.14,
-            "circle-stroke-width": 1.3, "circle-stroke-color": rgba(MAP_POINT, 0.85),
-          },
-        });
-        m.addLayer({
-          id: "fir-pts-core", type: "circle", source: "firs",
-          filter: ["!", ["has", "point_count"]],
-          paint: {
-            "circle-radius": CASE_CORE_R,
-            "circle-color": "#d8f5fc", "circle-opacity": 0.98,
-            "circle-stroke-width": 0.6, "circle-stroke-color": rgba("#04262e", 0.7),
-          },
-        });
-
-        // The selected case outranks every other mark on the map: a soft outer halo
-        // plus a crisp inner ring, both in the console's one reserved accent colour
-        // (brass — the same colour a focus chip or an active tab already wears
-        // everywhere else in Veritas), so "which case is selected" has an answer on
-        // the map for the first time, using a vocabulary the rest of the console
-        // already taught the officer rather than a new one invented here. Filters
-        // start closed (matching nothing) — the separate activeEvidenceId effect
-        // below keeps them current without ever re-running this draw/fitBounds.
+        // The selected case outranks every other mark on the map: a crisp brass
+        // ring (the console's one reserved "active" colour, already worn by a
+        // focus chip or an active tab everywhere else in Veritas) lifted off the
+        // pale basemap by a soft dark shadow ring behind it — brass alone reads
+        // weaker on paper-toned cartography than it does on dark chrome, so the
+        // shadow is what guarantees it still wins the eye inside a dense cluster
+        // of navy glyphs. Filters start closed (matching nothing); the separate
+        // activeEvidenceId effect below keeps them current without ever
+        // re-running this draw/fitBounds.
         m.addLayer({
           id: "fir-pts-selected-halo", type: "circle", source: "firs",
           filter: ["==", ["get", "fir_id"], "__none__"],
           paint: {
             "circle-radius": SELECT_HALO_R, "circle-color": "rgba(0,0,0,0)",
-            "circle-stroke-width": 1, "circle-stroke-color": rgba(ACCENT, 0.38),
+            "circle-stroke-width": 3, "circle-stroke-color": rgba("#1a2430", 0.22),
           },
         });
         m.addLayer({
@@ -364,7 +369,7 @@ export default function MapView({
           filter: ["==", ["get", "fir_id"], "__none__"],
           paint: {
             "circle-radius": SELECT_RING_R, "circle-color": "rgba(0,0,0,0)",
-            "circle-stroke-width": 2.25, "circle-stroke-color": ACCENT,
+            "circle-stroke-width": 2.5, "circle-stroke-color": ACCENT,
           },
         });
       }
@@ -409,7 +414,7 @@ export default function MapView({
       <div ref={ref} style={{ height: "100%", width: "100%", borderRadius: 14 }} />
       <div className="map-legend">
         <div className="map-legend-row">
-          <span className="map-legend-mark map-legend-mark--case"><i /></span>
+          <span className="map-legend-mark map-legend-mark--case" />
           <span>Case — click to select</span>
         </div>
         <div className="map-legend-row">

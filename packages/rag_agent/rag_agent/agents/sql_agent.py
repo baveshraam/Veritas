@@ -252,16 +252,26 @@ def fir_points(district_code: str, limit: int = 600) -> list[dict]:
     clusters are but not how dense the surrounding activity is — the point scatter is what
     makes a cluster legible as a cluster rather than an arbitrary shape.
 
-    `crime_no`/`filed` ride along from the same row `cases_in_district` already fetches —
-    no second query, no added JOIN — so the map's hover tooltip can show the real 18-digit
-    FIR number and filing date instead of forcing an officer to click through for the one
-    fact a tooltip exists to answer: which case is this. `fir_id` stays the internal
+    `crime_no`/`filed`/`crime_type` ride along so the map's hover tooltip can show real
+    case metadata instead of forcing an officer to click through for it. `crime_type` is a
+    second, cheap, JOIN-free query — `CrimeSubHead` is a ~20-row static reference table,
+    the same source `/cases` already trusts for this label (`apps/api/routers/records.py`)
+    — rather than adding a JOIN to `cases_in_district`, which is shared with
+    forecast/anomaly-detection callers that have no use for this column and no reason to
+    pay for it. `district` is resolved once from the input code, not per row — every point
+    in one call is in the same district by construction. `fir_id` stays the internal
     CaseMasterID; every citation/selection in the app already addresses a case as
     `fir:{CaseMasterID}`, and changing that here would desync map selection from the rest
     of the evidence chain.
     """
+    from data.districts import canonical_name
+
     rows = queries.cases_in_district(queries.district_id(district_code))
+    crime_names = {r["CrimeSubHeadID"]: r["CrimeHeadName"]
+                  for r in ds.query('SELECT "CrimeSubHeadID", "CrimeHeadName" FROM "CrimeSubHead"')}
+    district = canonical_name(district_code)
     pts = [{"fir_id": str(r["CaseMasterID"]), "lat": r["latitude"], "lng": r["longitude"],
-            "crime_no": r.get("CrimeNo"), "filed": r.get("CrimeRegisteredDate")}
+            "crime_no": r.get("CrimeNo"), "filed": r.get("CrimeRegisteredDate"),
+            "crime_type": crime_names.get(r.get("CrimeMinorHeadID")), "district": district}
            for r in rows if r["latitude"] is not None and r["longitude"] is not None]
     return pts[:limit]
