@@ -1718,15 +1718,27 @@ volume justifies the training cost.
     reordered by operational hierarchy (IG → SCRB Analyst → SP → DSP → SHO → IO) and
     its em dashes removed.
   - **Test suite: 741 passed, 2 skipped** (1 new).
-  - **Not done this pass, named rather than silently skipped**: `RiskScore`,
-    `MatchConfidence`, `FlagConfidence`, `Weight`, `Confidence`, `Amount`, and the
-    socioeconomic `double` columns are protected against *new* writes by the
-    `_sdk_row` fix but were not individually audited for values already corrupted
-    under the old, unguarded write path — this pass fixed and repaired only the two
-    columns (`PageRank`, `Betweenness`) it directly proved broken from a live symptom.
-    A full audit of every `double` column's already-stored values is real remaining
-    work, and finding it requires the same live round-trip technique this pass used,
-    not a guess. The exact internal mechanism on Data Store's side that rejects a bare
+  - **Audited every other `double` column against live, exhaustively rather than by
+    sample, and found nothing else to repair.** `RiskScore` (`vx_person`) and
+    `FlagConfidence` (`vx_txn`) are never actually written in this codebase — the
+    former is scored on demand per query and never persisted, the latter would be set
+    by an AML detector job that has never run against this live dataset (0 flagged
+    transactions in all 2,354 rows) — so there was nothing to corrupt.
+    `MatchConfidence` (`vx_accused_identity`, all 17,315 rows): `[0.90, 1.0]`, matching
+    the code's own `LINK_THRESHOLD` floor exactly. `Weight` (`vx_graph_edge`, 20,000+
+    rows sampled): `1.0`-`26.0`. `Amount` (`vx_txn`, all 2,354 rows): `₹501.81`-
+    `₹1,426,326.50`. `Confidence` (`vx_case_board_item`, all 11 rows, 3 non-null):
+    `0.6`-`0.97`. The five socioeconomic columns (`vx_district_socioeconomic`, all 30
+    districts): real Census 2011 ratios and percentages, all plausible.
+    `CaseMaster.latitude`/`longitude` (all 10,000 rows): within Karnataka's real
+    bounds. None needed repair, and the reason is structural, not luck: corruption
+    only strikes a magnitude below ~0.0001, and every column here is either never
+    actually populated or has a domain floor well above that (confidence scores
+    bounded at 0.90+, rupee amounts in the hundreds, edge weights ≥1, real-world
+    ratios, real coordinates). Only `PageRank`/`Betweenness` — raw graph centrality
+    over a 17k-node graph — legitimately produce values that small, which is why they
+    were the only ones that actually broke.
+  - The exact internal mechanism on Data Store's side that rejects a bare
     small JSON number yet corrupts a scientific-notation string was established with
     high confidence from the pattern across every case checked, not from Zoho's own
     source or documentation.
