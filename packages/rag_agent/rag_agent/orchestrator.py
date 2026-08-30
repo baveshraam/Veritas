@@ -2674,6 +2674,22 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
                       f"a case number or district to tell them apart.")
         else:
             answer = refusal_message(reason)
+        # Found live: "ಮಧು ಯರಗಟ್ಟಿಗೆ ಹಿಂದಿನ ಪ್ರಕರಣಗಳಿವೆಯೇ?" (a real, common first name +
+        # "does X have previous cases") translated clean end-to-end except for one
+        # thing — NLLB rendered "ಮಧು" (Madhu, the name) as "honeydew" (its literal
+        # meaning), so PERSON_HISTORY correctly classified at 0.9 confidence and then
+        # had no name left to resolve. This is a real, structural gap (no Kannada-
+        # script name gazetteer exists to protect a person's name the way
+        # data/nlp/translate.py already protects district names and record
+        # identifiers — building one needs either a transliteration library, which
+        # would require rebuilding the base deploy image, not just the fast overlay
+        # path, or a hand-built name table, neither safe to attempt unattended) — so
+        # this does not fix the mistranslation, only stops leaving the officer with
+        # no idea why a clearly-named question came back empty.
+        if (reason in ("no_subject", "cannot_understand") and state.original_query_kn):
+            answer += (" (If you named a person, note that a Kannada name is "
+                       "sometimes mistranslated during automatic translation — "
+                       "try spelling the name in English letters instead.)")
         note = None
         if state.language != "en":
             answer, note = translation_agent.to_language(answer, state.language)
