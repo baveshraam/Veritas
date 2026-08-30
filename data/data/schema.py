@@ -26,6 +26,18 @@ from typing import Literal, NamedTuple
 DataType = Literal["int", "bigint", "varchar", "text", "double", "boolean", "date", "datetime"]
 
 # Data Store's own caps. varchar truncates at 255, text at 10_000.
+#
+# `double` was 17 on the theory that Data Store's max_length is a character cap on the
+# value's serialized form. Checked live and that theory doesn't hold: a column-update
+# request asking for a wider double (max_length 25, decimal_digits 12) came back
+# `status: success` with the returned spec unchanged at max_length 15 / decimal_digits
+# 4 — Data Store silently clamps a `double` column to that precision regardless of what
+# a provisioning or update request asks for, so no number sent here changes it, and 17
+# was never the actual constraint in the first place. The real defect this was chasing
+# (small PageRank values coming back inflated by 10^4-10^5, explained in
+# data.ds._sdk_row's docstring) is fixed by never writing a value the column can't
+# represent, not by asking for a bigger column. Left at 17 — the number the platform
+# already enforces on its own — so this dict doesn't claim a control that doesn't exist.
 _MAX_LEN: dict[str, int] = {"varchar": 255, "text": 10_000, "int": 10, "bigint": 19, "double": 17}
 
 

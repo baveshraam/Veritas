@@ -25,18 +25,22 @@ const SLOW_AFTER_MS = 8000;
 /** Shown only when the roster cannot be reached, so the console is still
  *  explorable. These carry no badge number: they are labels, not credentials,
  *  and the API refuses every scoped endpoint without a token. */
-const FALLBACK_ROLES = ["IO", "SHO", "DSP", "SP", "IG", "SCRB_Analyst"];
+/** Top-down operational hierarchy: state scope, then district, then station. */
+const RANK_ORDER = ["IG", "SCRB_Analyst", "SP", "DSP", "SHO", "IO"];
+const FALLBACK_ROLES = RANK_ORDER;
+const byRank = (a: { role: string }, b: { role: string }) =>
+  RANK_ORDER.indexOf(a.role) - RANK_ORDER.indexOf(b.role);
 
 /** What each rank actually sees, in the officer's own words. A rank is not a
- *  label on this screen — it is the scope of every answer that follows, so it is
+ *  label on this screen, it is the scope of every answer that follows, so it is
  *  worth one line each rather than an acronym to be recognised or guessed. */
 const ROLE_NOTE: Record<string, string> = {
-  IO: "Investigating officer — cases at your own station",
-  SHO: "Station house officer — cases at your own station",
-  DSP: "Deputy superintendent — every case in the district",
-  SP: "Superintendent — every case in the district",
-  IG: "Inspector general — every case in the state",
-  SCRB_Analyst: "State crime-records analyst — every case in the state",
+  IO: "Investigating officer: cases at your own station",
+  SHO: "Station house officer: cases at your own station",
+  DSP: "Deputy superintendent: every case in the district",
+  SP: "Superintendent: every case in the district",
+  IG: "Inspector general: every case in the state",
+  SCRB_Analyst: "State crime-records analyst: every case in the state",
 };
 
 const roleLabel = (r: string) => r.replace(/_/g, " ");
@@ -95,7 +99,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
    *  API answered at another. Unverified has to mean unauthenticated. */
   const enterUnverified = (role: string) => {
     setToken(null);
-    onIn({ badge_no: "", name: "Demonstration", role, ps_code: "—" } as Officer);
+    onIn({ badge_no: "", name: "Demonstration", role, ps_code: "N/A" } as Officer);
   };
 
   const signIn = useCallback(async (o: Officer) => {
@@ -136,7 +140,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
           <div className="gate-tag">Karnataka State Police · Crime Intelligence</div>
           <p className="gate-thesis">
             Ask in English or Kannada. Every claim in the answer carries the record it
-            came from — and where the records don&apos;t support one, the console says so
+            came from. Where the records don&apos;t support one, the console says so
             instead of guessing.
           </p>
         </div>
@@ -153,7 +157,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
             </div>
           )}
 
-          {state.s === "ready" && state.officers.map((o) => (
+          {state.s === "ready" && [...state.officers].sort(byRank).map((o) => (
             <button key={o.badge_no} className="officer-row" onClick={() => signIn(o)}
               disabled={busy !== null}>
               <span className="officer-rank">{roleLabel(o.role)}</span>
@@ -187,7 +191,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
             <div className="gate-note">
               {state.s === "slow"
                 ? "The duty roster is taking longer than usual. Keep waiting, or continue on an unverified rank."
-                : `The duty roster could not be loaded — ${state.why}.`}{" "}
+                : `The duty roster could not be loaded: ${state.why}.`}{" "}
               The ranks above are unverified: continuing on one signs you out, so every
               record-scoped answer will be refused until the roster loads.
               <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={loadRoster}>

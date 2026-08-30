@@ -315,13 +315,41 @@ def _sdk_row(r: dict) -> dict:
     """A row the SDK can send: it JSON-serializes, so datetimes must already be the
     display strings Data Store expects — sqlite's _lit() did this implicitly, and any
     caller passing a datetime (the audit trail's CreatedAt) worked locally and 500'd
-    live until this normalization."""
+    live until this normalization.
+
+    A `double` column is a hard DECIMAL(15,4) — confirmed live by asking Data Store's
+    own column-update endpoint for decimal_digits=12 on an existing column and getting
+    the request accepted (status: success) with the returned spec still reading
+    decimal_digits=4: the platform silently clamps it, no provisioning choice of ours
+    changes it. A magnitude too small to show at 4 decimal places doesn't round to
+    0 the way a fixed-point column normally would — it comes back inflated by
+    10^4-10^5. Measured live: `vx_person.PageRank` of 0.000851196807533056 (an
+    ordinary co-offender's real centrality in a 17k-node graph) came back as 8.5119.
+    Every case checked matches the same shape: strip the value's `E-n` exponent and
+    what's left is exactly the corrupted number, which points at scientific notation
+    somewhere on Data Store's ingest path — Python's own json/repr only switches a
+    float to that notation below 1e-4, which is exactly the boundary between the
+    values that came back correct and the ones that didn't.
+
+    A corrupted PageRank isn't just wrong, it's actively misleading: the graph view's
+    root-node sentinel is `pagerank >= 1` (synthesis_agent.py), so an inflated
+    associate renders as a second copy of the query's own subject instead of
+    themselves — "who are Usha Naika's associates" came back full of nodes labelled
+    "Usha Naika". Rounding to Data Store's own real precision before it ever leaves
+    this process keeps every write inside the same 4 decimal places the column
+    enforces anyway, in plain decimal notation Python never renders as scientific
+    (round(x, 4) is always >= 1e-4 in magnitude or exactly 0.0) — so the value that
+    reaches Data Store cannot trigger whatever is misreading the exponent. A real
+    signal below 0.00005 already can't survive this column; better it prints 0.0
+    than 8.5119."""
     out = {}
     for k, v in r.items():
         if isinstance(v, datetime):
             v = v.strftime("%Y-%m-%d %H:%M:%S")
         elif isinstance(v, date):
             v = v.strftime("%Y-%m-%d")
+        elif isinstance(v, float):
+            v = round(v, 4)
         out[k] = v
     return out
 

@@ -122,6 +122,25 @@ def test_an_escaped_single_quote_does_not_unbalance_the_scanner():
     assert "'O''Brien''s'" in out
 
 
+def test_sdk_row_rounds_floats_to_data_stores_real_precision():
+    """A `double` column is a hard DECIMAL(15,4) that Data Store clamps regardless of what a
+    provisioning or column-update request asks for (see data.schema._MAX_LEN's comment — a
+    live request for decimal_digits=12 came back `status: success` with the spec unchanged
+    at 4). A value small enough that Python renders it in scientific notation reaches Data
+    Store's ingest corrupted — the exponent lost, the mantissa alone stored — which is how a
+    co-offender's real PageRank of 0.000851196807533056 came back live as 8.5119. Rounding
+    to the column's own precision before the SDK ever serializes the row keeps every write in
+    plain decimal notation, which Python does not render as scientific."""
+    row = ds._sdk_row({"PersonUID": 151, "PageRank": 0.000851196807533056,
+                       "CanonicalName": "Nithin Madar"})
+    assert row["PageRank"] == 0.0009
+    assert row["CanonicalName"] == "Nithin Madar"           # non-floats pass through untouched
+
+    # A magnitude too small for 4 decimal places to represent at all comes out as an honest
+    # zero, not corrupted into a number 10,000x-100,000x too large.
+    assert ds._sdk_row({"Betweenness": 0.00002})["Betweenness"] == 0.0
+
+
 def test_catalyst_reads_go_through_a_hydrated_mirror(monkeypatch, tmp_path):
     """Live ZCQL refuses to JOIN tables whose relationship is by business value (all of the
     ER's are), so on Catalyst every read runs against a local sqlite mirror hydrated from the
