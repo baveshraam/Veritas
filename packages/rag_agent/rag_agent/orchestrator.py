@@ -504,7 +504,14 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
     t0 = time.perf_counter()
 
     if intent in ("PERSON_HISTORY", "RISK") and pid:
-        rows = sql_agent.person_record(pid)
+        # person_record() has no station filter of its own (a person's cases can span
+        # every station in the state) — the same "belt-and-braces" filter_viewable()
+        # already applied to cases_by_ids() elsewhere (line ~1437) was missing here,
+        # so an IO asking "does X have priors" got every case statewide in full detail
+        # (FIR number, district, narrative), with only the person's NAME masked. Found
+        # live: signed in as a station-101 IO, "Does Usha Naika have priors?" returned
+        # 18 cases across 6 other districts/stations, none of them PS 101.
+        rows = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)
         state.sql_query_results += rows
         # "Does she have priors?" is a yes/no question, and the answer opened with a
         # cheating case in Davanagere — twelve FIRs, no name, no count, no verdict on
@@ -556,7 +563,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             "operation": "PERSON_NETWORK", "total_matched": len(rows), "shown": len(rows),
             "is_sample": False, "shown_ids": [str(r["person_id"]) for r in rows],
         }
-        _trace(state, "Cypher Agent", f"{len(rows)} associate(s) within policy depth", t0)
+        _trace(state, "Graph Agent", f"{len(rows)} associate(s) within policy depth", t0)
 
     elif intent == "ALIAS_CHECK" and pid:
         rows = graph_agent.aliases(pid)
@@ -570,7 +577,8 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             # yes/no question the records actually answer: no, there is no alias.
             out.append(EvidenceItem(
                 evidence_id="same_as:none", source_type="GRAPH_RELATIONSHIP",
-                source_id=pid, source_query="MATCH (p)-[:SAME_AS]-(o)",
+                source_id=pid, source_query="vx_accused_identity — duplicate-identity "
+                             "check (probabilistic record linkage)",
                 content=("No duplicate-identity (SAME_AS) links are recorded for this "
                          "person. Entity resolution found no other record matching them "
                          "under a different name or spelling."),
@@ -579,7 +587,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             "operation": "ALIAS_CHECK", "total_matched": len(rows), "shown": len(rows),
             "is_sample": False, "shown_ids": [str(r["person_id"]) for r in rows],
         }
-        _trace(state, "Cypher Agent (SAME_AS)", f"{len(rows)} alias record(s)", t0)
+        _trace(state, "Graph Agent (SAME_AS)", f"{len(rows)} alias record(s)", t0)
 
     elif intent == "FINANCIAL" and pid:
         rows = graph_agent.money_trail(pid, role)
@@ -587,7 +595,8 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         out += [EvidenceItem(
             evidence_id=f"flow:{r['from_account']}:{r['to_account']}",
             source_type="GRAPH_RELATIONSHIP", source_id=str(r["to_account"]),
-            source_query="MATCH (a)-[:TRANSFERRED_TO*1..n]->(b)",
+            source_query="TRANSFERRED_TO edges (vx_graph_edge), walked forward from "
+                         "the account, policy-capped depth",
             content=(f"₹{r['amount']:,.0f} moved from account {r['from_account'][:8]}… "
                      f"to {r['to_account'][:8]}… across {r['hops']} transfer(s)."),
             confidence=0.8) for r in rows]
@@ -623,9 +632,10 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             out.append(EvidenceItem(
                 evidence_id=f"flow:none:{pid}", source_type="GRAPH_RELATIONSHIP",
                 source_id=str(pid),
-                source_query="MATCH (p)-[:OWNS_ACCOUNT]->(a)-[:TRANSFERRED_TO*1..n]->(b)",
+                source_query="OWNS_ACCOUNT -> TRANSFERRED_TO edges (vx_graph_edge), "
+                             "walked forward, policy-capped depth",
                 content=content, confidence=0.9, authoritative=True))
-        _trace(state, "Cypher Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
+        _trace(state, "Graph Agent (money trail)", f"{len(rows)} transfer path(s)", t0)
         # AML detection runs against the accounts this PERSON owns, not the trail's
         # `from_account` — which for a multi-hop transfer can be an intermediate
         # account nobody in this case owns, and which for structuring specifically
@@ -1476,8 +1486,10 @@ def _more_result_evidence(op: str, r: dict, role: str = "") -> EvidenceItem:
     if op == "ALIAS_CHECK":
         return EvidenceItem(
             evidence_id=f"same_as:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
-            source_id=str(r["person_id"]), source_query="MATCH (p)-[:SAME_AS]-(o)"
-                     " — continuation of a previous 'only these?' follow-up",
+            source_id=str(r["person_id"]),
+                     source_query="vx_accused_identity — duplicate-identity check "
+                     "(probabilistic record linkage) — continuation of a previous "
+                     "'only these?' follow-up",
             content=(f"Record for '{r['name_en']}' was linked to this person by "
                      f"probabilistic record linkage (confidence {r['confidence']:.2f}) — "
                      f"the same individual recorded under a different spelling."),
@@ -2510,7 +2522,8 @@ def _network_evidence(r: dict, siblings: list[dict] | None = None) -> EvidenceIt
     return EvidenceItem(
         evidence_id=f"assoc:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
         source_id=str(r["person_id"]),
-        source_query="MATCH (p)-[:CO_ACCUSED_WITH*]-(o)",
+        source_query="CO_ACCUSED_WITH subgraph (vx_graph_edge), shortest-hop "
+                     "traversal in NetworkX, policy-capped depth",
         content=(f"{name} is a known associate ({r['hops']} hop(s) away"
                  # r['gang'] is already formatted "Community 47" (data/gds.py); lower-
                  # cased to match the "network community 6" phrasing used everywhere
@@ -2522,7 +2535,9 @@ def _network_evidence(r: dict, siblings: list[dict] | None = None) -> EvidenceIt
 def _alias_evidence(r: dict) -> EvidenceItem:
     return EvidenceItem(
         evidence_id=f"same_as:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
-        source_id=str(r["person_id"]), source_query="MATCH (p)-[:SAME_AS]-(o)",
+        source_id=str(r["person_id"]),
+        source_query="vx_accused_identity — duplicate-identity check "
+                     "(probabilistic record linkage)",
         content=(f"Record for '{r['name_en']}' was linked to this person by "
                  f"probabilistic record linkage (confidence {r['confidence']:.2f}) — "
                  f"the same individual recorded under a different spelling."),

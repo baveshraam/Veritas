@@ -164,10 +164,15 @@ async def get_person(person_id: str, officer: Officer = Depends(current_officer)
         "gang_affiliation": row["GangAffiliation"],
         "pagerank": row["PageRank"],
         "community": row["CommunityID"],
+        # can_view_fir per row, same as /fir/{id} — a resolved person's cases can span
+        # every station in the state, and without this an IO could read full case
+        # detail (FIR number, date, station) for any station by asking about a person,
+        # a back door around the exact restriction /fir/{id} enforces directly.
         "cases": [{"fir_id": str(c["CaseMasterID"]), "fir_number": c["CrimeNo"],
                    "date_filed": c["CrimeRegisteredDate"],
                    "ps_code": str(c["PoliceStationID"])}
-                  for c in queries.cases_for_person(int(person_id))],
+                  for c in queries.cases_for_person(int(person_id))
+                  if can_view_fir(officer.role, officer.ps_code, str(c["PoliceStationID"]))],
     }
     masked = mask_person_fields(officer.role, person)
     record(officer.officer_id, None, f"/person/{person_id}", {"person_id": person_id}, masked)

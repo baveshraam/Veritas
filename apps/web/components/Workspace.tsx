@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import CaseExplorer from "./CaseExplorer";
 import CaseOverview from "./CaseOverview";
+import PersonOverview from "./PersonOverview";
 import Board from "./Board";
 import { getCaseTimeline } from "@/lib/api";
 import { densityReading, forecastReading, plural, rupees, type Reading } from "@/lib/metrics";
@@ -76,7 +77,7 @@ export default function Workspace({
   // must not become unreachable for that (it is also in ⌘K) — this is the one
   // click back to it, and it resets whenever the case changes.
   const [showRegister, setShowRegister] = useState(false);
-  useEffect(() => { setShowRegister(false); }, [firId]);
+  useEffect(() => { setShowRegister(false); }, [firId, focus?.person?.person_id]);
 
   const [caseTl, setCaseTl] = useState<TimelineResult | null>(null);
   const [tlError, setTlError] = useState<string | null>(null);
@@ -117,6 +118,17 @@ export default function Workspace({
       sub = "What this case is, who is in it, what is still open, and what changed most recently.";
       body = <CaseOverview firId={firId} onAsk={onAsk} onCopilot={onCopilot}
         refreshToken={boardVersion} />;
+      next = { label: "Case register", q: "" };
+      flush = true;
+    } else if (focus?.person?.person_id && !showRegister) {
+      // A person is the subject and no case is open — the identity-resolution
+      // centrepiece (CLAUDE.md §0) otherwise had no home screen: priors, network,
+      // financial and timeline all worked one question at a time, but Overview
+      // fell back to the unfiltered case register regardless of who was asked
+      // about.
+      title = "Person overview";
+      sub = "Who this is, the cases naming them, and what to ask next.";
+      body = <PersonOverview personId={focus.person.person_id} name={person} onAsk={onAsk} />;
       next = { label: "Case register", q: "" };
       flush = true;
     } else {

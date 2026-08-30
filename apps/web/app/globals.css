@@ -753,6 +753,27 @@ body {
   color: var(--t-3);
 }
 
+/* A small fixed toast for a one-off notice (export fallback, etc.) — the same
+ * calm amber-ruled treatment as .refusal, but positioned to be seen rather
+ * than squeezed into the top bar next to six other controls, where it was
+ * easy to miss entirely on a narrow or crowded screen. */
+.toast {
+  position: fixed;
+  top: 54px;
+  right: 16px;
+  z-index: 40;
+  max-width: 320px;
+  background: var(--n-1);
+  border: 1px solid var(--line-2);
+  border-left: 3px solid var(--amber);
+  border-radius: var(--r);
+  padding: 10px 14px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--t-2);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.18);
+}
+
 /* A refusal is a first-class product state, not an error. Calm, informative,
  * never red, never shaped like a failure. */
 .refusal {

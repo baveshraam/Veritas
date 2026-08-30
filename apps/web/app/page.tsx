@@ -10,7 +10,7 @@ import InvestigationHeader, { VIEW_FOR_EVIDENCE, VIEW_FOR_VIZ, type WorkspaceVie
 import LoginGate from "@/components/LoginGate";
 import TopBar from "@/components/TopBar";
 import Workspace from "@/components/Workspace";
-import { exportPdf, playBase64Audio, setToken, streamChat } from "@/lib/api";
+import { exportPdf, loadToken, playBase64Audio, setToken, streamChat } from "@/lib/api";
 import { readNetwork } from "@/lib/network";
 import type { Officer, Turn, Visualization } from "@/lib/types";
 
@@ -74,6 +74,21 @@ export default function Console() {
 
       const patch = (fn: (t: Turn) => Turn) =>
         setTurns((all) => all.map((t) => (t.id === id ? fn(t) : t)));
+
+      // Demonstration/unverified rank carries no token by design (LoginGate)
+      // — every record-scoped question would otherwise fire and come back
+      // "Chat failed (401)", read as the engine breaking rather than as the
+      // designed consequence of not being signed in.
+      if (!loadToken()) {
+        patch((t) => ({
+          ...t, streaming: false, unauthenticated: true,
+          answer: "This rank was entered without a verified badge, so no "
+            + "record-scoped question can be answered. Switch and sign in "
+            + "with a real badge to continue.",
+        }));
+        setBusy(false);
+        return;
+      }
 
       try {
         await streamChat(
@@ -147,12 +162,13 @@ export default function Console() {
   }, []);
 
   const doExport = useCallback(() => {
+    setExportNote("Exporting…");
     exportPdf(sessionId)
       .then((isPdf) => {
-        if (!isPdf) {
-          setExportNote("No PDF renderer on this deployment — a printable HTML copy was downloaded.");
-          setTimeout(() => setExportNote(null), 8000);
-        }
+        setExportNote(isPdf
+          ? "PDF downloaded."
+          : "No PDF renderer on this deployment — a printable HTML copy was downloaded.");
+        setTimeout(() => setExportNote(null), 8000);
       })
       .catch(() => {
         setExportNote("Export failed.");

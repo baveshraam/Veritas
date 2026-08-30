@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listCases } from "@/lib/api";
+import { listCases, loadToken } from "@/lib/api";
 import type { CaseIndex, CaseRow } from "@/lib/types";
 
 /** The case register — what the workspace shows before anything has been asked.
@@ -48,6 +48,17 @@ export default function CaseExplorer({
 
   // Debounced so typing a district name doesn't fire a request per keystroke.
   useEffect(() => {
+    // Demonstration/unverified sign-in deliberately carries no token (§ LoginGate
+    // enterUnverified), so every record-scoped call is refused by design. Firing
+    // the request anyway and rendering its 401 as "Cannot load the case index"
+    // presented an intentional, explained state as a transport failure — the
+    // exact category error the rest of the console's refusal-vs-error split
+    // exists to prevent.
+    if (!loadToken()) {
+      setIdx(null);
+      setError(null);
+      return;
+    }
     const t = setTimeout(() => {
       listCases({
         q: q.trim() || undefined,
@@ -119,14 +130,24 @@ export default function CaseExplorer({
       </div>
 
       <div className={`index-rows ${anyMo ? "" : "no-mo"}`} ref={rowsRef}>
-        {error && (
+        {!loadToken() && (
+          <div className="refusal" style={{ margin: 16 }}>
+            <div className="refusal-head">Demonstration rank — not signed in</div>
+            <div className="refusal-body">
+              This rank was entered without a verified badge, so no record-scoped
+              answer can be shown. Switch and sign in with a real badge to see the
+              case register.
+            </div>
+          </div>
+        )}
+        {loadToken() && error && (
           <div className="empty">
             <span className="empty-mark" aria-hidden>!</span>
             <h3>The case register could not be loaded</h3>
             <p>{error}</p>
           </div>
         )}
-        {!idx && !error && (
+        {loadToken() && !idx && !error && (
           <div className="empty"><span className="spinner" /><p>Loading the register…</p></div>
         )}
         {idx?.cases.map((c) => (

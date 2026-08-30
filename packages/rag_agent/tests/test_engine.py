@@ -952,6 +952,55 @@ def test_a_refusal_already_decided_by_orchestrate_does_not_still_run_a_generic_s
     assert state.evidence_items == []
 
 
+def test_person_history_is_station_scoped_for_an_io(dataset):
+    """Found live: signed in as a station-101 IO, "Does Usha Naika have priors?"
+    listed all 18 of her cases across 6 other districts/stations, none of them
+    PS 101 -- only the NAME was masked, every case's FIR number/district/narrative
+    leaked in full. sql_agent.person_record() has no station filter of its own
+    (a resolved person's cases can span every station in the state), and unlike
+    cases_by_ids()'s other callers (search.py, orchestrator.py:1437,
+    provenance.py's _explain_offender_ranking) the PERSON_HISTORY/RISK branch never
+    ran the result through filter_viewable()."""
+    from data import ds
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    row = ds.one(
+        'SELECT "vx_accused_identity"."PersonUID" AS pid, '
+        '       COUNT(DISTINCT "CaseMaster"."PoliceStationID") AS n_ps '
+        'FROM "vx_accused_identity" '
+        'JOIN "Accused" ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" '
+        'JOIN "CaseMaster" ON "Accused"."CaseMasterID" = "CaseMaster"."CaseMasterID" '
+        'GROUP BY "vx_accused_identity"."PersonUID" HAVING COUNT(DISTINCT "CaseMaster"."PoliceStationID") >= 2')
+    if not row:
+        pytest.skip("no resolved person spans multiple stations in this generated dataset")
+    pid = str(row["pid"])
+
+    own_ps = ds.one(
+        'SELECT "CaseMaster"."PoliceStationID" AS ps FROM "vx_accused_identity" '
+        'JOIN "Accused" ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" '
+        'JOIN "CaseMaster" ON "Accused"."CaseMasterID" = "CaseMaster"."CaseMasterID" '
+        'WHERE "vx_accused_identity"."PersonUID" = :pid', {"pid": int(pid)})["ps"]
+
+    state = InvestigationState(session_id="s", officer_id="1", officer_role="IO",
+                               original_query="Does he have priors?")
+    state.intent = "PERSON_HISTORY"
+    state.active_entities.active_person = pid
+
+    saved_ps = orch._officer_ps
+    orch._officer_ps = lambda _oid: str(own_ps)
+    try:
+        out = orch.node_retrieve(state)
+    finally:
+        orch._officer_ps = saved_ps
+
+    assert out.sql_query_results, "the multi-station person must still resolve to something"
+    assert all(str(r["ps_code"]) == str(own_ps) for r in out.sql_query_results), (
+        "an IO's 'does X have priors' must only surface cases at their own station")
+    priors_ev = next(e for e in out.evidence_items if e.evidence_id.startswith("priors:"))
+    assert str(len(out.sql_query_results)) in priors_ev.content
+
+
 # --- General N-step investigation plan (orchestrator._run_plan) -------------
 #
 # semantic_interpreter's LLM path is what actually PRODUCES a multi-step plan

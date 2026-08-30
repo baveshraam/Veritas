@@ -50,7 +50,18 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
     "RISK":              (("risk", "dangerous", "reoffend", "re-offend", "recidivism",
                            "likely to offend"), "none"),
     "CAUSAL":            (("why", "cause", "caused", "because", "correlat",
-                           "unemployment", "literacy", "poverty"), "none"),
+                           "unemployment", "literacy", "poverty",
+                           # A judge or officer asking about the platform's own
+                           # §9-required sociological-insight capability rarely
+                           # says "correlate" or "poverty" — live-tested phrasing
+                           # like "socio-economic conditions" or "social factors"
+                           # missed CAUSAL entirely and fell through to a plain
+                           # CRIME_SEARCH count, silently dropping the causal
+                           # question being asked.
+                           "socio-economic", "socioeconomic", "social factor",
+                           "social background", "demographic", "urbanization",
+                           "urbanisation", "migration", "economic condition",
+                           "economic stress", "education level"), "none"),
     "SIMILAR_CASES":     (("similar", "same modus", "same mo", "like this case",
                            "comparable", "matching cases", "related cases"), "none"),
     "CRIME_SEARCH":      (("show", "list", "find", "cases", "firs", "how many",

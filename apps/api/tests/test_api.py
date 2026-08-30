@@ -157,6 +157,33 @@ def test_a_person_carries_their_whole_history(client, officers, habitual):
     assert all(c["fir_number"] for c in body["cases"])
 
 
+def test_person_endpoint_is_station_scoped_for_an_io(client, officers, dataset):
+    """Found live: signed in as a station-scoped IO, GET /person/{id} for someone
+    with cases at other stations returned every one of them in full (FIR number,
+    date, station) -- the endpoint masks the NAME (test_person_identity_is_masked_
+    below_dsp above) but never applied can_view_fir to the `cases` list the way
+    /fir/{id} applies it to itself, a back door around the exact restriction the
+    FIR endpoint enforces directly."""
+    from data import ds
+
+    io = officers["IO"]
+    row = ds.one(
+        'SELECT "vx_accused_identity"."PersonUID" AS pid, '
+        '       COUNT(DISTINCT "CaseMaster"."PoliceStationID") AS n_ps '
+        'FROM "vx_accused_identity" '
+        'JOIN "Accused" ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" '
+        'JOIN "CaseMaster" ON "Accused"."CaseMasterID" = "CaseMaster"."CaseMasterID" '
+        'GROUP BY "vx_accused_identity"."PersonUID" HAVING COUNT(DISTINCT "CaseMaster"."PoliceStationID") >= 2')
+    if not row:
+        pytest.skip("no resolved person spans multiple stations in this generated dataset")
+
+    h = _auth(client, io["badge_no"])
+    body = client.get(f"/person/{row['pid']}", headers=h).json()
+    assert body["cases"], "the multi-station person must still resolve to something"
+    assert all(c["ps_code"] == io["ps_code"] for c in body["cases"]), (
+        "an IO's /person/{id} must only surface cases at their own station")
+
+
 def test_the_copilot_briefs_a_real_case(client, officers, indexed):
     from data import ds
 

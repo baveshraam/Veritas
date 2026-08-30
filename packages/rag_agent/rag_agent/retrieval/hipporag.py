@@ -42,7 +42,7 @@ def retrieve(person_names: list[str], top_k: int = TOP_K) -> tuple[list[dict], l
             source_id=str(r["id"]),
             source_query=f"personalized PageRank, seeded from {seeds}",
             content=(f"{r['label']} '{r['text']}' is connected to the query entities "
-                     f"with personalized-PageRank score {r['score']:.4f}"),
+                     f"through the case-and-person graph (multi-hop)."),
             confidence=min(1.0, float(r["score"]) * 4),   # PPR mass -> rough confidence
         )
         for r in rows

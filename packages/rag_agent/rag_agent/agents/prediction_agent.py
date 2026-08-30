@@ -62,18 +62,32 @@ def forecast(district_code: str, horizon_days: int = HORIZON_DAYS):
     return fc, ev
 
 
+_RISK_BANDS = ["Low", "Moderate", "High", "Severe"]
+
+
+def _risk_band(score: float) -> str:
+    """Headline word first, raw score second — same convention as the
+    console's own metrics.ts (influenceReading/densityReading): a bare
+    "risk score of 1.00 (NOT calibrated)" tells an officer nothing about
+    whether that is alarming; a band does."""
+    i = 3 if score >= 0.75 else 2 if score >= 0.5 else 1 if score >= 0.25 else 0
+    return _RISK_BANDS[i]
+
+
 def risk(person_id: str):
     ml = _ml()
     r = ml.score_risk(person_id)
-    factors = ", ".join(f"{n} ({v:+.2f})" for n, v in r.top_factors)
+    band = _risk_band(r.score)
+    factors = ", ".join(n for n, _ in r.top_factors)
     ev = [EvidenceItem(
         evidence_id=f"risk:{person_id}",
         source_type="ML_PREDICTION",
         source_id=person_id,
         source_query="XGBoost + SHAP",
-        content=(f"The model suggests a risk score of {r.score:.2f} for this person "
-                 f"({'calibrated — read as an approximate probability' if r.calibrated else 'NOT calibrated — a ranking score, not a probability'}). "
-                 f"Top contributing factors: {factors}. This is decision-support, "
+        content=(f"{band} relative risk — this person ranks in that band among "
+                 f"offenders on record (score {r.score:.2f} on a 0-1 ranking scale, "
+                 f"{'calibrated' if r.calibrated else 'NOT calibrated — a ranking, not a probability'}). "
+                 f"Driven most by: {factors}. This is decision-support, "
                  f"not a finding of fact."),
         confidence=0.6,
         confidence_kind="model_estimate",

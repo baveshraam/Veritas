@@ -104,6 +104,12 @@ export type Turn = {
    *  correctly and declining to guess; this is the system failing, and the two
    *  must not look the same on screen. */
   failed?: boolean;
+  /** Demonstration/unverified sign-in (LoginGate.enterUnverified) carries no
+   *  token by design, so every record-scoped question is refused before the
+   *  request is even sent — this is neither a CRAG refusal (the records were
+   *  checked and don't support a claim) nor a transport failure (the engine
+   *  broke). It is the console correctly declining to pretend to be signed in. */
+  unauthenticated?: boolean;
   trace: TraceEntry[];
   citations: Citation[];
   evidence: EvidenceItem[];

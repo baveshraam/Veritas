@@ -104,7 +104,14 @@ export default function ChatPane({
                 <ReasoningTrace trace={t.trace} />
               )}
 
-              {t.answer && (t.refused ? (
+              {t.answer && (t.unauthenticated ? (
+                <div className="refusal">
+                  <div className="refusal-head">
+                    <span aria-hidden>◇</span> Demonstration rank — not signed in
+                  </div>
+                  <div className="refusal-body">{t.answer}</div>
+                </div>
+              ) : t.refused ? (
                 <div className="refusal">
                   <div className="refusal-head">
                     <span aria-hidden>◇</span> No supporting records

@@ -814,7 +814,7 @@ def _explain_offender_ranking(eid: str, item, role: str, ps: str) -> Derivation:
     if pid.isdigit():
         from .agents import sql_agent
         try:
-            cases = sql_agent.person_record(pid)[:5]
+            cases = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)[:5]
         except Exception:
             cases = []
         d.records = [_fir_source(c) for c in cases]
@@ -856,7 +856,7 @@ def _explain_priors(eid: str, item, role: str, ps: str) -> Derivation:
                         f"Is {who} recorded under another name?"])
     from .agents import sql_agent
     try:
-        cases = sql_agent.person_record(pid)[:6]
+        cases = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)[:6]
     except Exception:
         cases = []
     d.records = [_fir_source(c) for c in cases]

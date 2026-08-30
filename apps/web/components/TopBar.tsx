@@ -96,9 +96,9 @@ export default function TopBar({
         Export
       </button>
       {exportNote && (
-        <span role="status" className="meta" style={{ maxWidth: 230, color: "var(--amber)" }}>
+        <div role="status" className="toast">
           {exportNote}
-        </span>
+        </div>
       )}
 
       <div ref={sysRef} style={{ position: "relative" }}>
@@ -144,7 +144,7 @@ export default function TopBar({
       <div className="officer">
         <span className="officer-rank">{officer.role}</span>
         <span className="officer-name">{officer.name}</span>
-        <span className="officer-ps">{officer.ps_code === "—" ? "unverified" : `PS ${officer.ps_code}`}</span>
+        <span className="officer-ps">{officer.badge_no ? `PS ${officer.ps_code}` : "unverified"}</span>
       </div>
       <button className="btn btn-quiet btn-sm" onClick={onSignOut} title="Sign in at another rank">
         Switch
