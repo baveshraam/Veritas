@@ -14,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 740 green, 2 skipped (`python -m pytest` prints the current
+- **Tests**: `python -m pytest` — 741 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -205,6 +205,23 @@ Three Data Store facts every caller is protected from:
 - **No `UPSERT`, no `date_trunc`, no CTE, no correlated subquery, at most 4 JOINs.**
   Aggregation that cannot be expressed server-side happens in Python
   (`data/data/queries.py`). At tens of thousands of rows, that is the same answer.
+- **A `double` column is a hard, non-configurable DECIMAL(15,4), and accepts a
+  scientific-notation value silently corrupted no matter how it arrives.** Confirmed
+  the precision cap by asking Data Store's own column-update endpoint for
+  `max_length: 25, decimal_digits: 12` on an already-provisioned column and getting
+  the request accepted (`status: success`) with the returned spec unchanged at 15/4 —
+  no provisioning or update choice widens it. Confirmed the corruption by round-
+  tripping the exact row-write endpoint the SDK calls, directly, with three inputs: a
+  bare JSON number below the precision (`0.0009`) was *rejected outright* (`400
+  INVALID_INPUT`); a plain fixed-point string (`"0.000851196807533056"`) round-tripped
+  *correctly* (`8.0E-4`); a string that still contained an exponent
+  (`"7.817113529341168e-05"`) came back with it silently dropped (`7.8171`) — a
+  10,000x-100,000x inflation (changelog v22 — a real co-offender's PageRank came back
+  live as `8.5119`, tripping the graph view's `pagerank >= 1` root-node sentinel and
+  rendering that associate as a duplicate of the query's own subject). `data.ds._sdk_row`
+  now formats every float as `f"{v:.4f}"` — a string, always plain decimal, never
+  `e`/`E` — before it reaches the SDK, so this is handled once, for every `double`
+  column, not per caller.
 
 ### The generator — `data/data/generator/`
 Crime records are synthetic (no real FIR data exists for us) but they sit on **real ground
@@ -1623,3 +1640,93 @@ volume justifies the training cost.
     CAPABILITY to require an object verb turned *"What all can you actually answer for
     me?"* into UNKNOWN — an adverb sits between the pronoun and the verb. Fixed,
     added to the corpus, redeployed.
+
+- **v22 (a `double` column corrupting its own values) — found by driving the console,
+  not by reading a stack trace, and traced all the way into a Data Store platform
+  constraint neither this file nor `data/data/provision.py`'s own reasoning had named
+  correctly until this pass.
+  - **"Who are the associates of Usha Naika?" rendered most of the network as copies
+    of Usha Naika.** The five real direct co-offenders showed correctly; every more
+    distant associate — reached the same query, same graph, same code path — rendered
+    with the subject's own name over and over. Confirmed against the deployed
+    `NetworkView.tsx` bundle first (pulled and diffed the live JS against this repo's
+    source, module-for-module identical) to rule out a stale build before looking
+    anywhere else.
+  - **The graph view's own root-node sentinel was firing on real associates.** The
+    engine flags the query's subject with `pagerank: 1.0` (`synthesis_agent.py` says so
+    in its own comment) so the console can size it as the root; `isRoot()`
+    (`apps/web/lib/network.ts`) reads `pagerank >= 1` as "this is the subject," and
+    every associate whose *real* PageRank had come back corrupted above 1 tripped that
+    same check — rendering as a second copy of Usha Naika rather than themselves.
+  - **The corruption was in the live Data Store, not in this codebase's query or graph
+    logic.** Queried the deployed API directly and diffed against a clean, freshly
+    generated copy of the same dataset: `vx_person.PageRank` for every co-offender whose
+    true centrality sits below roughly 0.0001 came back 10,000-100,000x too large —
+    `0.000851196807533056` (Nithin Madar) stored and returned as `8.5119`;
+    `0.0000781711...` (Suma Nadkarni) as `7.8171`. Every case checked fit the same
+    shape: strip the value's scientific-notation exponent and what's left is exactly
+    the corrupted number.
+  - **The wrong lever, corrected.** `data/data/schema.py`'s `_MAX_LEN["double"]` (17)
+    looked like the obvious knob — Data Store's column API does accept a `max_length`
+    for a `double` — and the first fix widened it. Checked live before trusting that
+    fix: a column-update request explicitly asking for `max_length: 25,
+    decimal_digits: 12` on the live `PageRank` column came back `status: success` with
+    the returned spec *unchanged* at `max_length: 15, decimal_digits: 4`. Data Store
+    silently clamps every `double` column to that precision — a hard DECIMAL(15,4) —
+    regardless of what a provisioning or update request asks for. No number in
+    `schema.py` was ever the real constraint; left at 17, with a comment saying why,
+    rather than claiming a control that does not exist.
+  - **The second wrong fix, caught by not trusting a deploy that "finished" without
+    visibly changing anything.** `data.ds._sdk_row` — the one place every Catalyst
+    write already gets normalized before the SDK JSON-serializes it — first shipped
+    `round(v, 4)`: a plain Python float, never in scientific notation by Python's own
+    rules. Deployed, triggered `POST /jobs/refresh` to rewrite `PageRank`/`Betweenness`
+    through it, and the associates query came back exactly as corrupted as before.
+    Repeated triggers all returned `{"status": "started"}` — meaning each run's lock
+    was already free, i.e. finishing fast, not hanging — with nothing fixed. Rather
+    than assume the fix just needed more time, round-tripped the *exact* row-write
+    REST endpoint the SDK's `update_rows()` calls, directly, with the admin token: a
+    bare JSON *number* `0.0009` came back `400 INVALID_INPUT ("Please give a correct
+    double value")` — rejected outright, which is almost certainly why a batch write
+    containing any such value fails silently inside the refresh job's caught
+    exception. A plain fixed-point *string* `"0.000851196807533056"` round-tripped
+    correctly (`8.0E-4`) at every magnitude tried, including `"123.4567"` back exactly.
+    But a string that still *contained* scientific notation —
+    `"7.817113529341168e-05"` — came back `7.8171`, reproducing the exact original
+    corruption: this really is a text-level `E`-notation defect on Data Store's
+    ingest, independent of JSON type, and no `float`-side rounding fixes it unless the
+    string sent is also guaranteed exponent-free.
+  - **The fix that actually held**: every `float` through `_sdk_row` is now formatted
+    `f"{v:.4f}"` — a string, always plain decimal, never `e`/`E`, at the same precision
+    the column already enforces. Redeployed, triggered `/jobs/refresh` again, and the
+    associates query came back correct within a minute: all 41 nodes distinct names,
+    real magnitudes (`0.0101` down to `0.0001`), zero nodes at or above `1`. This
+    protects every `double` column in the schema — `RiskScore`, `Betweenness`,
+    `MatchConfidence`, `FlagConfidence`, `Weight`, `Confidence`, financial `Amount` —
+    not just `PageRank`, since they all share the one write path. Test:
+    `test_sdk_row_formats_floats_as_exponent_free_decimal_strings`, `data/tests/test_ds.py`.
+  - **Deployed twice, and the already-corrupted values repaired live**, not just the
+    code: relayed to AppSail (`get-signature` → `.github/relay-upload.url` →
+    `relay-deploy.yml` → local `appsail/upsert`) to deployment `52852000000355160`
+    (the `round(v,4)` attempt, later proven wrong) and then `52852000000356181` (the
+    `.4f`-string fix, confirmed live). `POST /jobs/refresh` on the second deployment
+    ran `data.gds.run_all()` through the now-genuinely-fixed write path, rewriting
+    `PageRank`/`Betweenness` for every person — self-healing the two columns this pass
+    actually proved broken, rather than a schema change alone that would have left
+    every existing row corrupted. Console redeployed too (`scripts/deploy-console.sh`)
+    carrying an unrelated fix from earlier in this session: the sign-in screen's roles
+    reordered by operational hierarchy (IG → SCRB Analyst → SP → DSP → SHO → IO) and
+    its em dashes removed.
+  - **Test suite: 741 passed, 2 skipped** (1 new).
+  - **Not done this pass, named rather than silently skipped**: `RiskScore`,
+    `MatchConfidence`, `FlagConfidence`, `Weight`, `Confidence`, `Amount`, and the
+    socioeconomic `double` columns are protected against *new* writes by the
+    `_sdk_row` fix but were not individually audited for values already corrupted
+    under the old, unguarded write path — this pass fixed and repaired only the two
+    columns (`PageRank`, `Betweenness`) it directly proved broken from a live symptom.
+    A full audit of every `double` column's already-stored values is real remaining
+    work, and finding it requires the same live round-trip technique this pass used,
+    not a guess. The exact internal mechanism on Data Store's side that rejects a bare
+    small JSON number yet corrupts a scientific-notation string was established with
+    high confidence from the pattern across every case checked, not from Zoho's own
+    source or documentation.
