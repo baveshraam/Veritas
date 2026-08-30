@@ -325,23 +325,29 @@ def _sdk_row(r: dict) -> dict:
     0 the way a fixed-point column normally would — it comes back inflated by
     10^4-10^5. Measured live: `vx_person.PageRank` of 0.000851196807533056 (an
     ordinary co-offender's real centrality in a 17k-node graph) came back as 8.5119.
-    Every case checked matches the same shape: strip the value's `E-n` exponent and
-    what's left is exactly the corrupted number, which points at scientific notation
-    somewhere on Data Store's ingest path — Python's own json/repr only switches a
-    float to that notation below 1e-4, which is exactly the boundary between the
-    values that came back correct and the ones that didn't.
 
-    A corrupted PageRank isn't just wrong, it's actively misleading: the graph view's
-    root-node sentinel is `pagerank >= 1` (synthesis_agent.py), so an inflated
-    associate renders as a second copy of the query's own subject instead of
-    themselves — "who are Usha Naika's associates" came back full of nodes labelled
-    "Usha Naika". Rounding to Data Store's own real precision before it ever leaves
-    this process keeps every write inside the same 4 decimal places the column
-    enforces anyway, in plain decimal notation Python never renders as scientific
-    (round(x, 4) is always >= 1e-4 in magnitude or exactly 0.0) — so the value that
-    reaches Data Store cannot trigger whatever is misreading the exponent. A real
-    signal below 0.00005 already can't survive this column; better it prints 0.0
-    than 8.5119."""
+    The first fix here rounded to a Python float (`round(v, 4)`) on the theory that
+    avoiding scientific notation *in Python's own repr* would be enough. It wasn't:
+    round-tripped live through the exact row-write endpoint the SDK calls, a Python
+    float re-serializes as a JSON number, and Data Store's own JSON-number ingest for
+    a `double` field turned out to have its own failure mode independent of ours —
+    `0.0009` sent as a bare JSON number came back `400 INVALID_INPUT ("Please give a
+    correct double value")`, rejected outright, not merely mis-scaled, so a batch
+    write with any such value inside it likely fails the whole call, which the
+    background refresh job then only logs and swallows. What DOES round-trip exactly
+    is a plain fixed-point STRING: `"0.000851196807533056"` came back `8.0E-4`
+    (correct, just Data Store's own — reasonably rounded — precision limit), and
+    `"123.4567"` came back `123.4567` exactly. The one shape that is NEVER safe, string
+    or number, is scientific notation: `"7.817113529341168e-05"` as a STRING still
+    came back `7.8171` — this is genuinely a text-level `E`-notation bug on Data
+    Store's side, not a JSON type-coercion issue, and no amount of picking `float` vs
+    `str` fixes it unless the string itself is guaranteed exponent-free.
+
+    So every float is now formatted with `:.4f` — always plain decimal, at Data
+    Store's own real precision, never `e`/`E` regardless of magnitude — and sent as a
+    string, which is what the live round-trip test above actually proved safe. A real
+    signal below 0.00005 already can't survive this column's precision; better it
+    prints `0.0000` than `8.5119`."""
     out = {}
     for k, v in r.items():
         if isinstance(v, datetime):
@@ -349,7 +355,7 @@ def _sdk_row(r: dict) -> dict:
         elif isinstance(v, date):
             v = v.strftime("%Y-%m-%d")
         elif isinstance(v, float):
-            v = round(v, 4)
+            v = f"{v:.4f}"
         out[k] = v
     return out
 

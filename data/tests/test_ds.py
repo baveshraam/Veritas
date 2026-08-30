@@ -122,23 +122,29 @@ def test_an_escaped_single_quote_does_not_unbalance_the_scanner():
     assert "'O''Brien''s'" in out
 
 
-def test_sdk_row_rounds_floats_to_data_stores_real_precision():
+def test_sdk_row_formats_floats_as_exponent_free_decimal_strings():
     """A `double` column is a hard DECIMAL(15,4) that Data Store clamps regardless of what a
     provisioning or column-update request asks for (see data.schema._MAX_LEN's comment — a
     live request for decimal_digits=12 came back `status: success` with the spec unchanged
-    at 4). A value small enough that Python renders it in scientific notation reaches Data
-    Store's ingest corrupted — the exponent lost, the mantissa alone stored — which is how a
-    co-offender's real PageRank of 0.000851196807533056 came back live as 8.5119. Rounding
-    to the column's own precision before the SDK ever serializes the row keeps every write in
-    plain decimal notation, which Python does not render as scientific."""
+    at 4). Round-tripped directly through the row-write endpoint the SDK calls: a bare JSON
+    *number* below the column's precision was rejected outright (400 INVALID_INPUT); a plain
+    fixed-point *string* round-tripped correctly at every magnitude tested; a string
+    containing scientific notation (e.g. "7.817113529341168e-05") still came back with the
+    exponent silently dropped (7.8171) — which is how a co-offender's real PageRank of
+    0.000851196807533056 came back live as 8.5119. So every float is sent as a `:.4f`
+    string: Data Store's own real precision, and never `e`/`E` regardless of magnitude."""
     row = ds._sdk_row({"PersonUID": 151, "PageRank": 0.000851196807533056,
                        "CanonicalName": "Nithin Madar"})
-    assert row["PageRank"] == 0.0009
+    assert row["PageRank"] == "0.0009"
     assert row["CanonicalName"] == "Nithin Madar"           # non-floats pass through untouched
 
     # A magnitude too small for 4 decimal places to represent at all comes out as an honest
     # zero, not corrupted into a number 10,000x-100,000x too large.
-    assert ds._sdk_row({"Betweenness": 0.00002})["Betweenness"] == 0.0
+    assert ds._sdk_row({"Betweenness": 0.00002})["Betweenness"] == "0.0000"
+
+    # Never scientific notation, at either extreme.
+    assert ds._sdk_row({"Amount": 7.817113529341168e-05})["Amount"] == "0.0001"
+    assert "e" not in ds._sdk_row({"Amount": 1_234_567.891})["Amount"].lower()
 
 
 def test_catalyst_reads_go_through_a_hydrated_mirror(monkeypatch, tmp_path):
