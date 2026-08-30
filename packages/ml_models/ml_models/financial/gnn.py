@@ -195,18 +195,26 @@ def detect_subgraph(account_id: int, threshold: float = 0.5) -> list[Transaction
     # attribution: which neighbours carry the suspicion (this is the "why")
     neighbours = [ids[j] for j in np.where(A[i] > 0)[0]]
     hot = sorted(neighbours, key=lambda a: -probs[index[a]])[:5]
-    hot_scores = ", ".join(f"#{a} ({probs[index[a]]:.2f})" for a in hot)
+    hot_ids = ", ".join(f"#{a}" for a in hot) or "none"
 
     txns = ds.query('SELECT "TxnID" FROM "vx_txn" WHERE "SrcAccountID" = :aid',
                     {"aid": int(account_id)})
     txns += ds.query('SELECT "TxnID" FROM "vx_txn" WHERE "DstAccountID" = :aid',
                      {"aid": int(account_id)})
 
+    # Banded, not a bare classifier score — the same "headline first, number
+    # second" reasoning as the risk-score fix (rag_agent/agents/prediction_
+    # agent.py): "Account scores 0.87 in the laundering-subgraph classifier"
+    # tells an officer nothing about whether that is alarming.
+    score = float(probs[i])
+    band = ("Severe" if score >= 0.75 else "High" if score >= 0.5
+            else "Moderate" if score >= 0.25 else "Low")
     explanation = (
-        f"Account scores {probs[i]:.2f} in the laundering-subgraph classifier. "
-        f"The signal comes from its transaction neighbourhood — highest-scoring "
-        f"connected accounts: {hot_scores or 'none'}. This is a coordinated-pattern "
-        f"flag (fan-in/layering across accounts), not a single-account rule breach."
+        f"{band} suspicion of coordinated money-laundering activity — this "
+        f"account's transaction pattern resembles known layering/fan-in "
+        f"structures across a network of accounts. Most closely linked "
+        f"accounts: {hot_ids}. This is a coordinated-pattern flag, not a "
+        f"single-account rule breach."
     )
     return [TransactionFlag(
         txn_id=str(t["TxnID"]), detector=DETECTOR, confidence=round(float(probs[i]), 4),

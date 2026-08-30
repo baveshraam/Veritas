@@ -188,6 +188,46 @@ def test_answer_is_refusal_distinguishes_genuine_refusals_from_citationless_succ
     assert refused.citations == [] and refused.answer_is_refusal is True
 
 
+def test_a_no_subject_refusal_after_kannada_translation_hints_at_the_real_cause():
+    """Found live: 'ಮಧು ಯರಗಟ್ಟಿಗೆ ಹಿಂದಿನ ಪ್ರಕರಣಗಳಿವೆಯೇ?' (a real first name + 'does X
+    have previous cases') classified as PERSON_HISTORY at 0.9 confidence and then had
+    no subject to resolve -- NLLB translated 'ಮಧು' (Madhu, a common first name) as
+    'honeydew', its literal meaning, not the person's name. No gazetteer protects a
+    person's name the way district names and record identifiers already are (building
+    one needs either a transliteration library -- which would need rebuilding the base
+    deploy image, not just the fast overlay path -- or a hand-built name table, neither
+    safe to add unattended), so this only stops the officer being left with no idea why
+    a clearly-named question came back with nothing: a no_subject/cannot_understand
+    refusal that followed a real Kannada translation names the likely cause."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import InvestigationState
+
+    # Translation is a real, slow (~25s) model call in this environment too — mocked
+    # out as a no-op so the assertion is about THIS fix's own string logic, not about
+    # NLLB being reachable/fast in a unit test.
+    saved = orch.translation_agent.to_language
+    orch.translation_agent.to_language = lambda text, target: (text, None)
+    try:
+        kn_refused = InvestigationState(
+            session_id="s", officer_id="1", officer_role="IG",
+            original_query="Have there been previous cases of honeydew?",
+            intent="PERSON_HISTORY", requires_escalation=True, refusal_reason="no_subject",
+            language="kn", original_query_kn="ಮಧು ಯರಗಟ್ಟಿಗೆ ಹಿಂದಿನ ಪ್ರಕರಣಗಳಿವೆಯೇ?")
+        orch.node_synthesize(kn_refused)
+    finally:
+        orch.translation_agent.to_language = saved
+    assert "mistranslated" in kn_refused.final_answer
+
+    # The identical refusal reached directly in English (no Kannada turn at all) must
+    # not carry a hint about a translation step that never ran.
+    en_refused = InvestigationState(session_id="s", officer_id="1", officer_role="IG",
+                                    original_query="does he have priors",
+                                    intent="PERSON_HISTORY", requires_escalation=True,
+                                    refusal_reason="no_subject")
+    orch.node_synthesize(en_refused)
+    assert "mistranslated" not in en_refused.final_answer
+
+
 def test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_expected():
     """A systematic guard against the exact class of bug the two tests above
     caught by hand: any keyword phrase that is a plain substring of a DIFFERENT

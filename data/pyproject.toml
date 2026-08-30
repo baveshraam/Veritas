@@ -23,7 +23,16 @@ embeddings = ["fastembed>=0.3"]
 # only serves English text chat should not pull 2GB of translation weights.
 #   translation: EN<->KN. NLLB-200 by default; IndicTrans2 when its gated weights land.
 #   voice:       ASR. faster-whisper pulls its own checkpoints, incl. multilingual (kn).
-translation = ["torch>=2.2", "transformers>=4.40", "sentencepiece>=0.2"]
+#   indic-transliteration: closed, deterministic Romanized-name -> Kannada-script
+#   rendering, used to build the person-name gazetteer _protect_spans() needs to stop
+#   NLLB translating a name's literal meaning ("Madhu" -> "honeydew") instead of
+#   transliterating it. MIT, pure Python, ~162KB + small deps (typer/roman/tqdm/toml) —
+#   checked directly before adding. No Catalyst service does this at all (Zia's catalog
+#   has no translation or transliteration component of any kind), so this is squarely
+#   the "no listed equivalent exists" case the competition's own rule permits, and it is
+#   a library running inside this container regardless, not a third-party service.
+translation = ["torch>=2.2", "transformers>=4.40", "sentencepiece>=0.2",
+              "indic-transliteration>=2.3"]
 voice = ["faster-whisper>=1.0"]
 
 dev = ["pytest>=8.0"]

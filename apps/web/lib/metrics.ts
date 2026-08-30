@@ -80,3 +80,23 @@ export function matchReading(similarity: number): Reading {
           : "Loosely related record";
   return { headline: h, measure: `Text match · ${Math.round(similarity * 100)}%` };
 }
+
+/** An Isolation Forest anomaly: "monthly_fir_count: 7.0 against an expected 3.0"
+ *  told an officer a raw feature name and two bare numbers, with no reading of
+ *  whether that gap means anything. This is the one place that ratio gets said
+ *  in words, so the alert panel does not have to. */
+export function anomalyReading(observed: number, expected: number): Reading {
+  const ratio = expected > 0 ? observed / expected : observed > 0 ? Infinity : 1;
+  const headline =
+    ratio >= 3 ? "Far more FIRs than usual"
+    : ratio >= 1.8 ? "Well above the usual count"
+    : ratio >= 1.3 ? "Above the usual count"
+    : ratio <= 0.34 ? "Far fewer FIRs than usual"
+    : ratio <= 0.6 ? "Well below the usual count"
+    : ratio <= 0.8 ? "Below the usual count"
+    : "Close to the usual count";
+  return {
+    headline,
+    measure: `${plural(Math.round(observed), "FIR")} this month · expected ~${expected.toFixed(1)}`,
+  };
+}
