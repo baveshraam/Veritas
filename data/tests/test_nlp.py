@@ -44,6 +44,20 @@ def test_ner_spans_do_not_overlap():
         assert a.end <= b.start
 
 
+def test_a_leading_comparison_verb_does_not_merge_into_the_name():
+    """Found live: "Compare Usha Naika and Netrawathi Nanjappa" merged the sentence-
+    initial "Compare" into the following name span ("Compare Usha Naika" as ONE
+    PERSON entity, "Usha" being pool-matched and the left-extension only excluding
+    known stopwords), so the resulting lookup found nobody and the whole two-entity
+    comparison feature refused with "No person of that name appears in the records"
+    even though both people are real. "did"/"was" etc. were already excluded for
+    exactly this reason; "compare"/"compared"/"versus"/"vs" were not."""
+    got = _labels("Compare Usha Naika and Netrawathi Nanjappa")
+    assert ("PERSON", "Usha Naika") in got
+    assert ("PERSON", "Netrawathi Nanjappa") in got
+    assert not any(text.startswith("Compare ") for label, text in got if label == "PERSON")
+
+
 def test_transliterate_generates_real_romanisation_drift():
     assert "Ramesha" in transliterate("Ramesh")
     assert "Geeta" in transliterate("Geetha")

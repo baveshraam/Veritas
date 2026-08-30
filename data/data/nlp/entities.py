@@ -114,6 +114,7 @@ trace tell give what which who whom whose where when why how the a an and or but
 if any all his her their this that these those him she they them please
 forecast predict check search get open review crime crimes case cases report
 hotspot hotspots map money risk network associate associates priors
+compare compared versus vs
 """.split())
 
 
