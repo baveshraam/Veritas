@@ -230,10 +230,22 @@ def _sqlite_conn() -> sqlite3.Connection:
 # Ceiling: one app instance. A second instance would have its own mirror and would not
 # see this one's writes until rehydration. At that point move reads back server-side
 # or add invalidation — for a single-instance deployment this is exact, not approximate.
-_MIRROR_LOCK = threading.Lock()
-_MIRROR_READY = False
+#
+# Hydration is PER-TABLE and lazy, not all-37-at-once. It used to hydrate the whole
+# schema before the first query of any kind could run — so a cold container's sign-in
+# roster lookup (one row out of `Employee`) paid for hydrating `vx_graph_edge`'s 87,000+
+# rows first, at 300 rows/round-trip. A table hydrates once, on whichever query first
+# names it; the background warm-up in api.main still asks for everything (`tables=None`)
+# so later queries land warm, but does it table-by-table under that table's OWN lock, so
+# a request for an already-hydrated (or currently-uninvolved) table is never stuck behind
+# the sweep.
+_MIRROR_META_LOCK = threading.Lock()      # guards the shell file and the per-table lock dict
+_MIRROR_TABLE_LOCKS: dict[str, threading.Lock] = {}
+_MIRROR_TABLES_DONE: set[str] = set()     # tables confirmed hydrated, this process
+_MIRROR_SHELL_READY = False               # DDL exists — cheap, local, no network
 _CONN_EPOCH = 0        # bumped when the mirror file is atomically replaced — stale
                        # per-thread connections point at the old inode and must reopen
+_MIRROR_TRACK_SQL = "CREATE TABLE IF NOT EXISTS vx_mirror_hydrated (table_name TEXT PRIMARY KEY)"
 
 
 def _norm(col, v):
@@ -254,61 +266,102 @@ def _norm(col, v):
     return str(v)
 
 
-def _ensure_mirror() -> None:
-    global _MIRROR_READY, _CONN_EPOCH
-    if _MIRROR_READY or backend() != "catalyst":
-        return
-    with _MIRROR_LOCK:
-        if _MIRROR_READY:
-            return
-        import logging
-        log = logging.getLogger(__name__)
-        path = _sqlite_path()
-        if path.exists():
-            probe = sqlite3.connect(str(path))
-            done = probe.execute(
-                "SELECT name FROM sqlite_master WHERE name='vx_mirror_done'").fetchone()
-            probe.close()
-            if done:
-                _MIRROR_READY = True
-                return
+def _table_lock(table: str) -> threading.Lock:
+    with _MIRROR_META_LOCK:
+        lock = _MIRROR_TABLE_LOCKS.get(table)
+        if lock is None:
+            lock = _MIRROR_TABLE_LOCKS[table] = threading.Lock()
+        return lock
 
-        # All-or-nothing: hydrate into a scratch file and atomically replace. A failed
-        # attempt leaves nothing behind, so the next request retries from zero instead
-        # of colliding with a half-filled mirror (the UNIQUE-violation loop seen live).
-        tmp = path.with_suffix(".hydrating")
-        tmp.unlink(missing_ok=True)
-        log.info("hydrating read mirror from Data Store")
-        conn = sqlite3.connect(str(tmp))
-        try:
-            from .schema import TABLES, emit_sqlite
+
+def _ensure_mirror_shell() -> None:
+    """Create the mirror file and its DDL for all 37 tables — cheap and local, no network
+    call. Separate from data hydration, which is per-table and does hit the network."""
+    global _MIRROR_SHELL_READY, _CONN_EPOCH
+    if _MIRROR_SHELL_READY:
+        return
+    with _MIRROR_META_LOCK:
+        if _MIRROR_SHELL_READY:
+            return
+        path = _sqlite_path()
+        if not path.exists():
+            from .schema import emit_sqlite
+            tmp = path.with_suffix(".hydrating-shell")
+            tmp.unlink(missing_ok=True)
+            conn = sqlite3.connect(str(tmp))
             for stmt in emit_sqlite():
                 conn.execute(stmt)
-            for table, cols in TABLES.items():
-                rows = _catalyst_select(f'SELECT * FROM "{table}"')
-                if not rows:
-                    continue
-                names = [c.name for c in cols]
-                # OR IGNORE: belt against the page-boundary duplicate above — the second
-                # copy of an identical row is dropped, never a distinct row (unique keys
-                # would collide loudly in the tests otherwise).
-                sql = (f'INSERT OR IGNORE INTO "{table}" '
-                       f'({", ".join(chr(34)+n+chr(34) for n in names)}) '
-                       f'VALUES ({", ".join("?" for _ in names)})')
-                conn.executemany(sql, [[_norm(c, r.get(c.name)) for c in cols]
-                                       for r in rows])
-                log.info("mirrored %s: %d rows", table, len(rows))
-            conn.execute("CREATE TABLE vx_mirror_done (ok INT)")
+            conn.execute(_MIRROR_TRACK_SQL)
             conn.commit()
-        except Exception:
             conn.close()
-            tmp.unlink(missing_ok=True)
-            raise
-        conn.close()
-        os.replace(tmp, path)
-        _CONN_EPOCH += 1                # stale per-thread conns reopen the new file
-        _MIRROR_READY = True
-        log.info("read mirror ready")
+            os.replace(tmp, path)
+            _CONN_EPOCH += 1             # stale per-thread conns reopen the new file
+        else:
+            # File survived a same-container process restart (e.g. an OOM restart) —
+            # DDL is already there; just guarantee the tracking table exists (an older
+            # mirror, from before this table was added, predates it).
+            conn = sqlite3.connect(str(path))
+            conn.execute(_MIRROR_TRACK_SQL)
+            conn.commit()
+            conn.close()
+        _MIRROR_SHELL_READY = True
+
+
+def _mirror_table_names(sql: str) -> set[str]:
+    """Which schema tables a ZCQL string names, from its quoted identifiers — every query
+    in this codebase quotes them (see unquote_identifiers), so this is exact, not a guess."""
+    from .schema import TABLES
+    return {t for t in re.findall(r'"([A-Za-z_][A-Za-z0-9_]*)"', sql) if t in TABLES}
+
+
+def _ensure_mirror(tables: "set[str] | None" = None) -> None:
+    """Hydrate the given tables from Data Store into the local read mirror, once each per
+    container. `tables=None` (the background warm-up thread's call) means everything —
+    but even then, one table at a time under its own lock, so a request naming a single
+    small table is never stuck behind the other 36."""
+    if backend() != "catalyst":
+        return
+    from .schema import TABLES
+    want = list(TABLES) if tables is None else [t for t in tables if t in TABLES]
+    if any(t not in _MIRROR_TABLES_DONE for t in want):
+        _ensure_mirror_shell()
+
+    import logging
+    log = logging.getLogger(__name__)
+    for table in want:
+        if table in _MIRROR_TABLES_DONE:
+            continue
+        with _table_lock(table):
+            if table in _MIRROR_TABLES_DONE:
+                continue
+            conn = sqlite3.connect(str(_sqlite_path()))
+            try:
+                already = conn.execute(
+                    "SELECT 1 FROM vx_mirror_hydrated WHERE table_name = ?", (table,)
+                ).fetchone()
+                if not already:
+                    cols = TABLES[table]
+                    rows = _catalyst_select(f'SELECT * FROM "{table}"')
+                    if rows:
+                        names = [c.name for c in cols]
+                        # OR IGNORE: belt against the page-boundary duplicate — the second
+                        # copy of an identical row is dropped, never a distinct row (unique
+                        # keys would collide loudly in the tests otherwise).
+                        ins = (f'INSERT OR IGNORE INTO "{table}" '
+                               f'({", ".join(chr(34)+n+chr(34) for n in names)}) '
+                               f'VALUES ({", ".join("?" for _ in names)})')
+                        conn.executemany(ins, [[_norm(c, r.get(c.name)) for c in cols]
+                                               for r in rows])
+                        log.info("mirrored %s: %d rows", table, len(rows))
+                    conn.execute(
+                        "INSERT OR IGNORE INTO vx_mirror_hydrated VALUES (?)", (table,))
+                    conn.commit()          # per-table atomicity: a failure below rolls
+                                           # this table back, not the other 36 already done
+            except Exception:
+                conn.close()
+                raise
+            conn.close()
+            _MIRROR_TABLES_DONE.add(table)
 
 
 def _sdk_row(r: dict) -> dict:
@@ -360,11 +413,11 @@ def _sdk_row(r: dict) -> dict:
     return out
 
 
-def _mirror_apply(fn) -> None:
+def _mirror_apply(fn, tables: "set[str] | None" = None) -> None:
     """Apply a write to the mirror; a mirror failure must never fail the Data Store
     write that already happened — worst case a read is stale until the next container."""
     try:
-        _ensure_mirror()
+        _ensure_mirror(tables)
         conn = _sqlite_conn()
         fn(conn)
         conn.commit()
@@ -391,7 +444,7 @@ def query(zcql: str, params: dict[str, Any] | None = None) -> list[dict]:
     cannot JOIN value-related tables (see the mirror block above). Locally, sqlite."""
     sql = render(zcql, params)
     if backend() == "catalyst":
-        _ensure_mirror()
+        _ensure_mirror(_mirror_table_names(sql) or None)
     return [dict(r) for r in _sqlite_conn().execute(sql).fetchall()]
 
 
@@ -411,7 +464,7 @@ def insert(table: str, rows: Sequence[dict]) -> int:
         payload = [_sdk_row(r) for r in rows]
         for i in range(0, len(payload), _INSERT_BATCH):
             t.insert_rows(payload[i : i + _INSERT_BATCH])
-        _mirror_apply(_sqlite_insert)             # truth written; keep reads current
+        _mirror_apply(_sqlite_insert, {table})     # truth written; keep reads current
         return len(rows)
     conn = _sqlite_conn()
     _sqlite_insert(conn)
@@ -445,7 +498,7 @@ def update(table: str, key: str, rows: Sequence[dict]) -> int:
         t = _catalyst_app().datastore().table(table)
         for i in range(0, len(payload), _INSERT_BATCH):
             t.update_rows(payload[i : i + _INSERT_BATCH])
-        _mirror_apply(_sqlite_update)
+        _mirror_apply(_sqlite_update, {table})
         return len(payload)
     conn = _sqlite_conn()
     _sqlite_update(conn)
@@ -458,7 +511,7 @@ def execute(zcql: str, params: dict[str, Any] | None = None) -> None:
     sql = render(zcql, params)
     if backend() == "catalyst":
         _catalyst_app().zcql().execute_query(unquote_identifiers(sql))
-        _mirror_apply(lambda conn: conn.execute(sql))
+        _mirror_apply(lambda conn: conn.execute(sql), _mirror_table_names(sql) or None)
         return
     conn = _sqlite_conn()
     conn.execute(sql)

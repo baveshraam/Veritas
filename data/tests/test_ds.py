@@ -161,7 +161,8 @@ def test_catalyst_reads_go_through_a_hydrated_mirror(monkeypatch, tmp_path):
     }
     monkeypatch.setenv("VERITAS_DS_BACKEND", "catalyst")
     monkeypatch.setenv("VERITAS_MIRROR_DB", str(tmp_path / "mirror.db"))
-    monkeypatch.setattr(ds, "_MIRROR_READY", False)
+    monkeypatch.setattr(ds, "_MIRROR_SHELL_READY", False)
+    monkeypatch.setattr(ds, "_MIRROR_TABLES_DONE", set())
     monkeypatch.setattr(ds, "_local", type(ds._local)())     # drop cached connections
     monkeypatch.setattr(
         ds, "_catalyst_select",
@@ -173,3 +174,31 @@ def test_catalyst_reads_go_through_a_hydrated_mirror(monkeypatch, tmp_path):
                     'FROM "Employee" JOIN "Unit" ON "Employee"."UnitID" = "Unit"."UnitID"')
     assert rows == [{"FirstName": "Shivakumar", "UnitName": "Kolar Town PS",
                      "DesignationID": 4}]                     # int, not '4': coerced
+
+
+def test_mirror_hydration_is_lazy_per_table_not_the_whole_schema(monkeypatch, tmp_path):
+    """The cold-start bug: a query naming one small table used to block on hydrating all
+    37 (vx_graph_edge's 87,000+ rows included) before it could run at all. Only the table
+    a query actually names should ever be fetched from Data Store."""
+    fetched: list[str] = []
+
+    def _fake_select(sql: str) -> list[dict]:
+        for t in ("Employee", "Unit", "CaseMaster"):
+            if f'FROM "{t}"' in sql:
+                fetched.append(t)
+                return [{"EmployeeID": "1", "DesignationID": "4", "KGID": "K1",
+                         "FirstName": "X", "UnitID": "1", "ROWID": "1"}] if t == "Employee" else []
+        return []
+
+    monkeypatch.setenv("VERITAS_DS_BACKEND", "catalyst")
+    monkeypatch.setenv("VERITAS_MIRROR_DB", str(tmp_path / "mirror.db"))
+    monkeypatch.setattr(ds, "_MIRROR_SHELL_READY", False)
+    monkeypatch.setattr(ds, "_MIRROR_TABLES_DONE", set())
+    monkeypatch.setattr(ds, "_local", type(ds._local)())
+    monkeypatch.setattr(ds, "_catalyst_select", _fake_select)
+
+    ds.query('SELECT "EmployeeID" FROM "Employee" WHERE "KGID" = \'K1\'')
+    assert fetched == ["Employee"]                 # Unit and CaseMaster never touched
+
+    ds.query('SELECT "EmployeeID" FROM "Employee" WHERE "KGID" = \'K1\'')
+    assert fetched == ["Employee"]                 # already hydrated: no second fetch
