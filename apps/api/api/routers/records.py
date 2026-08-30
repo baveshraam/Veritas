@@ -75,10 +75,21 @@ async def list_cases(
     if case_status:
         matched = [r for r in matched if r["case_status"] == case_status]
     if q:
-        needle = q.lower()
+        # EVERY word must match SOMETHING on the row, across fields — not the whole
+        # query inside one field, which is what this used to do. "theft mandya" is not
+        # a substring of the crime type, nor of the district, nor of any narrative, so
+        # the register reported that it held no theft in Mandya while holding
+        # sixty-one. Same tokenizer as GET /search, so the register and the search box
+        # cannot disagree about what a query means.
+        from rag_agent.search import tokenize
+        # Exactly the fields `_flat` produces. Listing one it does not ("ps_name")
+        # would be a filter clause that silently never fires.
+        fields = ("fir_number", "crime_type", "district", "ps_code", "case_status",
+                  "narrative")
+        tokens = tokenize(q)
         matched = [r for r in matched
-                   if any(needle in str(r.get(f) or "").lower()
-                          for f in ("fir_number", "crime_type", "district", "narrative"))]
+                   if all(any(tok in str(r.get(f) or "").lower() for f in fields)
+                          for tok in tokens)]
 
     def facet(field: str) -> list[dict]:
         counts: dict[str, int] = {}

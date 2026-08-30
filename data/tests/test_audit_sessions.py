@@ -106,19 +106,44 @@ def test_a_turn_round_trips():
     assert t.visualization == {"kind": "map"}
 
 
-def test_an_oversized_turn_sheds_evidence_and_keeps_the_citations():
+def test_an_oversized_turn_sheds_evidence_bodies_and_keeps_their_identity():
     """`text` caps at 10,000 characters and Data Store rejects the row rather than trimming
     it. Citations and the trace are what the PDF export and the reasoning panel are made of,
-    so they are never what gives way."""
-    huge = [{"content": "x" * 500} for _ in range(50)]          # ~25KB
+    so they are never what gives way.
+
+    Evidence BODIES give way; evidence IDENTITY does not. Dropping the items wholesale was
+    lossy in a way that produced wrong answers rather than missing ones — a later turn reads
+    `source_type`/`source_id`/`authoritative` off these items to answer "why is this here"
+    and "where are the related cases", and with the list empty it fell back to defaults, so a
+    recorded transfer on a truncated timeline explained itself as a probabilistic identity
+    inference. Both found live."""
+    huge = [{"evidence_id": f"timeline:money_in:{i}:2026-01-01", "source_type": "FIR_RECORD",
+             "source_id": str(i), "authoritative": True, "confidence": 0.9,
+             "confidence_kind": "support", "content": "x" * 500} for i in range(50)]
     write_conversation_turn("s1", 0, "q", "en", "a", [{"index": 1}], huge,
                             {"points": list(range(3000))}, [{"step": "synthesis"}])
 
     (t,) = get_conversation_history("s1")
     assert t.citations == [{"index": 1}]
     assert t.agent_trace == [{"step": "synthesis"}]
-    assert t.evidence_items == []
     assert t.visualization == {}
+    assert len(t.evidence_items) == 50
+    kept = t.evidence_items[0]
+    assert kept["evidence_id"] == "timeline:money_in:0:2026-01-01"
+    assert kept["source_id"] == "0" and kept["authoritative"] is True
+    assert "content" not in kept          # the body is what gave way
+
+
+def test_a_turn_too_large_even_for_skeletons_still_stores_its_citations():
+    """The last resort. 20,000 evidence ids will not fit under any tier, and the turn
+    must still be readable rather than rejected by the Data Store."""
+    huge = [{"evidence_id": f"fir:{i}", "source_type": "FIR_RECORD", "source_id": str(i),
+             "content": "x"} for i in range(20_000)]
+    write_conversation_turn("s1", 0, "q", "en", "a", [{"index": 1}], huge, {},
+                            [{"step": "synthesis"}])
+    (t,) = get_conversation_history("s1")
+    assert t.citations == [{"index": 1}]
+    assert t.evidence_items == []
 
 
 def test_history_comes_back_in_turn_order():

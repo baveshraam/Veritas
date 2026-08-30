@@ -6,11 +6,12 @@ import Copilot from "@/components/Copilot";
 import EvidenceInspector from "@/components/EvidenceInspector";
 import EvidencePanel from "@/components/EvidencePanel";
 import EvidenceThread from "@/components/EvidenceThread";
-import InvestigationHeader, { VIEW_FOR_VIZ, type WorkspaceView } from "@/components/InvestigationHeader";
+import InvestigationHeader, { VIEW_FOR_EVIDENCE, VIEW_FOR_VIZ, type WorkspaceView } from "@/components/InvestigationHeader";
 import LoginGate from "@/components/LoginGate";
 import TopBar from "@/components/TopBar";
 import Workspace from "@/components/Workspace";
 import { exportPdf, playBase64Audio, setToken, streamChat } from "@/lib/api";
+import { readNetwork } from "@/lib/network";
 import type { Officer, Turn, Visualization } from "@/lib/types";
 
 /** Records visible at each rank, in one word. The console's most reviewable
@@ -95,7 +96,11 @@ export default function Console() {
             // A new answer pulls the workspace to the view it produced. The
             // officer can always navigate back, but a fresh result must never
             // land behind a tab nobody is looking at.
-            const next = VIEW_FOR_VIZ[f.visualization?.kind ?? "none"];
+            const next = VIEW_FOR_VIZ[f.visualization?.kind ?? "none"]
+              // No visualization does not mean no subject: "no outbound trail
+              // was found" is the financial answer, and it belongs in Financial.
+              ?? VIEW_FOR_EVIDENCE.find(([re]) =>
+                   f.evidence_items.some((e) => re.test(e.evidence_id)))?.[1];
             if (next) setView(next);
           },
           (audio) => playBase64Audio(audio),
@@ -159,7 +164,11 @@ export default function Console() {
 
   const activeIndex = evidence.findIndex((e) => e.evidence_id === activeEvidence);
   const inspected = inspecting && activeIndex >= 0 ? evidence[activeIndex] : null;
-  const networkSize = viz.kind === "network" ? Math.max(0, (viz.data?.nodes?.length ?? 1) - 1) : null;
+  // People in the current network — from the same reading the workspace and the
+  // copilot use, so the header can never disagree with the graph beside it. A
+  // case's accused list has no root node, so "nodes - 1" undercounted it by one.
+  const net = readNetwork(viz, evidence, focus?.person?.name);
+  const networkSize = net ? net.total : null;
 
   return (
     <div className="app">
@@ -187,7 +196,7 @@ export default function Console() {
         scopeLabel={SCOPE[officer.role] ?? "Scoped access"}
       />
 
-      <div className="workbench">
+      <div className={`workbench ${evidence.length ? "" : "lean"}`}>
         <ChatPane
           turns={turns}
           busy={busy}
@@ -197,13 +206,13 @@ export default function Console() {
           onCite={revealEvidence}
           activeEvidence={activeEvidence}
           onInspect={() => openInspector(activeEvidence ?? evidence[0]?.evidence_id ?? "")}
-          onEntity={(name) => send({ query: `Does ${name} have priors?` })}
         />
 
         <Workspace
           view={view}
           viz={viz}
           focus={focus}
+          evidence={evidence}
           onAsk={(query) => send({ query })}
           onCopilot={(fir) => { setCopilotTab("brief"); setCopilotFir(fir); }}
           onBoard={(fir) => { setCopilotTab("board"); setCopilotFir(fir); }}
@@ -211,6 +220,7 @@ export default function Console() {
           onSelectEvidence={revealEvidence}
           onPinEvidence={(id) => send({ query: "Add this event to the investigation board.", activeEvidenceId: id })}
           boardVersion={settled}
+          sessionId={sessionId}
         />
 
         <EvidencePanel
@@ -227,6 +237,8 @@ export default function Console() {
           item={inspected}
           index={activeIndex}
           total={evidence.length}
+          sessionId={sessionId}
+          onAsk={(q) => { setInspecting(false); send({ query: q }); }}
           onClose={() => setInspecting(false)}
           onStep={(d) => {
             const next = evidence[(activeIndex + d + evidence.length) % evidence.length];

@@ -169,12 +169,15 @@ def test_temporal_correction_narrows_the_date_window_at_execution(monkeypatch):
 
     captured = {}
 
-    def fake_count_firs(role, ps, crime_type=None, district=None, date_from=None, date_to=None):
+    # **kw, not the exact signature: the filter set grows (status, section, station
+    # were added when "how many cases are pending in Mandya" turned out to answer
+    # with every case in the district), and a stub that pins today's parameter list
+    # fails on a change that has nothing to do with what it is testing.
+    def fake_count_firs(role, ps, date_to=None, **kw):
         captured["count_date_to"] = date_to
         return 3
 
-    def fake_search_firs(role, ps, crime_type=None, district=None, date_from=None,
-                         date_to=None, limit=25):
+    def fake_search_firs(role, ps, date_to=None, limit=25, **kw):
         captured["search_date_to"] = date_to
         return []
 

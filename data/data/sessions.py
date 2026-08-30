@@ -7,9 +7,10 @@ Two Data Store facts shape this module:
   * No UPSERT. There is no ON CONFLICT and no MERGE, so `upsert_session_focus` reads,
     then updates or inserts. Single-writer per session, so the race is not real here.
   * `text` caps at 10,000 characters. A turn's payload (map points, evidence bodies, the
-    full agent trace) can exceed that, so `_pack` sheds the two heavy, regenerable parts
+    full agent trace) can exceed that, so `_pack` sheds the heavy, regenerable parts
     before it truncates anything — citations and the trace, which the PDF export and the
-    reasoning panel actually need, always survive.
+    reasoning panel actually need, always survive, and an over-budget turn keeps its
+    evidence items' IDENTITY even when their bodies have to go (see `_skeleton`).
 """
 import json
 from datetime import datetime, timezone
@@ -84,9 +85,40 @@ def upsert_session_focus(session_id: str, officer_id: str, focus: SessionFocus,
     cache.put(_cache_key(session_id), focus.model_dump())
 
 
+# The fields that identify an evidence item, as opposed to the fields that fill it
+# out. All of these are short and fixed-width; the size of a turn lives almost
+# entirely in `content` and `source_query`.
+_EVIDENCE_KEYS = ("evidence_id", "source_type", "source_id", "authoritative",
+                  "confidence", "confidence_kind")
+
+
+def _skeleton(evidence_items: list[dict]) -> list[dict]:
+    """Evidence items with their bodies dropped and their identity kept.
+
+    The middle tier of truncation. Dropping evidence_items WHOLESALE was cheap and
+    lossy in a way that showed up as wrong answers rather than as missing ones: a
+    later turn asking "why is this here" or "where are the related cases" reads
+    `source_type`/`source_id`/`authoritative` off these items, and with the list
+    empty it fell back to defaults — so a recorded transaction on a truncated
+    timeline was explained as a DERIVED identity inference, and a timeline turn that
+    had just named six cases answered "the previous answer named no cases to map".
+    Both found live. A skeleton is a few dozen bytes per item and preserves every
+    field those paths actually read.
+    """
+    return [{k: e[k] for k in _EVIDENCE_KEYS if k in e} for e in evidence_items]
+
+
 def _pack(citations: list[dict], evidence_items: list[dict], visualization: dict,
           agent_trace: list[dict], result_context: Optional[dict] = None) -> str:
     """The turn's side-car, small enough for a `text` column.
+
+    Three tiers, shedding the most re-derivable thing first.
+
+      1. everything;
+      2. evidence SKELETONS (ids, source type/id, authoritative, confidence) and no
+         visualization — the bodies are re-derivable from the record layer, the
+         identity fields are not re-derivable from anything;
+      3. no evidence at all, as a last resort.
 
     Citations and the agent trace are what the PDF export and the reasoning panel are
     made of, so they are never dropped. result_context is a handful of scalars plus an
@@ -94,8 +126,7 @@ def _pack(citations: list[dict], evidence_items: list[dict], visualization: dict
     meaningfully contributes to the size that triggers truncation — it survives
     truncation in the same tier as citations/trace, for the same reason: a follow-up
     ("only these?") needs it exactly when the turn it came from was too big to store
-    whole. Evidence bodies and the visualization payload (which can be thousands of map
-    points) are re-derivable from the citations, so they are what gives way instead.
+    whole.
     """
     full = {"citations": citations, "evidence_items": evidence_items,
             "visualization": visualization, "agent_trace": agent_trace,
@@ -103,9 +134,14 @@ def _pack(citations: list[dict], evidence_items: list[dict], visualization: dict
     blob = json.dumps(full, default=str)
     if len(blob) <= _PAYLOAD_BUDGET:
         return blob
-    return json.dumps({"citations": citations, "evidence_items": [], "visualization": {},
-                       "agent_trace": agent_trace, "result_context": result_context or {},
-                       "truncated": True}, default=str)
+
+    trimmed = {"citations": citations, "evidence_items": _skeleton(evidence_items),
+               "visualization": {}, "agent_trace": agent_trace,
+               "result_context": result_context or {}, "truncated": True}
+    blob = json.dumps(trimmed, default=str)
+    if len(blob) <= _PAYLOAD_BUDGET:
+        return blob
+    return json.dumps({**trimmed, "evidence_items": []}, default=str)
 
 
 def write_conversation_turn(session_id: str, turn_index: int, query: str, language: str,

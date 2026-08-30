@@ -17,6 +17,22 @@ export const VIEW_FOR_VIZ: Partial<Record<VizKind, WorkspaceView>> = {
   trend: "overview",
 };
 
+/** Where an answer belongs when it produced NO visualization.
+ *
+ *  A negative finding is still a finding about a domain: "no outbound transfer
+ *  trail was found" is the financial answer, and leaving the workspace on the
+ *  case register while the copilot says so is a discontinuity an officer reads
+ *  as "the system ignored my question". Keyed on the evidence ids the engine
+ *  already emits, so nothing new has to be sent to know this. */
+export const VIEW_FOR_EVIDENCE: [RegExp, WorkspaceView][] = [
+  [/^flow:/, "financial"],
+  [/^aml:/, "financial"],
+  [/^hotspot:/, "geography"],
+  [/^(assoc|same_as):/, "network"],
+  [/^timeline:/, "timeline"],
+  [/^(board|lead):/, "board"],
+];
+
 const TABS: { key: WorkspaceView; label: string }[] = [
   { key: "overview", label: "Overview" },
   { key: "timeline", label: "Timeline" },

@@ -1,5 +1,6 @@
 "use client";
 import { band, CONF_NAME, PROV_LABEL, provenanceOf, showsPercent, summarise } from "@/lib/evidence";
+import { matchReading } from "@/lib/metrics";
 import type { EvidenceItem } from "@/lib/types";
 
 /** The evidence column.
@@ -27,13 +28,12 @@ export default function EvidencePanel({
       <section className="col col-evidence" aria-label="Evidence">
         <div className="col-head"><span className="label">Evidence</span></div>
         <div className="col-body">
-          <div className="empty">
-            <span className="empty-mark" aria-hidden>◎</span>
-            <h3>No sources yet</h3>
-            <p>
-              Ask a question and every claim in the answer will appear here as the record
-              it rests on.
-            </p>
+          {/* Deliberately small. An empty panel that fills a fifth of the screen
+              is a fifth of the screen spent saying nothing. */}
+          <div className="evidence-idle">
+            <b>Nothing cited yet</b>
+            Every claim an answer makes appears here as the record it rests on —
+            with what kind of source it is, and how well it supports the claim.
           </div>
         </div>
       </section>
@@ -106,7 +106,14 @@ export default function EvidencePanel({
               </div>
               <div className="ev-body">{e.content}</div>
               <div className="ev-foot">
-                <span className="meta">{CONF_NAME[e.confidence_kind]}</span>
+                {/* What this source IS, then how it was measured. A bare "66%"
+                    under a bare "Text match" asks the officer to decide what a
+                    percentage of wording similarity is worth. */}
+                <span className="meta">
+                  {e.confidence_kind === "similarity"
+                    ? matchReading(e.confidence).headline
+                    : CONF_NAME[e.confidence_kind]}
+                </span>
                 {showsPercent(e.confidence_kind) && (
                   <span className={`ev-strength support-verdict is-${b}`}>
                     <i><b style={{ width: `${Math.round(e.confidence * 100)}%` }} /></i>

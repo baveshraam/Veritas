@@ -27,6 +27,20 @@ const SLOW_AFTER_MS = 8000;
  *  and the API refuses every scoped endpoint without a token. */
 const FALLBACK_ROLES = ["IO", "SHO", "DSP", "SP", "IG", "SCRB_Analyst"];
 
+/** What each rank actually sees, in the officer's own words. A rank is not a
+ *  label on this screen — it is the scope of every answer that follows, so it is
+ *  worth one line each rather than an acronym to be recognised or guessed. */
+const ROLE_NOTE: Record<string, string> = {
+  IO: "Investigating officer — cases at your own station",
+  SHO: "Station house officer — cases at your own station",
+  DSP: "Deputy superintendent — every case in the district",
+  SP: "Superintendent — every case in the district",
+  IG: "Inspector general — every case in the state",
+  SCRB_Analyst: "State crime-records analyst — every case in the state",
+};
+
+const roleLabel = (r: string) => r.replace(/_/g, " ");
+
 type State =
   | { s: "loading" }
   | { s: "slow" }
@@ -128,7 +142,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
         </div>
 
         <div className="gate-body">
-          <span className="label">{fallback ? "Continue as" : "Sign in as"}</span>
+          <span className="label">{fallback ? "Continue as" : "Select your operational role"}</span>
 
           {waiting && (
             <div className="gate-wait">
@@ -142,8 +156,11 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
           {state.s === "ready" && state.officers.map((o) => (
             <button key={o.badge_no} className="officer-row" onClick={() => signIn(o)}
               disabled={busy !== null}>
-              <span className="officer-rank">{o.role}</span>
-              <span className="who">{o.name}</span>
+              <span className="officer-rank">{roleLabel(o.role)}</span>
+              <span className="who">
+                {o.name}
+                <span className="who-note">{ROLE_NOTE[o.role] ?? "Scoped access"}</span>
+              </span>
               <span className="ps">
                 {busy === o.badge_no ? <span className="spinner" style={{ width: 11, height: 11 }} /> : `PS ${o.ps_code}`}
               </span>
@@ -155,8 +172,11 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
               only the record-scoped calls refuse. */}
           {fallback && FALLBACK_ROLES.map((role) => (
             <button key={role} className="officer-row" onClick={() => enterUnverified(role)}>
-              <span className="officer-rank">{role}</span>
-              <span className="who">Demonstration</span>
+              <span className="officer-rank">{roleLabel(role)}</span>
+              <span className="who">
+                Demonstration
+                <span className="who-note">{ROLE_NOTE[role] ?? "Scoped access"}</span>
+              </span>
               <span className="ps">unverified</span>
             </button>
           ))}

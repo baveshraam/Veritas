@@ -1,6 +1,8 @@
 /* Visualization colour, derived from the same tokens as the rest of the console
  * (globals.css). Charts are part of the product, not four libraries that happen
- * to share a page, so nothing here invents a hue.
+ * to share a page, so nothing here invents a hue — every value is read back off
+ * the live stylesheet, which is also what makes the charts follow the theme
+ * without a second palette to keep in sync.
  *
  * TWO SCALES, AND THEY MEAN DIFFERENT THINGS.
  *
@@ -8,7 +10,7 @@
  *             "how bad": hotspot density, transfer magnitude in a laundering
  *             trail. A high looks like a high everywhere it appears.
  *
- *   INFLUENCE steel -> blue. Used for graph centrality.
+ *   INFLUENCE quiet slate -> blue. Used for graph centrality.
  *
  * They were the same scale, and that was a category error with a visible cost:
  * every associate in a co-offending network rendered somewhere on the red end,
@@ -17,68 +19,108 @@
  * is not a threat score, the platform does not compute one for these nodes, and
  * colouring it in crimson asserted one anyway. */
 
-export const SEV = {
-  low: "#3f9d6d",
-  med: "#d4883c",
-  high: "#dc5b5f",
-} as const;
+/** One token, resolved against :root. ECharts and MapLibre both need a concrete
+ *  colour string, so the CSS custom property has to be read rather than passed. */
+function token(name: string, fallback: string): string {
+  if (typeof window === "undefined") return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
 
-export const ACCENT = "#c9a44c";     // identity + selection. Never a severity.
-export const PRIMARY = "#4084d8";    // neutral analytical
-export const VIOLET = "#8b82d8";     // model output
+export const SEV = () => ({
+  low: token("--ok", "#1c7a4c"),
+  med: token("--amber", "#9c6410"),
+  high: token("--red", "#b8362e"),
+});
 
-// A located case reads as ink on paper — cartographic navy against the light
-// basemap, outside the warm severity ramp a hotspot is drawn in, and outside
-// gold, which is reserved for the selected mark.
-export const MAP_POINT = "#1e4a78";
+export const ACCENT = () => token("--gold", "#96701c");      // identity + selection
+export const PRIMARY = () => token("--pri", "#1f6ed0");      // neutral analytical
+export const VIOLET = () => token("--violet", "#574bb0");    // model output
+export const MAP_POINT = () => token("--map-point", "#1e4a78");
 
-export const GRID = "rgba(255,255,255,0.055)";
-export const TEXT_DIM = "#9aabbd";
-export const TEXT_FAINT = "#64768a";
-export const SURFACE = "#151c25";
+export const GRID = () => token("--chart-grid", "rgba(22,32,43,0.07)");
+export const TEXT = () => token("--t-1", "#16202b");
+export const TEXT_DIM = () => token("--t-2", "#41505f");
+export const TEXT_FAINT = () => token("--t-3", "#6a7787");
+export const SURFACE = () => token("--n-1", "#ffffff");
+export const LINE = () => token("--line-2", "#d2d8df");
+/** The backing plate behind a graph label, so text stays legible where the
+ *  force layout cannot separate two nodes. */
+export const LABEL_PLATE = () => token("--float", "rgba(255,255,255,0.94)");
 
 /** Map a 0-1 intensity onto the SEVERITY ramp. Only for quantities that mean
  *  "how bad". */
 export function ramp(t: number): string {
+  const s = SEV();
   const x = clamp(t);
-  return x < 0.5 ? mix(SEV.low, SEV.med, x / 0.5) : mix(SEV.med, SEV.high, (x - 0.5) / 0.5);
+  return x < 0.5 ? mix(s.low, s.med, x / 0.5) : mix(s.med, s.high, (x - 0.5) / 0.5);
 }
 
-/** Map a 0-1 centrality onto the INFLUENCE ramp: quiet steel for a peripheral
+/** The three severity stops as a CSS gradient, for a legend swatch. */
+export function sevGradient(): string {
+  const s = SEV();
+  return `linear-gradient(90deg, ${s.low}, ${s.med}, ${s.high})`;
+}
+
+/** Map a 0-1 centrality onto the INFLUENCE ramp: quiet slate for a peripheral
  *  node, saturated blue for a hub. Reads as "more connected", not "more
  *  dangerous", which is the only claim the data supports. */
 export function influence(t: number): string {
-  return mix("#5b7288", PRIMARY, clamp(t));
+  return mix(token("--t-4", "#97a2ad"), PRIMARY(), clamp(t));
+}
+
+export function influenceGradient(): string {
+  return `linear-gradient(90deg, ${token("--t-4", "#97a2ad")}, ${PRIMARY()})`;
 }
 
 function clamp(t: number): number {
   return Math.max(0, Math.min(1, Number.isFinite(t) ? t : 0));
 }
 
+/** Blends two colours. Accepts #rgb, #rrggbb or any rgb()/rgba() string, because
+ *  a CSS custom property can legally hold any of them and a token read gives
+ *  back whatever the author wrote. */
+function parse(c: string): [number, number, number] {
+  if (c.startsWith("#")) {
+    const h = c.length === 4 ? `#${c[1]}${c[1]}${c[2]}${c[2]}${c[3]}${c[3]}` : c;
+    return [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+  }
+  const m = c.match(/[\d.]+/g) ?? ["0", "0", "0"];
+  return [Number(m[0]) || 0, Number(m[1]) || 0, Number(m[2]) || 0];
+}
+
 function mix(a: string, b: string, t: number): string {
-  const pa = [1, 3, 5].map((i) => parseInt(a.slice(i, i + 2), 16));
-  const pb = [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+  const pa = parse(a);
+  const pb = parse(b);
   const c = pa.map((v, i) => Math.round(v + (pb[i] - v) * t));
   return `rgb(${c[0]},${c[1]},${c[2]})`;
 }
 
-export function rgba(hex: string, alpha: number): string {
-  const p = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+export function rgba(color: string, alpha: number): string {
+  const p = parse(color);
   return `rgba(${p[0]},${p[1]},${p[2]},${alpha})`;
 }
 
-export const CHART_BASE = {
-  backgroundColor: "transparent",
-  textStyle: {
-    color: TEXT_DIM,
-    fontFamily: "var(--font-sans), ui-sans-serif, system-ui",
-  },
-  tooltip: {
-    backgroundColor: SURFACE,
-    borderColor: "#2a3746",
-    borderWidth: 1,
-    padding: [8, 11],
-    textStyle: { color: "#e8eef5", fontSize: 12 },
-    extraCssText: "border-radius: 6px; box-shadow: 0 12px 30px rgba(0,0,0,0.45);",
-  },
-} as const;
+/** Chart chrome, resolved at render time so it follows the theme. */
+export function chartBase() {
+  return {
+    backgroundColor: "transparent",
+    // Fast enough to read as "the chart appeared", slow enough not to pop.
+    // The default second-long draw-on is a demo flourish on a workstation, and
+    // it makes a screenshot of a fresh answer look like a half-loaded chart.
+    animationDuration: 260,
+    animationEasing: "cubicOut",
+    textStyle: {
+      color: TEXT_DIM(),
+      fontFamily: "var(--font-sans), ui-sans-serif, system-ui",
+    },
+    tooltip: {
+      backgroundColor: SURFACE(),
+      borderColor: LINE(),
+      borderWidth: 1,
+      padding: [8, 11] as [number, number],
+      textStyle: { color: TEXT(), fontSize: 12 },
+      extraCssText: `border-radius: 6px; box-shadow: ${token("--shadow-pop", "0 8px 24px rgba(20,30,42,0.12)")};`,
+    },
+  };
+}

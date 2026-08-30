@@ -83,3 +83,21 @@ def test_empty_evidence_never_calls_the_model_regardless_of_operation(monkeypatc
 
     answer, citations = synthesis_agent.synthesize("what stands out", [], operation="FINANCIAL")
     assert citations == []
+
+
+def test_the_answer_an_officer_reads_carries_no_count_agnostic_plural_marker():
+    """`record(s)` is a convention for a count synthesis does not always have when
+    the sentence is assembled. It was only ever resolved on the way into the
+    translation model, so English answers shipped the marker itself — a form field
+    in the middle of a finding. node_synthesize resolves it for every language."""
+    from data.nlp.translate import resolve_plural_markers
+
+    answer, _ = synthesis_agent.synthesize(
+        "what is the status of this FIR", [_ev(), _ev(eid="e2")], operation="FIR_LOOKUP")
+    assert "record(s)" in answer, "the extractive template still writes the marker"
+    assert "record(s)" not in resolve_plural_markers(answer)
+    assert "2 records" in resolve_plural_markers(answer)
+
+    one, _ = synthesis_agent.synthesize(
+        "what is the status of this FIR", [_ev()], operation="FIR_LOOKUP")
+    assert "1 record in the system" in resolve_plural_markers(one)

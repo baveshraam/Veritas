@@ -169,7 +169,15 @@ def _restore_spans(text: str, mapping: dict[str, str]) -> str:
 _PLURAL_MARKER = re.compile(r"(?:(\d[\d,]*)\s+)?\b(\w+)\(s\)")
 
 
-def _resolve_plural_markers(text: str) -> str:
+def resolve_plural_markers(text: str) -> str:
+    """Turn the codebase's count-agnostic "case(s)" markers into real English.
+
+    Synthesis writes them because it does not always know the count at the point
+    the sentence is assembled. They were only ever resolved on the way into the
+    translation model (NLLB copies the literal "(s)" through untouched, which is
+    how "73 ಪ್ರಕರಣಗಳು(s)" reached a live answer). English readers were left with
+    the marker itself — a form field in the middle of a finding — so the same
+    resolution now runs on the English answer as well.""" 
     def repl(m: re.Match) -> str:
         num, word = m.group(1), m.group(2)
         if num is not None and int(num.replace(",", "")) == 1:
@@ -178,6 +186,10 @@ def _resolve_plural_markers(text: str) -> str:
         return f"{num} {plural}" if num is not None else plural
 
     return _PLURAL_MARKER.sub(repl, text)
+
+
+# The pre-existing private name, kept so nothing that imported it has to change.
+_resolve_plural_markers = resolve_plural_markers
 
 # NLLB uses FLORES-200 codes; IndicTrans2 uses the same script-tagged convention.
 _FLORES = {"en": "eng_Latn", "kn": "kan_Knda"}
@@ -201,7 +213,7 @@ def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise TranslationUnavailable(f"unsupported language pair {src}->{tgt}")
 
-    protected, mapping = _protect_spans(_resolve_plural_markers(text), src)
+    protected, mapping = _protect_spans(resolve_plural_markers(text), src)
     backend = _load()
     result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
     return _restore_spans(result, mapping) if mapping else result

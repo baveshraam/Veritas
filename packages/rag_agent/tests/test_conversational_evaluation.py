@@ -122,7 +122,11 @@ class TestModelDrivenUnderstanding:
             "constraints": {"date_range": "around the same time as this case"},
         })
         focus = _focus(active_person="803")
-        result = interpret("Did anything else happen around the same time?", "en", focus, None)
+        # Deliberately a phrasing the deterministic tier does not confidently
+        # classify: "around the same time" is now a TIMELINE shape, so that query
+        # never reaches the model at all and this test would pass vacuously.
+        result = interpret("Did anything else crop up in that same window?",
+                           "en", focus, None)
         assert result.constraints.get("date_range")
 
     def test_deeper_exploration_request_sets_exploration_direction(self, monkeypatch, dataset):

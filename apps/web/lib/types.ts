@@ -134,6 +134,38 @@ export type CaseRow = {
   modus_operandi: string | null;
 };
 
+/** One case in full, as `GET /fir/{id}` returns it. Names are already masked by
+ *  the officer's rank server-side — this type is what reached the browser, not
+ *  what exists in the record. */
+export type CaseDetail = {
+  fir_id: string;
+  fir_number: string;
+  ps_code: string;
+  district: string;
+  taluk?: string;
+  crime_type: string;
+  date_filed: string;
+  case_status: string;
+  modus_operandi?: string | null;
+  narrative?: string | null;
+  accused: { AccusedName: string | null; AgeYear: number | null; PersonUID: string | number | null }[];
+  victims: { VictimName: string | null; AgeYear: number | null }[];
+  sections: { ActID: string | number; SectionID: string | number }[];
+  [k: string]: any;
+};
+
+/** A person reconstructed from Accused rows by probabilistic record linkage.
+ *  `name_en` is the CANONICAL name — not necessarily the one on any one FIR. */
+export type PersonDetail = {
+  person_id: string;
+  name_en: string | null;
+  name_kn: string | null;
+  criminal_history: boolean;
+  community: number | null;
+  cases: { fir_id: string; fir_number: string; date_filed: string; ps_code: string }[];
+  [k: string]: any;
+};
+
 export type Facet = { name: string; count: number };
 
 export type CaseIndex = {
@@ -172,6 +204,59 @@ export type CaseBoard = {
   items: BoardItem[];
   by_type: Record<BoardItemType, BoardItem[]>;
   total: number;
+};
+
+/* ---------------------------------------------------------------------------
+ * "Why is this here?" — GET /explain. Mirrors provenance.Derivation.
+ *
+ * Four bases, not three: `prediction` is split out from `model` because a forecast
+ * describes something that has NOT happened, which is a different kind of claim from
+ * a hotspot describing where crime was recorded. The console's evidence rail keeps
+ * the three-way record/derived/model split it already has (a forecast still renders
+ * as MODEL there); this is the one surface where the distinction is worth a word.
+ * ------------------------------------------------------------------------- */
+export type DerivationBasis = "record" | "derived" | "model" | "prediction";
+
+export type SourceRecord = {
+  label: string;
+  detail: string;
+  evidence_id: string | null;
+};
+
+export type Derivation = {
+  evidence_id: string;
+  /** What is being asserted — the CLAIM, not the component that produced it. */
+  claim: string;
+  basis: DerivationBasis;
+  basis_meaning: string;
+  /** The specific records underneath it, by their real identifiers. */
+  records: SourceRecord[];
+  /** The derivation, one step per line, in the order the reasoning actually ran. */
+  steps: string[];
+  /** Why this one made the cut — a threshold, a hop limit, a filter, a rank. */
+  qualifies: string;
+  /** What this result does NOT establish. */
+  caveat: string | null;
+  /** Questions the engine can actually answer next about this exact thing. */
+  next_questions: string[];
+  /** The chain could not be reconstructed, and this is saying so. */
+  incomplete: boolean;
+};
+
+/** One ranked hit from GET /search. `why` is the list of fields that actually
+ *  matched — a result list whose ordering cannot be explained is one an officer
+ *  learns to distrust, and "matched: crime, district" is the whole explanation. */
+export type SearchHit = {
+  kind: "case" | "person";
+  id: string;
+  /** What it IS — the crime type, or the person's name. */
+  title: string;
+  /** Where or what kind — district, station, status; or how many cases. */
+  subtitle: string;
+  /** The identifier, set in mono and placed last. */
+  ident: string;
+  why: string[];
+  score: number;
 };
 
 export type AnomalyAlert = {

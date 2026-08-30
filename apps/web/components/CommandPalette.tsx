@@ -1,18 +1,39 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { listCases } from "@/lib/api";
-import type { CaseRow, SessionFocusView } from "@/lib/types";
+import { searchRecords } from "@/lib/api";
+import type { SearchHit, SessionFocusView } from "@/lib/types";
 
-type Row =
-  | { kind: "case"; id: string; title: string; sub: string; run: () => void }
-  | { kind: "action"; id: string; title: string; sub: string; run: () => void };
+type Row = {
+  kind: "case" | "person" | "action";
+  id: string;
+  /** What the row IS, in the officer's language. */
+  title: string;
+  /** Where or what kind — the second line of meaning. */
+  where?: string;
+  /** The identifier, set in mono and placed last. A register is searched by
+   *  crime and place far more often than by an 18-digit number, and leading
+   *  with the number makes every row look identical at a glance. */
+  ident?: string;
+  sub: string;
+  /** Which fields actually matched. A ranked list whose ordering cannot be
+   *  explained is one an officer learns to distrust. */
+  why?: string[];
+  run: () => void;
+};
 
 /** ⌘K — one entry point to every case and every action.
  *
- *  Search is over the case register (the same `/cases` endpoint the register
- *  uses, so it is scoped by rank exactly as the register is) plus the actions
- *  this console genuinely performs. Nothing here is a shortcut to a capability
- *  that does not exist. */
+ *  Search runs through `GET /search` — ranked and typed, cases and people
+ *  together, scoped by rank exactly as the register is. It replaces a filter that
+ *  tested whether the WHOLE query appeared inside ONE field, so "theft mandya"
+ *  matched nothing at all while the register held sixty-one of them; a person
+ *  could not be found here at all, and neither could a section or a station.
+ *
+ *  Every hit says WHY it matched. Ranked results whose ordering cannot be
+ *  explained are results an officer learns to scroll past.
+ *
+ *  The actions below are the ones this console genuinely performs. Nothing here
+ *  is a shortcut to a capability that does not exist. */
 export default function CommandPalette({
   open, onClose, onAsk, onCopilot, onBoard, onExport, canExport, onLanguage, language, focus,
 }: {
@@ -28,20 +49,27 @@ export default function CommandPalette({
   focus?: SessionFocusView;
 }) {
   const [q, setQ] = useState("");
-  const [cases, setCases] = useState<CaseRow[]>([]);
+  const [hits, setHits] = useState<SearchHit[]>([]);
+  const [searching, setSearching] = useState(false);
   const [sel, setSel] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    if (open) { setQ(""); setSel(0); setCases([]); setTimeout(() => inputRef.current?.focus(), 10); }
+    if (open) { setQ(""); setSel(0); setHits([]); setTimeout(() => inputRef.current?.focus(), 10); }
   }, [open]);
 
   useEffect(() => {
-    if (!open || q.trim().length < 2) { setCases([]); return; }
+    if (!open || q.trim().length < 2) { setHits([]); setSearching(false); return; }
+    setSearching(true);
+    // A stale response must never overwrite a fresher one: typing "mandya" fires
+    // six requests and they do not necessarily come back in order.
+    let live = true;
     const t = setTimeout(() => {
-      listCases({ q: q.trim() }).then((i) => setCases(i.cases.slice(0, 6))).catch(() => setCases([]));
-    }, 180);
-    return () => clearTimeout(t);
+      searchRecords(q.trim(), 8)
+        .then((h) => { if (live) { setHits(h); setSearching(false); } })
+        .catch(() => { if (live) { setHits([]); setSearching(false); } });
+    }, 160);
+    return () => { live = false; clearTimeout(t); };
   }, [q, open]);
 
   const firId = focus?.case?.fir_id;
@@ -49,12 +77,19 @@ export default function CommandPalette({
 
   const rows = useMemo<Row[]>(() => {
     const go = (fn: () => void) => () => { fn(); onClose(); };
-    const caseRows: Row[] = cases.map((c) => ({
-      kind: "case" as const,
-      id: c.fir_id,
-      title: c.fir_number,
-      sub: `${c.crime_type} · ${c.district}`,
-      run: go(() => onAsk(`What is the status of FIR ${c.fir_number}?`)),
+    const hitRows: Row[] = hits.map((h) => ({
+      kind: h.kind,
+      id: h.id,
+      title: h.title,
+      where: h.subtitle,
+      ident: h.ident,
+      why: h.why,
+      sub: h.kind === "person" ? "Person" : "Case",
+      // Opening a hit asks the question that hit answers — a case by its number,
+      // a person by their history — rather than dumping the row somewhere.
+      run: go(() => onAsk(h.kind === "person"
+        ? `Does ${h.title} have priors?`
+        : `What is the status of FIR ${h.ident}?`)),
     }));
 
     const actions: Row[] = [
@@ -84,8 +119,8 @@ export default function CommandPalette({
       ? actions.filter((a) => a.title.toLowerCase().includes(needle) || a.sub.toLowerCase().includes(needle))
       : actions;
 
-    return [...caseRows, ...matched];
-  }, [cases, q, firId, person, language, canExport, onAsk, onBoard, onCopilot, onExport, onLanguage, onClose]);
+    return [...hitRows, ...matched];
+  }, [hits, q, firId, person, language, canExport, onAsk, onBoard, onCopilot, onExport, onLanguage, onClose]);
 
   useEffect(() => { setSel((s) => Math.min(s, Math.max(0, rows.length - 1))); }, [rows.length]);
 
@@ -111,29 +146,42 @@ export default function CommandPalette({
           ref={inputRef}
           className="palette-input"
           value={q}
-          placeholder="Search cases and actions, or type a question…"
+          placeholder="FIR number, crime, district, station, section, MO, or a name…"
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={key}
-          aria-label="Search cases and actions"
+          aria-label="Search records and actions"
         />
         <div className="palette-list">
-          {rows.length === 0 && (
+          {searching && rows.length === 0 && (
+            <div className="palette-empty">Searching the register…</div>
+          )}
+          {!searching && rows.length === 0 && (
             <div className="palette-empty">
-              Nothing matches. Press Enter to ask &ldquo;{q.trim()}&rdquo; as a question.
+              No record matches every word of &ldquo;{q.trim()}&rdquo;. Press Enter to
+              ask it as a question instead.
             </div>
           )}
           {rows.map((r, i) => (
             <div key={r.kind + r.id}>
-              {i === 0 && r.kind === "case" && <div className="palette-group label">Cases</div>}
+              {i === 0 && r.kind !== "action" && <div className="palette-group label">Records</div>}
               {i === firstAction && <div className="palette-group label">Actions</div>}
               <button
                 className={`palette-item ${i === sel ? "on" : ""}`}
                 onMouseEnter={() => setSel(i)}
                 onClick={r.run}
               >
-                <span className={r.kind === "case" ? "mono" : ""} style={r.kind === "case" ? { color: "var(--t-1)" } : undefined}>
-                  {r.title}
+                <span className="palette-item-main">
+                  <span className="palette-item-title">{r.title}</span>
+                  <span className="palette-item-where">
+                    {r.where}
+                    {r.why && r.why.length > 0 && (
+                      <>{r.where ? " · " : ""}
+                        <span className="palette-why">matched {r.why.join(", ")}</span>
+                      </>
+                    )}
+                  </span>
                 </span>
+                {r.ident && <span className="mono palette-item-id">{r.ident}</span>}
                 <span className="palette-item-sub">{r.sub}</span>
               </button>
             </div>

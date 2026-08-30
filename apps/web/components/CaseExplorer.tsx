@@ -139,7 +139,10 @@ export default function CaseExplorer({
             onKeyDown={(e) => { if (e.key === "Enter") onAsk(askAbout(c)); }}
             aria-label={`Open case ${c.fir_number}`}
           >
-            <span className="case-no">{c.fir_number}</span>
+            {/* Human meaning first: an officer scans this register for the
+                crime and the place, not for an 18-digit identifier. The number
+                is still on every row, set in mono and right-aligned where a
+                character-by-character comparison is easy — just not leading. */}
             <div className="case-primary">
               <div className="case-type">{c.crime_type}</div>
               <div className="case-where">
@@ -148,6 +151,7 @@ export default function CaseExplorer({
               </div>
             </div>
             <div className="case-mo">{c.modus_operandi ?? ""}</div>
+            <span className="case-no mono">{c.fir_number}</span>
             <div className="case-end">
               <div className="case-acts">
                 <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCopilot(c.fir_id); }}>

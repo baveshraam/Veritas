@@ -14,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 602 green (`pytest --collect-only -q` for the current
+- **Tests**: `python -m pytest` — 740 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -308,6 +308,29 @@ the available records"**. It never fabricates on empty evidence. This is the str
 trustworthy-for-law-enforcement property in the system, and it is a named, published pattern
 rather than an improvised safeguard.
 
+### Provenance — `provenance.py`
+Every result a specialist produces can be asked **"why is this here?"**, and the answer is
+about the claim, not the pipeline: the records underneath it, how they were combined, why
+this one qualified, and what it does not establish (§8). Dispatch is on the `evidence_id`
+prefix each producing branch already writes, so a new retriever gets an explanation by
+following the same convention it already follows to be citable. Two rules: the chain is
+derived from the record layer on demand, so it can never go stale against it; and where it
+cannot be reconstructed it says so — a fabricated chain would defeat everything the CRAG
+evaluator above is for.
+
+**Two agreement checks run before an answer ships.** A structured field beats a generated
+sentence: prose that describes a case's status differently from its `CaseStatusName` carries
+a correction naming the recorded status, and a district the prose names that neither a cited
+record nor the question mentions is flagged as unsupported. Both are narrow on purpose — an
+officer told "the record says otherwise" about a correct sentence learns to ignore the
+warning, so anything not decidable from a column the cited records actually carry is left
+alone.
+
+**A bounded result says it is bounded.** `describe_result_set` states what KIND of set is on
+screen — sampled, filtered, ranked, exhaustive, modelled — from the same `result_context` the
+producing branch already records. Five cases listed under a question that asked for "the
+cases" reads as all of them, and that is the quiet failure, not a loud one.
+
 ### Agents
 Orchestrator · HippoRAG/ToG retrieval · SQL Agent (templates) · Graph Agent · Vector Agent
 (hybrid dense + lexical) · Prediction Agent · Evidence Synthesis · Translation · Voice.
@@ -405,50 +428,79 @@ every 12 hours, because a tamper check nobody runs is not a tamper check.
 
 ## 8. Console — `apps/web/`
 
-An investigative intelligence workstation (see v18): a restrained enterprise dark theme,
-~90% neutral, hierarchy from layout rather than from cards. A global bar, a persistent
-investigation header carrying the workspace tabs, and three hairline-divided columns:
+An investigative intelligence workstation (v18, productized in v19). **Light is the
+default**: a warm off-white ground, white work surfaces, cool slate rules and deep
+navy text — the register of an institutional record system, read for hours next to
+paper. Dark remains available as one token block (`data-theme="dark"`), offered in
+System status; there is no second design. IBM Plex in three roles, Noto Sans Kannada
+for Kannada, mono reserved for record identifiers.
 
-- **Left — copilot**: streaming SSE, push-to-talk with a live waveform, EN/KN toggle. An
-  answer renders as a *finding* — the claim with its clickable `[n]` citations, a
-  structured module where the result has structure (the strongest connections in a
-  network), and a support strip — not as a chat bubble.
+A global bar, a persistent investigation header carrying the workspace tabs, and
+three hairline-divided columns:
+
+- **Left — copilot**: streaming SSE, push-to-talk with a live waveform, EN/KN toggle.
+  An answer renders as a **finding**, not a paragraph: the engine's own "Based on N
+  records" line becomes a caption, each `[n]` claim becomes a row anchored on its
+  clickable citation chip, and "no inference has been added" becomes a footnote.
+  Where the answer produced a network, a module states the two populations apart —
+  who the records NAME versus who was reached through shared cases.
 - **Centre — workspace**: one primary surface, chosen by the tab in the investigation
-  header (Overview · Timeline · Network · Geography · Financial · Board). A new answer
-  pulls the workspace to the view it produced; an empty view hands over the exact
-  question that fills it. Each carries an analysis header stating the figures the
-  visualization contains — *"600 cases located · 4 hotspots · 1.00 peak density"*.
-- **Right — evidence**: the sources as a SET first ("Moderate · 5 authoritative records ·
-  4 model outputs"), then compact rows. A row opens the **inspector** — the full record,
-  its provenance, what its confidence number actually measures, and the query that
-  retrieved it — over the workbench, never navigating away from the investigation.
+  header (Overview · Timeline · Network · Geography · Financial · Board). With a case
+  open, **Overview is that case's overview** — narrative, facts, the people (each
+  as-filed name linked to the identity resolution matched it to), what is still open,
+  the most recent developments, and the questions to ask next; the register is one
+  click away. A new answer pulls the workspace to the view it produced, including
+  when the answer is a *negative* finding ("no outbound trail"), which lands in
+  Financial rather than leaving the register on screen.
+- **Right — evidence**: the sources as a SET first ("Moderate · 5 authoritative
+  records · 4 model outputs"), then compact rows. With nothing cited the column
+  narrows to a strip rather than spending a fifth of the workstation saying so. A row
+  opens the **inspector** — the full record, its provenance, **why it is here**, what
+  its confidence number actually measures, and the query that retrieved it.
 
-**Provenance is a visual primitive**, and it is the same one on every surface — evidence,
-board, timeline, briefing, chart legends: ■ RECORD (stated in the file) · ◆ DERIVED
-(inferred by Veritas) · ▲ MODEL (computed). A model estimate must never be able to look
-like a record, so it gets its own channel rather than a word inside body text. The three
-things `confidence` can mean are named apart for the same reason: **evidence support** ≠
-**text match** ≠ **model output**.
+**Any result can be asked WHY** (v20 — `packages/rag_agent/rag_agent/provenance.py`,
+`GET /explain`, `apps/web/components/WhyChain.tsx`). Point at an associate, a case, a
+hotspot, a timeline event, a transfer, a lead, a forecast — by clicking it or by
+typing *"why is this person connected?"* — and the answer is the same five things in
+the same order: **CLAIM · BASIS · RECORDS · DERIVATION · WHY IT QUALIFIES**, plus what
+it does NOT mean and the questions the engine can actually answer next about it. It
+names the actual records ("both named as accused on FIR 100303002202400003, Theft,
+Yadgir, 13 Jul 2024"), never the pipeline; where a chain cannot be reconstructed it
+says so rather than inventing one. A selected node or map case is an investigation
+entry point, offering only actions the backend supports.
 
-**Reasoning Trace panel** (expandable, off by default) renders the agent trace in plain
-language — *"Orchestrator → HippoRAG retrieval (0.4s) → ToG deep-dive (low confidence) →
-Evidence Evaluator: 3 corroborating records → Synthesis."* Explainability made visible rather
-than merely logged. While a turn runs, the same trace drives a four-stage progress readout
-(understanding → retrieving → verifying → preparing) instead of a bare spinner.
+**Provenance is a visual primitive**, and it is the same one on every surface —
+evidence, board, timeline, overview, briefing, chart legends: ■ RECORD (stated in the
+file) · ◆ DERIVED (inferred by Veritas) · ▲ MODEL (computed). A model estimate must
+never be able to look like a record, so it gets its own channel rather than a word
+inside body text. The three things `confidence` can mean are named apart for the same
+reason: **evidence support** ≠ **text match** ≠ **model output**.
 
-**Refusal is a designed state**, not an error: a calm amber-ruled panel saying what could
-not be established and what that does and does not mean. A transport or engine *failure*
-is a separate, genuinely red state — the two must never look alike.
+**The finding leads; the measurement follows** (`apps/web/lib/metrics.ts`). A
+headline is what the number MEANS — "Severe concentration", "≈74 cases projected",
+"Central to this network" — with the figure printed underneath it ("Relative density
+· 1.00", "Expected daily range · 2.1–2.9", "Network influence · 0.010"). Nothing is
+hidden; a band is a reading of a number still on screen.
+
+**Reasoning Trace panel** (expandable, off by default) renders the agent trace in
+plain language. While a turn runs, a four-stage progress readout names what is
+happening — understanding → retrieving → verifying → preparing — and deliberately
+does NOT print the trace's raw `detail`, which is written for an engineer ("Semantic
+model (QuickML) — no familiar phrasing matched…") and reads to an officer as *the
+system did not understand you* while the system is in fact understanding them. That
+text is one click away in the trace, where opening it is a deliberate act.
+
+**Refusal is a designed state**, not an error: a calm amber-ruled panel saying what
+could not be established and what that does and does not mean. A transport or engine
+*failure* is a separate, genuinely red state — the two must never look alike.
 
 The basemap is a real MapLibre style served by **OpenFreeMap** (`tiles.openfreemap.org`,
-OSM-derived, no API key or registration — the fifth documented exception, §2). What crosses
-the network is a tile z/x/y for the current viewport, never an FIR's exact coordinates or any
-investigative text; a viewport request reveals district-level location at most, which is
-already non-sensitive metadata (every FIR's District is a plain ER column). Veritas's own
-overlays — FIR points, hotspot density polygons, district reference labels, legend, scale —
-render on top, unchanged by the swap.
-
----
+OSM-derived, no API key or registration — the fifth documented exception, §2). What
+crosses the network is a tile z/x/y for the current viewport, never an FIR's exact
+coordinates or any investigative text; a viewport request reveals district-level
+location at most, which is already non-sensitive metadata (every FIR's District is a
+plain ER column). Veritas's own overlays — FIR points, clusters, hotspot density
+polygons, district reference labels, legend, scale — render on top.
 
 ## 9. Responsible AI
 
@@ -1232,3 +1284,327 @@ volume justifies the training cost.
     pushing to the live URL is the operator's call. The backend is untouched, so the 602
     Python tests are unaffected and were not re-run against a change that cannot reach
     them. `apps/web` has no test suite of its own and this pass did not add one.
+- **v19 (productization) — the console stops looking like a data-science demo, and
+  four defects the pass surfaced by driving it rather than reading it.** Frontend,
+  plus three small, narrowly-scoped backend text/routing fixes named below. No RBAC,
+  evidence-semantics or orchestration change; no new endpoint.
+  - **Light is the default.** The whole theme is one `:root` token block — a warm
+    off-white ground, white work surfaces, cool slate rules, deep navy text, ochre
+    for identity and a restrained blue for action. Dark is the same block redefined
+    under `[data-theme="dark"]` and offered in System status, so there is one design,
+    not two. Every hardcoded colour left in the stylesheet was tokenised on the way
+    (scrims, shadows, the map's floating plates, the MapLibre control icons), and
+    `viz/palette.ts` now READS those tokens at render time instead of carrying a
+    second copy of the palette — which is what makes the charts follow the theme.
+    **Noto Sans Kannada** joins IBM Plex, with the extra line-height Kannada needs;
+    `:lang(kn)` applies it wherever a Kannada answer renders.
+  - **The finding leads; the measurement follows** (`apps/web/lib/metrics.ts`, one
+    module every surface reads). "0.010" became "Central to this network · Network
+    influence · 0.010"; "1.00 peak density" became "Severe concentration · Relative
+    density · 1.00"; "2.5 mean FIRs/day" became "≈74 cases projected · Expected daily
+    range · 2.1–2.9" — which is the figure an officer actually plans against. Nothing
+    is hidden: a band is a reading of a number still printed beside it.
+  - **The graph and the answer stopped disagreeing** (`apps/web/lib/network.ts`). An
+    answer would say "two people are accused in this FIR" while the graph beside it
+    drew forty, with nothing on screen reconciling them — an officer reads that as
+    forty accused, which is an accusation this platform has no basis for. The two
+    populations are now counted and captioned apart, from data the payload already
+    carried: `accused:<PersonUID>` evidence ids are the people the FILE names (a
+    record fact, drawn as the console's square RECORD glyph), and everyone else was
+    reached through shared cases (derived, drawn as a circle). Where the question was
+    about a person rather than a case the file names nobody, so the front group is
+    one-hop co-offenders — captioned "offended alongside X", never "named in the
+    records", because those are different claims.
+  - **Overview is the case's overview once a case is open** (`CaseOverview.tsx`) —
+    narrative, facts, the people, what is still open, the most recent developments,
+    and the questions to ask next, all from `/fir`, `/board` and `/timeline/case`. It
+    also closes **BUG-026**, open since v13: the file records "Suma Nadkarni D/o
+    Eshwar" while every derived surface calls the same PersonUID "Soom Nadkarni", and
+    nothing linked them. The two names now sit together, the second labelled Derived
+    and explained. The register is one click away, not replaced.
+  - **Progress stopped exposing the engine room.** The trace's raw `detail` is
+    written for an engineer — "Semantic model (QuickML) — no familiar phrasing
+    matched, asking the model to interpret this question" — and printing it mid-answer
+    reads as *the system did not understand you* while the system is understanding
+    them. The four progress stages now carry their own plain-language notes; the
+    detail is unchanged and one click away in the reasoning trace.
+  - **Four defects found by driving the console, not by reading the diff:**
+    1. **`record(s)`, `hop(s)`, `case(s)` reached English readers.** v17 fixed this
+       for Kannada only, by resolving the markers on the way INTO the translation
+       model. English answers shipped the marker itself — a form field in the middle
+       of a finding. `resolve_plural_markers` is now applied in `node_synthesize` to
+       the answer and to the evidence lines beside it, for every language.
+    2. **The network join silently matched nothing.** Node ids arrive as numbers
+       (`{"id": 803}`) while an evidence id is the string `"accused:803"`, so the two
+       people a case file actually named rendered as "reached through shared cases" —
+       the exact misattribution the module exists to prevent. Ids are normalised to
+       strings once, at the top of the component.
+    3. **A negative finding left the register on screen.** "Where did her money go?"
+       correctly answers "no outbound trail was found", produces no visualization, and
+       so left the workspace showing ten thousand unrelated cases. A no-visualization
+       answer now routes by its evidence ids (`flow:` → Financial, `hotspot:` →
+       Geography, …) and the Financial view renders the negative finding AS a finding,
+       distinct from "nothing has been asked yet".
+    4. **Four natural phrasings of one question went to four different operations** —
+       measured against the LIVE deployment, so the semantic interpreter was not
+       rescuing them either: `"show everyone involved"` → CRIME_SEARCH, `"Who is
+       connected?"` and `"Anyone connected to this case?"` → CASE_CONTEXT, `"Who does
+       she run with?"` → NEXT_STEPS. Fixed as a question SHAPE (a who-word plus an
+       involvement word), alongside `intents.py`'s existing shape patterns, rather
+       than by adding one keyword per phrasing forever — and the same shape with a
+       NAMED subject ("who is connected to Usha Naika") routes to PERSON_NETWORK,
+       because that is a different population. 26 new tests, including the boundaries
+       it must not cross.
+  - **Also**: the case register and ⌘K lead with crime and place, identifier second;
+    sign-in states what each rank can see, because rank is the scope of every answer
+    that follows; the evidence column narrows to a strip when nothing is cited rather
+    than spending a fifth of the workstation on "no sources yet"; charts animate in
+    260ms instead of a second; `sourceLabel` stopped rendering "Fir record".
+  - **One foot-gun closed on the way out**: `apps/web/.env.local` is the right way to
+    point `next dev` at a local API (this pass needed one), and Next reads it during
+    `next build` too — so on a developer machine that has one, a console deploy would
+    have quietly shipped `http://localhost:8000` to every officer's browser. v9's
+    guard in `scripts/deploy-console.sh` catches it; the script now also pins
+    `NEXT_PUBLIC_API_URL` so it cannot happen at all.
+  - **Verified by driving the real console over CDP at 1600×1000**, against a local
+    API on the same 10,000-case dataset (16,918 graph nodes, 13,835 indexed docs): 19
+    states in `docs/screenshots/2026-08-29-productization/`, zero console errors.
+    `npx tsc --noEmit` clean; the static export re-verified against both v9
+    invariants (`/app`-prefixed assets, no `localhost` in the bundle). Both automated
+    live-behaviour gates re-run against the changed backend: `judge_flows.py` 26/26
+    turns, `verify_live_deployment.py` 36/36 adversarial scenarios. Test suite: **631
+    passed, 2 skipped** (27 new this pass).
+  - **Not done this pass, named rather than silently skipped**: not deployed — the
+    console needs `scripts/deploy-console.sh` and the three backend fixes need the
+    relay pipeline; both are the operator's call. `apps/web` still has no test suite
+    of its own and this pass did not add one — the frontend logic that broke
+    (`lib/network.ts`'s id join) was caught by driving the console, which is the
+    check this repo actually runs. QuickML's endpoint key, PDF export's SmartBrowz
+    identity block and the `dowhy` exclusion are unchanged and were not re-
+    investigated: no new information surfaced that would change any of them.
+
+- **v20 (every important result becomes questionable) — an investigator can point at
+  any derived result and ask WHY, and get an answer about the CLAIM rather than about
+  the software.** The console could already show what was found and which records were
+  cited. What it could not do was let an officer point at one line — one associate, one
+  similar case, one hotspot, one timeline event — and ask *"why is this one here?"*
+  - **The one place that question was already answered was answering the wrong
+    question.** `EXPLAIN_REASONING` restated the agent trace: *"HippoRAG retrieval:
+    Personalized PageRank from 15 seeded nodes; Cypher Agent: 12 associate(s) within
+    policy depth"*. Every word true, none of it what was asked. An officer asking why
+    two people are connected wants the FIRs they are both named on.
+  - **`packages/rag_agent/rag_agent/provenance.py`** is the one mechanism. Given any
+    evidence item it returns the same five things in the same order — CLAIM · BASIS
+    (record / derived / model / prediction) · RECORDS · DERIVATION · WHY IT QUALIFIES —
+    plus what the result does NOT mean, and the questions the engine can actually answer
+    next about it. Dispatch is on the `evidence_id` prefix, a convention three other
+    functions in `orchestrator.py` already parse, so this reads what is already there
+    rather than adding a channel that can drift out of step with it. Twenty-two kinds
+    have handlers, and a test enumerates the prefixes out of the source, so a new
+    producer cannot add one without noticing. Explanations are derived on demand, never
+    stored: the Data Store's text column is already tight, and an explanation computed
+    from the record layer cannot go stale against it. Where a chain genuinely cannot be
+    reconstructed it says so (`incomplete`) — a plausible-sounding fabricated chain is
+    the exact failure this platform exists to prevent.
+  - **The flagship is the co-offending chain.** "Why is this person connected?" now
+    answers with the actual path — *"Usha Naika and Soom Nadkarni are both named as
+    accused on FIR 100303002202400003 (Theft, Yadgir, filed 13 Jul 2024 — status
+    Acquitted); FIR 100242402202400033 …"* — recomputed from the graph already in
+    memory, policy-filtered per hop (a path may legitimately run through another
+    station's case; the hop is still reported, the case is named only where the officer
+    may see it). This is the claim the organizers' ER cannot make at all (§0), and the
+    one an officer is most entitled to interrogate before acting on it.
+  - **One explanation, two ways in.** `GET /explain` (new router) and the typed question
+    call the same function, so a result explained by clicking and the same result
+    explained by asking cannot give two different accounts. The console renders it
+    through one component (`WhyChain.tsx`) in the evidence inspector, on a selected
+    graph node, and on a selected case on the map.
+  - **Click → investigate**: a selected map case and a selected graph node became
+    investigation entry points — what this is, why it appears, the chain behind it, and
+    only actions the backend actually supports (priors · timeline · trace money ·
+    related cases · who was involved · add to board).
+  - **Result truth**: every bounded, ranked or modelled answer now states what KIND of
+    set it is — *"Result set: SAMPLE — 5 of 73 shown, filtered: every case matching the
+    filters in your question, within your access scope"*. The quiet failure is the
+    dangerous one: five cases under a question that asked for "the cases" reads as all
+    of them.
+  - **Contradiction checking**: the structured field beats the generated sentence. A
+    case whose status is `Convicted` under prose saying "the investigation is being
+    carried out" now carries a correction naming the recorded status, and a district the
+    prose names that neither a cited record nor the question mentions is flagged. The
+    prose is never rewritten — string surgery on a generated sentence produces a
+    sentence nobody wrote and nobody can audit; naming the record's own value beside it
+    leaves both on screen.
+  - **Question shapes, not one keyword at a time**: "why is this person connected", "why
+    is that a hotspot", "why is this case in the timeline", "how are you deriving all
+    these", "show me the chain", a bare "why these?" — each used to score somewhere
+    plausible and wrong ("connected" on PERSON_NETWORK, "hotspot" on HOTSPOT), running a
+    FRESH search for the thing already on screen. `TIMELINE_CONNECTION` is now checked
+    BEFORE the explanation branch, because "how are these connected" asks about the
+    entities and is a real retrieval.
+  - **Nine defects found by driving it, not by reading the diff** — each by typing the
+    brief's own flows against a live API and clicking the console over CDP:
+    1. **A false contradiction flag on a correct answer.** The district check read
+       `sql_query_results`, which the timeline, graph and financial branches never
+       populate — so a timeline citing five real FIRs in five real districts was told
+       those districts appear "in none of the records cited here", with them printed in
+       the citations directly above. A false positive here is expensive: an officer told
+       the record says otherwise about a correct sentence learns to ignore the warning.
+    2. **Citation chips disagreed with the answer beside them.** `resolve_plural_markers`
+       ran AFTER citations were built from the same evidence content, so the answer read
+       "1 hop away" while its own chip read "1 hop(s) away". Resolved before synthesis.
+    3. **A truncated turn silently downgraded a RECORD to DERIVED.** `sessions._pack`
+       dropped `evidence_items` wholesale over the text-column budget, and the timeline
+       explanation read a missing `authoritative` as False — so a recorded transfer
+       explained itself as a probabilistic identity inference. `_pack` now sheds BODIES
+       and keeps IDENTITY (a middle tier: ids, source type/id, authoritative,
+       confidence), and the event TYPE decides where the flag is genuinely absent.
+    4. **"Where are the related cases?" refused with the cases on screen.** It scored
+       HOTSPOT on the bare word "where" and ran cluster detection over a defaulted
+       district; and once routed correctly, it read only the immediately previous turn —
+       which was a meta-turn re-showing the same result. It now reads the last answer
+       that actually SHOWED cases, and reads a case out of a timeline event's `ref_id`
+       as well as out of a `fir:` citation.
+    5. **"Why is that a hotspot?" reported the previous answer as having nothing to
+       explain.** Two causes at once: "that A hotspot" matched no demonstrative noun, and
+       the whole-answer branch read `evidence_items` with no citation fallback.
+    6. **A two-person answer was explained one person at a time.** Grouping by kind is
+       right for nine near-identical hotspots and wrong for two named people; three or
+       fewer items are now each explained.
+    7. **The chain printed "1 step(s) of co-accusation away"** — the marker convention is
+       resolved on the synthesis path, and a chain reached by clicking never goes through
+       it.
+    8. **A multi-hop record list over-claimed.** Nine FIRs printed flat under a two-hop
+       path read as "these nine connect you to this person"; the far person appears on
+       only the last hop's cases. Each row now says which pair it links.
+    9. **Selecting a cited case lit up no point on the map.** The same FIR arrives as
+       `fir:1194` from the structured layer and `vec:fir_narrative:1194` from semantic
+       search; the map read only the first, so on a hotspot answer — where every cited
+       case comes from semantic search — the console behaved as though the case it had
+       just cited were not on the map in front of it. One shared `caseIdOf()` reads both.
+  - **Verified by driving the real thing.** The brief's nine flows run against a local
+    API on the full 10,000-case dataset (16,918 graph nodes, 13,835 indexed docs), and
+    the console driven over CDP at 1600×1000 with real `Input.dispatchMouseEvent`
+    clicks — including a genuine force-layout graph-node click, which opened the card and
+    traced the chain through named FIRs. Zero console errors. `npx tsc --noEmit` clean.
+    Screenshots: `docs/screenshots/2026-08-29-explainability/`. Test suite: **670 passed,
+    2 skipped** (39 new).
+  - **Not done this pass, named rather than silently skipped**: not deployed — the
+    console and the API each need their own pipeline, and that is the operator's call.
+    The financial (Sankey) and trend views did not get a click-to-investigate panel of
+    their own; the evidence inspector covers the same need for every evidence type they
+    produce, and a view-native click target would be purely additive. `apps/web` still
+    has no test suite of its own — the frontend logic that broke this pass (the
+    `vec:`/`fir:` id join) was caught by driving the console, which remains the check
+    this repo actually runs.
+
+- **v21 (the questions nobody had typed) — a 1,701-input corpus of what an officer and
+  a judge actually ask, and the ~430 of them the system was answering wrongly.**
+  This pass started by conversing with the engine instead of reading it. Six questions
+  in, an entire class of ordinary request turned out to be answered with a count of
+  every case in the state plus five arbitrary FIRs — cited, confident, and about
+  something else.
+  - **CRIME_SEARCH was a black hole.** It read two qualifiers (crime type, district)
+    and dropped every other word WITHOUT SAYING SO. Measured live: *"How many cases
+    are pending in Mandya?"* → 263 (every Mandya case, of every status); *"Show me
+    cases under section 379"* → 10,000 (every case in the state); *"Show me all cases
+    from PS 2201"*, *"cases filed in June 2026"* → the same 10,000. Answering a
+    different question than the one asked, in silence, is the worst thing this layer
+    can do short of inventing a record. `sql_agent` now filters on **case status,
+    police station, IPC section and date window** through ONE shared clause builder
+    (`_filters`) that both the count and the sample list use — two copies of the same
+    WHERE clause is how a count stops describing the list printed under it — and every
+    answer states the filters it applied. A section filter selects the offence GROUP
+    that carries the section (the ER attaches sections to a crime head, not to a case)
+    and says so, rather than letting an officer discover it by noticing a burglary in
+    a list of thefts.
+  - **Two whole question classes had no home at all**, and both are the first things
+    an officer asks. `OFFENDER_RANKING` — *"who is the most active offender in
+    Mandya"*, *"top 5 habitual offenders"* — ranks people by how many cases NAME them,
+    a recorded fact, never by PageRank or risk score, which are derived and modelled
+    and do not mean "most active". This is the identity layer's payoff stated plainly:
+    on the organizers' ER the question cannot be asked at all. `CASE_STATS` —
+    *"conviction rate"*, *"which station has the most pending"*, *"most common
+    offence"* — computes the rate over cases that actually reached a verdict, prints
+    the denominator, and declines to rank IPC sections because the schema attaches
+    them to offence types rather than to cases.
+  - **"Does she have priors?" opened with a cheating case in Davanagere.** Twelve FIRs,
+    no name, no count, no answer to the yes/no question actually asked. It now opens
+    *"Yes — Usha Naika is named as accused on 19 cases on record within your access
+    scope, of which 6 ended in conviction"*, with the cases as the working beneath it.
+  - **The search box could not do two words.** `/cases?q=` tested whether the WHOLE
+    query appeared inside ONE field, so *"theft mandya"* matched nothing while the
+    register held sixty-one of them; a person could not be found at all, and neither
+    could a section or a station. New `rag_agent/search.py` + `GET /search`: tokenised,
+    every word must match SOMETHING across fields, ranked by WHERE it matched (exact
+    FIR number ≫ structured field ≫ narrative/MO), people included and scoped so a
+    name cannot be confirmed by an officer who may read none of their cases. Every hit
+    carries **why** it matched, because a ranked list whose order cannot be explained
+    is one an officer scrolls past. The register's own `q` uses the same tokenizer.
+  - **Push-to-talk was a text button that said "Speak" and then "Stop".** Recording
+    REPLACED the question field, so anything typed vanished; "Stop" SENT, so a
+    recording that had gone wrong could not be abandoned; nothing said how long it had
+    been listening; a denied microphone left the button reading "Stop" over a
+    recording that did not exist; and nothing announced any of it. `VoiceRecorder.tsx`
+    is a mic button that becomes a recording BAR — live level meter, elapsed timer,
+    **Discard** and **Send**, a 60-second cap, real permission handling, an aria-live
+    status — and the question field stays where it is.
+  - **The corpora.** `tests/officer_inputs.py` (1,115 lines, generated from the
+    dataset's own districts, offences, sections and stations, plus a curated awkward
+    half) and `tests/judge_inputs.py` (586 lines of what a magistrate, defence counsel
+    or supervising officer asks: *how did you decide*, *on what basis*, *could this be
+    wrong*, *is your output evidence*, *do you decide guilt*). Checked as PROPERTIES —
+    each line must reach an operation that would be a DEFENSIBLE reading of it, never
+    a confidently wrong one. **88 of the officer corpus and 338 of the judge corpus
+    misrouted on first run.** Both are 0 now.
+  - **What those 426 misroutes actually were**, by class: "convicted" was a
+    PERSON_HISTORY keyword and is a case STATUS, so *"show me convicted theft cases in
+    Bagalkot"* returned somebody's criminal record; word-bounded keywords never matched
+    their own plurals, so "area"/"transfer"/"trend" missed *"areas"*, *"transfers"*,
+    *"what are the crime trends"*; `criminals?` matched the first word of *"Criminal
+    Breach of Trust"*, turning a district ranking into a leaderboard of people; a bare
+    *"Hurt in Ballari"* matched nothing at all, because CRIME_SEARCH's keyword list
+    carries three offence names out of twenty; and the whole explanation surface was a
+    list of phrasings, so *"How did you determine this?"*, *"On what basis?"*, *"Where
+    does this come from?"* (a hotspot map, on the word "where") and a bare *"why?"*
+    each ran a FRESH search for the thing already on screen.
+  - **`_EXPLAIN_REASONING` and `_EVIDENCE_FOR` are shapes now, not phrase lists** —
+    built from a named derivation-verb class and a demonstrative class, with a
+    `_WORLD_QUESTION` guard so *"why is crime higher in this district"* stays causal
+    analysis rather than becoming provenance.
+  - **A question about this system's STANDING gets its own answer.** *"Do you decide
+    guilt?"*, *"Is your output evidence?"*, *"Can this be used in court?"*, *"Is this
+    biased?"*, *"Do you ever guess?"*, *"Is there an audit trail?"* all reached UNKNOWN
+    or, worse, a retrieval — *"Is this biased?"* was answered with a person's priors.
+    They now route to CAPABILITY **and** each gets a specific paragraph
+    (`_STANDING_ANSWERS`), because a judge handed a feature list in reply to "do you
+    decide guilt" has been answered in form and not in substance.
+  - **"Who would you arrest?" was answered, not refused** — the suspect-nomination
+    guard needed the word "guilty" or a completed verb of commission, and missed every
+    imperative form.
+  - **A chain of audit questions walked backwards one turn at a time.** *"How did you
+    decide this?"* then *"Could this be wrong?"* explained the EXPLANATION, not the
+    result both were about. `_last_substantive_turn` skips meta-turns, re-classifying
+    each stored turn from its OWN query — a meta-turn deliberately carries the prior
+    substantive request forward under `last_request`, so reading `result_context`
+    reports it as substantive.
+  - **Also fixed by driving it**: a statistics answer captioned an unfiltered 263 as
+    "in Mandya · status Convicted" because "conviction rate" was read as a status
+    FILTER rather than as the metric's name; the sections-unavailable note promised an
+    offence-type breakdown and then printed the status one; `crime_count:any:any` was
+    the evidence id for two unrelated searches; rankings and statistics were padded
+    with five irrelevant semantic hits, burying "conviction rate 59%" at citation [2]
+    of 7; the recording bar overflowed a 390px column and pushed the Ask button off
+    the panel; and the palette rows crammed six fields onto one line, truncating the
+    location an officer scans for.
+  - **Provenance handlers added** for every new evidence kind — `offender:`,
+    `ranking:`, `stats:`, `priors:` — so the enumerate-the-prefixes test still passes
+    and *"why is this person top of the list?"* answers with the count and what it is
+    a count OF, never with the model's opinion.
+  - **Verified by conversing, not by reading**: multi-turn sessions driven against a
+    local API on the full 10,000-case dataset, and the console driven over CDP for the
+    voice control (typed text survives a recording; Discard sends nothing) and the
+    search palette (*"theft mandya"* → eight real Mandya thefts, each captioned
+    "matched crime, district"). Zero console errors; `npx tsc --noEmit` clean.
+    Screenshots: `docs/screenshots/2026-08-30-voice-and-search/`.
+  - **Test suite: 740 passed, 2 skipped** (70 new).

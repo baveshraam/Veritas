@@ -21,6 +21,7 @@ from policy import mask_person_name
 
 from . import board as board_agent
 from . import intents
+from . import provenance
 from . import semantic_interpreter
 from . import timeline as timeline_agent
 from .agents import (
@@ -74,6 +75,11 @@ _SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
     # retrieval) settles the same way; context-free SIMILAR_CASES (no open case)
     # produces no specialist output and still falls through to generic search.
     "SIMILAR_CASES",
+    # A statistic and a ranking are complete answers computed over the whole scoped
+    # case set. Semantic neighbours cannot corroborate a count, and appending five
+    # narratives to "conviction rate 59%" only buries it — measured live, where the
+    # rate arrived as citation [2] of 7 with five unrelated assault cases under it.
+    "OFFENDER_RANKING", "CASE_STATS",
 }
 
 
@@ -500,6 +506,34 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
     if intent in ("PERSON_HISTORY", "RISK") and pid:
         rows = sql_agent.person_record(pid)
         state.sql_query_results += rows
+        # "Does she have priors?" is a yes/no question, and the answer opened with a
+        # cheating case in Davanagere — twelve FIRs, no name, no count, no verdict on
+        # the question actually asked. The header is the answer; the cases are the
+        # working. Emitted first so it is citation [1] (see _rank_evidence).
+        who = mask_person_name(role, _person_name(pid) or f"person {pid}")
+        if rows:
+            convicted = sum(1 for r in rows if (r.get("case_status") or "") == "Convicted")
+            kinds = sorted({r.get("crime_type") for r in rows if r.get("crime_type")})
+            out.append(EvidenceItem(
+                evidence_id=f"priors:{pid}", source_type="CRIMINAL_RECORD",
+                source_id=str(pid),
+                source_query="vx_accused_identity -> Accused -> CaseMaster, per person",
+                content=(f"Yes — {who} is named as accused on {len(rows)} case(s) on "
+                         f"record within your access scope"
+                         + (f", of which {convicted} ended in conviction" if convicted
+                            else ", none of which has ended in a conviction")
+                         + (f". Offences: {', '.join(kinds[:6])}" if kinds else "")
+                         + ". Each case is cited below."),
+                confidence=0.96, authoritative=True))
+        else:
+            out.append(EvidenceItem(
+                evidence_id=f"priors:{pid}", source_type="CRIMINAL_RECORD",
+                source_id=str(pid),
+                source_query="vx_accused_identity -> Accused -> CaseMaster, per person",
+                content=(f"No — no case within your access scope names {who} as "
+                         f"accused. This is a checked absence, not a failed search; a "
+                         f"higher rank may see cases you cannot."),
+                confidence=0.9, authoritative=True))
         out += [_fir_evidence(r) for r in rows]
         _trace(state, "SQL Agent", f"{len(rows)} criminal-record row(s)", t0)
         if intent == "RISK":
@@ -661,20 +695,75 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         date_after = ds.to_dt(state.constraints.get("date_after"))
         date_to = date_before.date() if date_before else None
         date_from = date_after.date() if date_after else None
-        count = sql_agent.count_firs(role, ps, crime_type=ct, district=district_name,
-                                     date_from=date_from, date_to=date_to)
-        scope_bits = [x for x in (ct, f"in {district_name}" if district_name else None) if x]
-        scope_desc = " ".join(scope_bits) if scope_bits else "within your access scope"
+        # The qualifiers an officer actually attaches to a case search. Every one of
+        # these used to be dropped in silence, so "how many cases are pending in
+        # Mandya" answered 263 — every Mandya case, of every status — and "show me
+        # cases under section 379" answered 10,000. See semantic_interpreter's own
+        # note on why answering a different question without saying so is the worst
+        # thing this layer can do short of inventing a record.
+        q = state.original_query or ""
+        status = state.constraints.get("case_status") or \
+            semantic_interpreter.case_status_from_query(q)
+        section = state.constraints.get("section") or \
+            semantic_interpreter.section_from_query(q)
+        station = state.constraints.get("ps_code") or \
+            semantic_interpreter.station_from_query(q)
+        if not (date_from or date_to):
+            date_from, date_to = semantic_interpreter.date_window_from_query(q)
+
+        filters = dict(crime_type=ct, district=district_name, date_from=date_from,
+                       date_to=date_to, case_status=status, ps_code=station,
+                       section=section)
+        count = sql_agent.count_firs(role, ps, **filters)
+
+        # What was actually filtered on, stated. The officer has to be able to see
+        # that the number in front of them answers the question they asked — and,
+        # where a qualifier was understood, that it was applied rather than assumed.
+        applied = [x for x in (
+            ct, f"in {district_name}" if district_name else None,
+            f"status {status}" if status else None,
+            f"section {section}" if section else None,
+            f"police station {station}" if station else None,
+            f"from {date_from:%d %b %Y}" if date_from else None,
+            f"before {date_to:%d %b %Y}" if date_to else None,
+        ) if x]
+        scope_desc = (" · ".join(applied) if applied
+                      else "of every kind, in every district")
+        # The id has to distinguish two different searches, because it is what a board
+        # pin, a citation click and an explanation all address. It used to carry only
+        # crime type and district, so "cases from PS 2201" and "cases filed in June
+        # 2026" both landed on `crime_count:any:any` — two unrelated counts under one
+        # identity.
+        count_id = "crime_count:" + ":".join(
+            (ct or "any", district_name or "any",
+             *(p for p in (status, f"s{section}" if section else None,
+                           f"ps{station}" if station else None,
+                           f"{date_from:%Y%m%d}" if date_from else None) if p)))
         out.append(EvidenceItem(
-            evidence_id=f"crime_count:{ct or 'any'}:{district_name or 'any'}",
+            evidence_id=count_id,
             source_type="FIR_RECORD", source_id="count",
             source_query="COUNT over CaseMaster, scoped by role/station",
-            content=f"{count} case(s) {scope_desc} are recorded within your access scope.",
+            # "…{scope} are recorded within your access scope" printed the scope
+            # phrase twice when nothing was filtered on: "10000 cases within your
+            # access scope are recorded within your access scope."
+            content=f"{count} case(s) match: {scope_desc}. Counted within your "
+                    f"access scope.",
             confidence=0.95, authoritative=True))
+        if section:
+            # A section filter selects the offence GROUP that carries the section, not
+            # only the offence type that names it — a real limit of the ER's own
+            # section-to-head mapping, and one the officer must not have to discover
+            # by noticing a burglary in a list of thefts.
+            note = sql_agent.section_scope_note(section)
+            if note:
+                out.append(EvidenceItem(
+                    evidence_id=f"crime_count:section:{section}",
+                    source_type="FIR_RECORD", source_id="scope",
+                    source_query="CrimeHeadActSection -> CrimeMajorHeadID",
+                    content=note, confidence=0.9, authoritative=True))
         samples: list[dict] = []
         if count:
-            samples = sql_agent.search_firs(role, ps, crime_type=ct, district=district_name,
-                                            date_from=date_from, date_to=date_to, limit=5)
+            samples = sql_agent.search_firs(role, ps, limit=5, **filters)
             state.sql_query_results += samples
             out += [EvidenceItem(
                 evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
@@ -686,11 +775,18 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         state.result_context = {
             "operation": "CRIME_SEARCH", "total_matched": count, "shown": len(samples),
             "is_sample": count > len(samples), "shown_ids": [str(r["fir_id"]) for r in samples],
-            "constraints": {"crime_type": ct, "district": district_name},
+            "constraints": {"crime_type": ct, "district": district_name,
+                            "case_status": status, "section": section,
+                            "ps_code": station},
         }
         _trace(state, "SQL Agent (crime count)",
-               f"{count} matching case(s){f' for {ct}' if ct else ''}"
-               f"{f' in {district_name}' if district_name else ''}", t0)
+               f"{count} matching case(s) — {scope_desc}", t0)
+
+    elif intent == "OFFENDER_RANKING":
+        _handle_offender_ranking(state, out, role, ps, t0)
+
+    elif intent == "CASE_STATS":
+        _handle_case_stats(state, out, role, ps, t0)
 
     elif intent == "HOTSPOT":
         dc = _district_code(state)
@@ -984,6 +1080,47 @@ def _last_turn(session_id: str):
     return history[-1] if history else None
 
 
+def _last_substantive_turn(session_id: str, lookback: int = 6):
+    """The most recent turn that actually PRODUCED a result, skipping meta-turns.
+
+    An auditor asks in a chain — "how did you decide this?", then "could that be
+    wrong?", then "what supports it?" — and every one of those is an explanation. With
+    a plain "read the previous turn", the second question explained the first
+    EXPLANATION rather than the result both were about, and the third explained the
+    second. Measured live: "Could this be wrong?" answered "The previous answer to
+    'How did you decide this?' rests on 12 items…".
+
+    This is the same distinction `intents.META_OPERATIONS` already draws for
+    `last_request`, applied to the turn being explained. Bounded, so a chain of
+    meta-turns cannot walk back to an arbitrarily old part of the session; if the
+    whole lookback is meta, the immediately previous turn stands, which is the honest
+    fallback rather than a refusal.
+    """
+    def is_meta(turn) -> bool:
+        # Re-classified from the turn's OWN query, not read off its result_context: a
+        # meta-turn deliberately carries the prior substantive request forward under
+        # `last_request` (see intents.META_OPERATIONS), so an explanation of a network
+        # answer stores `operation: PERSON_NETWORK` and reads as substantive. The
+        # question the officer typed is the thing that says what the turn was.
+        return intents.classify(turn.query or "") in intents.META_OPERATIONS
+
+    # The immediately previous turn wins whenever it produced something — the common
+    # case, and the one every caller had before this existed.
+    prior = _last_turn(session_id)
+    if prior is None or not is_meta(prior):
+        return prior
+
+    from data import get_conversation_history
+    try:
+        history = get_conversation_history(session_id)
+    except Exception:
+        return prior
+    for turn in reversed((history or [])[-lookback:]):
+        if not is_meta(turn):
+            return turn
+    return prior
+
+
 def _recent_person_candidates(session_id: str) -> list[str]:
     """Distinct person names the previous turn's own citations named — e.g. CASE_PEOPLE
     listing several accused without auto-resolving one to active_person. Lets a pronoun
@@ -1006,23 +1143,294 @@ def _recent_person_candidates(session_id: str) -> list[str]:
 
 
 def _fir_ids_from_turn(prior) -> list[str]:
-    """The CaseMasterIDs cited by a stored turn — every citation whose evidence_id
-    follows the `fir:{id}` convention every FIR-producing branch in this module
-    already uses (FIR_LOOKUP, CRIME_SEARCH, CASE_CONTEXT, SIMILAR_CASES)."""
-    out = []
+    """The CaseMasterIDs a stored turn put on screen.
+
+    Two sources, because a case reaches an answer two ways. Most branches cite it
+    directly under the `fir:{id}` convention (FIR_LOOKUP, CRIME_SEARCH,
+    CASE_CONTEXT, SIMILAR_CASES). A TIMELINE turn cites the same case as an EVENT —
+    `timeline:related_case:{person}:{date}` — whose evidence_id carries the person's
+    id, not the case's; the case is on the item's `ref_id`/`source_id`.
+
+    Reading only the first source is why "where are the related cases?" refused
+    after a timeline answer that had just listed six cases in four districts by
+    name (found live). A backreference has to reach whatever the previous answer
+    actually showed, not only the shape of it this function happened to know.
+    """
+    out, seen = [], set()
+
+    def add(fid: str) -> None:
+        if fid and fid not in seen:
+            seen.add(fid)
+            out.append(fid)
+
     for c in prior.citations:
         eid = c.get("evidence_id") or ""
         if eid.startswith("fir:"):
-            out.append(eid.split(":", 1)[1])
+            add(eid.split(":", 1)[1])
+    for e in (prior.evidence_items or []):
+        if (e.get("source_type") in ("FIR_RECORD", "CRIMINAL_RECORD")
+                and str(e.get("source_id") or "").isdigit()):
+            add(str(e["source_id"]))
     return out
+
+
+def _recent_case_ids(session_id: str, lookback: int = 5) -> list[str]:
+    """The cases the last answer that actually SHOWED cases put on screen.
+
+    Not strictly the previous turn. A conversation interleaves substantive answers
+    with meta-turns — "what supports the third event?", "why are you showing me
+    these?" — and those re-show the same result rather than producing a new one. So
+    "where are the related cases?" typed after one of them means the cases from the
+    answer, not from the question about the answer; reading only the immediately
+    previous turn refused with "the previous answer named no cases to map" while six
+    cases in four districts were still on screen. Found live.
+
+    This is the same distinction `intents.META_OPERATIONS` already draws for
+    `last_request`, applied to the case list instead of to the request. Bounded, so
+    a backreference can never reach an arbitrarily old part of the session.
+    """
+    prior = _last_turn(session_id)
+    if prior:
+        ids = _fir_ids_from_turn(prior)
+        if ids:
+            return ids                    # the immediately previous turn always wins
+
+    from data import get_conversation_history
+    try:
+        history = get_conversation_history(session_id)
+    except Exception:
+        return []
+    for turn in reversed((history or [])[-lookback:]):
+        ids = _fir_ids_from_turn(turn)
+        if ids:
+            return ids
+    return []
+
+
+# How many rows a "top N" question asks for, when it says a number.
+_TOP_N_RE = re.compile(r"\btop\s+(\d{1,2})\b|\b(\d{1,2})\s+most\b", re.I)
+
+
+def _requested_n(query: str, default: int = 5) -> int:
+    m = _TOP_N_RE.search(query or "")
+    if not m:
+        return default
+    return max(1, min(20, int(m.group(1) or m.group(2))))
+
+
+def _scope_of(state: InvestigationState) -> tuple[Optional[str], Optional[str]]:
+    """(district, crime type) a statistics question is scoped to, if it names them."""
+    q = state.original_query or ""
+    district = state.constraints.get("district") or state.active_entities.active_location
+    crime_type = state.constraints.get("crime_type") or \
+        semantic_interpreter.crime_type_from_query(q)
+    return district, crime_type
+
+
+def _handle_offender_ranking(state: InvestigationState, out: list[EvidenceItem],
+                             role: str, ps: str, t0: float) -> None:
+    """'Who is the most active offender in Mandya?' — a ranking over PEOPLE.
+
+    This is the payoff of the identity layer stated as plainly as it gets: the
+    organizers' ER has no cross-case person, so "how many cases has this man been
+    accused in" is a question that exists only because Fellegi-Sunter reconstructed
+    him (CLAUDE.md §0). Before this branch existed the question fell to CRIME_SEARCH
+    and came back as a count of every case in scope with five arbitrary FIRs under it.
+
+    Ranked by CASE COUNT — a fact the records state — never by PageRank or RiskScore,
+    which are derived and modelled and do not mean "most active". Putting a model's
+    ranking under this question would be exactly the category error the console's
+    provenance rails exist to prevent.
+    """
+    q = state.original_query or ""
+    district, crime_type = _scope_of(state)
+    habitual = bool(re.search(r"\bhabitual|repeat|chronic|prolific\b", q, re.I))
+    n = _requested_n(q)
+
+    people = sql_agent.ranked_offenders(role, ps, district=district,
+                                        crime_type=crime_type, habitual_only=habitual,
+                                        limit=n)
+    scope = " · ".join(x for x in (
+        crime_type, f"in {district}" if district else None,
+        "recorded as habitual" if habitual else None) if x) or "within your access scope"
+
+    if not people:
+        out.append(EvidenceItem(
+            evidence_id=f"ranking:none:{district or 'any'}",
+            source_type="CRIMINAL_RECORD", source_id="none",
+            source_query="Accused -> vx_accused_identity -> vx_person, counted per person",
+            content=(f"No person on record has a case matching: {scope}. This is a "
+                     f"checked absence within your access scope, not a failed search."),
+            confidence=0.9, authoritative=True))
+        _trace(state, "SQL Agent (offender ranking)", f"no people matched — {scope}", t0)
+        return
+
+    out.append(EvidenceItem(
+        evidence_id=f"ranking:summary:{district or 'any'}",
+        source_type="CRIMINAL_RECORD", source_id="summary",
+        source_query="Accused -> vx_accused_identity -> vx_person, counted per person",
+        content=(f"The {len(people)} people with the most cases matching {scope}, "
+                 f"ranked by how many cases name them. Case count is a recorded fact; "
+                 f"the ranking is over the cases you are permitted to see."),
+        confidence=0.95, authoritative=True))
+    for i, p in enumerate(people, start=1):
+        masked = mask_person_name(role, p["name"])
+        out.append(EvidenceItem(
+            evidence_id=f"offender:{p['person_id']}",
+            source_type="CRIMINAL_RECORD", source_id=str(p["person_id"]),
+            source_query="COUNT(DISTINCT CaseMasterID) per resolved PersonUID",
+            content=(f"{i}. {masked} — named as accused on {p['cases']} case(s) "
+                     f"matching {scope}"
+                     + (", recorded as a habitual offender" if p["habitual"] else "")
+                     + (f", network community {p['community']}"
+                        if p["community"] is not None else "") + "."),
+            confidence=0.92, authoritative=True))
+    # A person named here is the natural subject of the next question ("does she have
+    # priors?"), but only when there is no ambiguity about which one — the top of a
+    # ranked list is a defensible default in a way the middle of it is not.
+    state.active_entities.active_person = str(people[0]["person_id"])
+    state.result_context = {
+        "operation": "OFFENDER_RANKING", "total_matched": len(people),
+        "shown": len(people), "is_sample": False,
+        "shown_ids": [p["person_id"] for p in people],
+        "constraints": {"district": district, "crime_type": crime_type},
+    }
+    _trace(state, "SQL Agent (offender ranking)",
+           f"{len(people)} person(s) ranked by case count — {scope}", t0)
+
+
+# Which grouping a "which X has the most" question is asking about.
+_GROUPING_RE = (
+    (re.compile(r"\b(police\s+station|stations?|thana)\b", re.I), "station"),
+    (re.compile(r"\bdistricts?\b", re.I), "district"),
+    (re.compile(r"\b(crimes?|offences?|offenses?|types?|categor\w+)\b", re.I), "crime_type"),
+    (re.compile(r"\b(status|outcome|disposal)\b", re.I), "status"),
+)
+_RATE_RE = re.compile(
+    r"\b(conviction|acquittal|clearance|disposal|pendency|detection)\b", re.I)
+
+
+def _handle_case_stats(state: InvestigationState, out: list[EvidenceItem],
+                       role: str, ps: str, t0: float) -> None:
+    """'What is the conviction rate in Mandya?' / 'Which station has the most pending?'
+
+    A statistic ABOUT the case set, rather than a list of cases from it. Every one of
+    these used to fall to CRIME_SEARCH and be answered with an unfiltered count.
+    """
+    q = state.original_query or ""
+    district, crime_type = _scope_of(state)
+    wants_rate = bool(_RATE_RE.search(q))
+    # "Conviction rate" contains "conviction", which the status extractor reads as a
+    # FILTER — and it is not one: it names the metric, not the subset. Applied, it
+    # would divide convictions by convictions; merely printed, it captioned an
+    # unfiltered 263 as "in Mandya · status Convicted", which is a caption that lies
+    # about the number beside it. Found live on the pass's first statistics answer.
+    status = None if wants_rate else semantic_interpreter.case_status_from_query(q)
+    scope = " and ".join(x for x in (
+        crime_type, f"in {district}" if district else None,
+        f"with status {status}" if status else None) if x) \
+        or "across every district in scope"
+
+    grouping = next((g for pat, g in _GROUPING_RE if pat.search(q)), None)
+
+    # "The most common IPC sections" is the one shape the ER cannot answer: a section
+    # is attached to a crime HEAD, not to a case, so counting sections would count the
+    # same head's sections once per case and read as a real frequency. Say so — and
+    # then actually show the offence-type breakdown this promises, rather than falling
+    # through to the status breakdown and leaving the sentence above it false.
+    if re.search(r"\bsections?\b|\bipc\b|\bu/?s\b", q, re.I):
+        out.append(EvidenceItem(
+            evidence_id="stats:sections_unavailable",
+            source_type="FIR_RECORD", source_id="none",
+            source_query="CrimeHeadActSection is keyed by crime head, not by case",
+            content=("These records attach IPC sections to an offence type, not to an "
+                     "individual case, so there is no per-case section count to rank. "
+                     "The offence-type breakdown below is the same question the records "
+                     "can actually answer."),
+            confidence=0.9, authoritative=True))
+        grouping = "crime_type"
+
+    # A rate is a share of the status breakdown; a ranking is a grouped count. A
+    # question can ask for both ("which district has the best conviction rate") — the
+    # breakdown is emitted first either way, because a rate with no denominator on
+    # screen is a number an officer cannot check.
+    if wants_rate or grouping in (None, "status"):
+        breakdown = sql_agent.status_breakdown(role, ps, crime_type=crime_type,
+                                               district=district)
+        total = sum(breakdown.values())
+        if not total:
+            out.append(EvidenceItem(
+                evidence_id="stats:none", source_type="FIR_RECORD", source_id="none",
+                source_query="COUNT over CaseMaster grouped by CaseStatusName",
+                content=f"No cases match {scope} within your access scope.",
+                confidence=0.9, authoritative=True))
+            _trace(state, "SQL Agent (case statistics)", f"no cases — {scope}", t0)
+            return
+        parts = "; ".join(f"{k} {v} ({v / total:.0%})"
+                          for k, v in sorted(breakdown.items(), key=lambda kv: -kv[1]))
+        out.append(EvidenceItem(
+            evidence_id=f"stats:status:{district or 'any'}",
+            source_type="FIR_RECORD", source_id="status",
+            source_query="COUNT over CaseMaster grouped by CaseStatusName",
+            content=(f"Of {total} case(s) matching {scope}: {parts}. These are case "
+                     f"STATUSES as recorded, counted within your access scope — a "
+                     f"different rank sees a different denominator."),
+            confidence=0.95, authoritative=True))
+        if wants_rate:
+            convicted = breakdown.get("Convicted", 0)
+            decided = convicted + breakdown.get("Acquitted", 0)
+            out.append(EvidenceItem(
+                evidence_id=f"stats:rate:{district or 'any'}",
+                source_type="FIR_RECORD", source_id="rate",
+                source_query="Convicted / (Convicted + Acquitted) over the same scope",
+                content=(
+                    (f"Conviction rate {convicted / decided:.0%} — {convicted} convicted "
+                     f"of {decided} case(s) that reached a verdict. Cases still under "
+                     f"investigation or chargesheeted are excluded from the denominator, "
+                     f"because they have no outcome yet."
+                     if decided else
+                     "No case matching this scope has reached a verdict, so no "
+                     "conviction rate can be computed. That is an absence of outcomes, "
+                     "not a rate of zero.")),
+                confidence=0.95, authoritative=True))
+
+    if grouping and grouping != "status":
+        ranked = sql_agent.counts_by(role, ps, grouping, crime_type=crime_type,
+                                     district=district, case_status=status)
+        label = {"district": "District", "station": "Police station",
+                 "crime_type": "Offence type"}[grouping]
+        n = _requested_n(q, default=5)
+        if not ranked:
+            out.append(EvidenceItem(
+                evidence_id=f"stats:{grouping}:none", source_type="FIR_RECORD",
+                source_id="none", source_query=f"COUNT grouped by {grouping}",
+                content=f"No cases match {scope} within your access scope.",
+                confidence=0.9, authoritative=True))
+        else:
+            total = sum(v for _, v in ranked)
+            out.append(EvidenceItem(
+                evidence_id=f"stats:{grouping}:{district or 'any'}",
+                source_type="FIR_RECORD", source_id=grouping,
+                source_query=f"COUNT over CaseMaster grouped by {grouping}",
+                content=(f"{label} ranking, {scope}, most cases first — "
+                         + "; ".join(f"{k} {v}" for k, v in ranked[:n])
+                         + f". {total} case(s) counted in total, within your access "
+                           f"scope."),
+                confidence=0.95, authoritative=True))
+    state.result_context = {
+        "operation": "CASE_STATS", "total_matched": None, "shown": 0,
+        "is_sample": False, "shown_ids": [],
+        "constraints": {"district": district, "crime_type": crime_type},
+    }
+    _trace(state, "SQL Agent (case statistics)",
+           f"{grouping or 'status'} statistics — {scope}", t0)
 
 
 def _handle_case_locations(state: InvestigationState, t0: float) -> None:
     """'Where are those cases concentrated?' — a district tally over the FIRs the
-    PREVIOUS turn cited, re-checked against this officer's own policy scope before
-    being shown (a citation from an earlier turn is not itself a permission)."""
-    prior = _last_turn(state.session_id)
-    fir_ids = _fir_ids_from_turn(prior) if prior else []
+    conversation last put on screen, re-checked against this officer's own policy
+    scope before being shown (a citation from an earlier turn is not a permission)."""
+    fir_ids = _recent_case_ids(state.session_id)
     if not fir_ids:
         state.refusal_reason = "nothing_prior_locations"
         _trace(state, "Orchestrator", "No previous case list to locate geographically", t0)
@@ -1104,11 +1512,16 @@ def _handle_more_results(state: InvestigationState, t0: float) -> None:
     # A genuine sample — re-run the SAME producer with a wider limit and report only
     # the records not already shown, rather than re-showing the same five.
     role, ps = state.officer_role, _officer_ps(state.officer_id)
-    ct = rc.get("constraints", {}).get("crime_type")
-    district = rc.get("constraints", {}).get("district")
+    con = rc.get("constraints", {})
     wider: list[dict] = []
     if op == "CRIME_SEARCH":
-        wider = sql_agent.search_firs(role, ps, crime_type=ct, district=district, limit=10)
+        # Every filter the original search applied, not just the two this used to
+        # carry: widening a status- or section-scoped search without them returns
+        # cases the first answer correctly excluded, presented as "here are more".
+        wider = sql_agent.search_firs(
+            role, ps, limit=10, crime_type=con.get("crime_type"),
+            district=con.get("district"), case_status=con.get("case_status"),
+            section=con.get("section"), ps_code=con.get("ps_code"))
     elif op == "SIMILAR_CASES" and state.active_entities.active_fir:
         case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
         if case_rows:
@@ -1544,31 +1957,207 @@ def _handle_timeline_connection(state: InvestigationState, t0: float) -> None:
            f"between {masked_a} and {masked_b}; {len(events)} merged event(s)", t0)
 
 
-def _reasoning_explanation(prior) -> str:
-    """'Why are you showing me these people?' — re-describe the previous turn's own
-    agent trace, which is already the plain-language explainability surface the
-    console's Reasoning Trace panel renders. Nothing new is inferred; this restates
-    what that turn already recorded about itself."""
-    steps = [t.get("detail") for t in prior.agent_trace if t.get("detail")]
-    n = len(prior.citations)
-    if steps:
-        return (f'The previous answer to "{prior.query}" was built from {n} cited '
-                f"record(s). How it got there: " + "; ".join(steps) + ".")
-    return (f'The previous answer to "{prior.query}" cited {n} record(s) directly '
-            f"relevant to that question.")
+def _prior_operation(prior) -> str:
+    """Which operation produced the previous answer.
+
+    `result_context` carries it for every bounded/sampled producer; for everything
+    else the chat router merges `last_request` in under its own key (see
+    InvestigationState.last_request). Reading both means an explanation of a FIR
+    lookup knows it was a lookup, not just that a FIR is on screen."""
+    rc = (prior.result_context if prior else None) or {}
+    return rc.get("operation") or (rc.get("last_request") or {}).get("operation") or ""
 
 
-def _evidence_explanation(prior) -> str:
-    """'What evidence supports that?' — the previous turn's own citation list, restated
-    plainly rather than re-run through retrieval (which would search the index for the
-    literal words 'what evidence supports that' and answer from whatever it found)."""
-    if not prior.citations:
+# The demonstratives an officer uses to point at ONE item on screen, mapped to the
+# evidence_id prefix that kind of item is written under (the convention every
+# producing branch in this module already follows). "Why is this PERSON connected"
+# and "why is this CASE in the timeline" are questions about different rows of the
+# same answer, and the noun is the only thing that says which.
+_TARGET_NOUNS = {
+    "person": ("assoc", "same_as"), "people": ("assoc",), "associate": ("assoc",),
+    "suspect": ("assoc",), "accused": ("assoc",), "connection": ("assoc",),
+    "case": ("fir",), "fir": ("fir",), "record": ("fir",),
+    "event": ("timeline",), "timeline": ("timeline",),
+    "hotspot": ("hotspot",), "cluster": ("hotspot",), "area": ("hotspot",),
+    "transfer": ("flow",), "payment": ("flow",), "money": ("flow",),
+    "account": ("flow",), "trail": ("flow",),
+    "forecast": ("forecast",), "projection": ("forecast",), "trend": ("forecast",),
+    "score": ("risk", "recidivism"), "risk": ("risk", "recidivism"),
+    "flag": ("aml",), "alias": ("same_as",), "spelling": ("same_as",),
+}
+# "a"/"an" belong here alongside the demonstratives: "why is that A hotspot" is the
+# way the question is actually asked, and it is unambiguous inside an explanation
+# turn — the only thing an explanation can be about is the answer already on screen.
+# Found live: that exact phrasing matched no noun at all and fell to the whole-set
+# branch, which then reported the previous answer as having nothing to explain.
+_TARGET_NOUN_RE = re.compile(
+    r"\b(?:this|that|the|a|an)\s+(" + "|".join(sorted(_TARGET_NOUNS)) + r")\b", re.I)
+
+
+def _explain_pool(prior) -> list[dict]:
+    """The previous turn's items, or its citations standing in for them.
+
+    A turn too large for the Data Store's text column sheds `evidence_items` and
+    keeps `citations` (sessions._pack). The evidence_id is on both, and it is the
+    only field provenance dispatch actually needs — so an answer big enough to be
+    truncated must not become an answer that cannot be explained. Found live on a
+    9-citation hotspot answer, which reported itself as having no records at all."""
+    pool = list(prior.evidence_items or [])
+    if pool:
+        return pool
+    return [{"evidence_id": c.get("evidence_id"), "content": c.get("label")}
+            for c in (prior.citations or []) if c.get("evidence_id")]
+
+
+def _explain_target(prior, state: InvestigationState) -> Optional[dict]:
+    """Which single item the officer is asking about, or None for the whole set.
+
+    Three ways of pointing, in the order they beat each other:
+
+      1. a CLICK — `active_evidence_id`, the same field "pin this" already reads, so
+         selecting a graph node or a map case and typing "why is this connected"
+         explains that node and not whichever item happened to be cited first;
+      2. an ORDINAL — "what supports the third event", resolved against the previous
+         turn's own citation list (`semantic_interpreter._ordinal_index` is the same
+         resolver the ordinal-reference follow-ups already use);
+      3. a NOUN — "why is this PERSON connected", matched to the evidence_id prefix
+         that kind of item is written under.
+
+    Nothing matching means the question is about the answer as a whole, which is a
+    different and equally real question ("how are you deriving all these?").
+    """
+    pool = _explain_pool(prior)
+    if not pool:
+        return None
+
+    target = state.active_evidence_id
+    if target:
+        hit = next((e for e in pool if e.get("evidence_id") == target), None)
+        if hit:
+            return hit
+
+    idx = semantic_interpreter._ordinal_index(state.original_query or "")
+    if idx and 1 <= idx <= len(pool):
+        return pool[idx - 1]
+
+    m = _TARGET_NOUN_RE.search(state.original_query or "")
+    if m:
+        prefixes = _TARGET_NOUNS[m.group(1).lower()]
+        hit = next((e for e in pool
+                    if (e.get("evidence_id") or "").split(":", 1)[0] in prefixes), None)
+        if hit:
+            return hit
+    return None
+
+
+def _reasoning_explanation(prior, state: InvestigationState) -> str:
+    """'Why is this here?' — the provenance chain behind the result, not the pipeline.
+
+    This used to answer by restating the agent trace: *"HippoRAG retrieval:
+    Personalized PageRank from 15 seeded nodes; Cypher Agent: 12 associate(s) within
+    policy depth"*. Every word of that was true and none of it was what was asked.
+    An officer asking why two people are connected wants the FIRs they are both named
+    on. See rag_agent/provenance.py for the shape of the answer and why it is derived
+    on demand rather than stored.
+
+    The trace has not gone anywhere — it is one click away in the Reasoning Trace
+    panel, where opening it is a deliberate act.
+    """
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    op = _prior_operation(prior)
+    subject = state.active_entities.active_person
+
+    item = _explain_target(prior, state)
+    if item is not None:
+        d = provenance.explain(item, role=role, ps=ps, operation=op, subject_id=subject)
+        return provenance.as_text(d)
+
+    # No single item was pointed at — the question is about the answer as a whole.
+    pool = _explain_pool(prior)
+    if not pool:
+        return (f'The previous answer to "{prior.query}" carried no records to explain — '
+                f"it was either a refusal or a description of this tool itself.")
+
+    # A short answer gets every item explained; a long one gets each KIND explained
+    # once, since items sharing an evidence_id prefix share a derivation. The cutoff
+    # is where repetition stops being thoroughness: explaining nine near-identical
+    # hotspot clusters one by one is nine copies of the same paragraph, but
+    # explaining only the first of two named people reads as having answered about
+    # one of them and forgotten the other — which is what it did, found live.
+    if len(pool) <= _EXPLAIN_EACH_UPTO:
+        chosen, grouped = pool, False
+    else:
+        by_kind: dict[str, dict] = {}
+        for e in pool:
+            by_kind.setdefault((e.get("evidence_id") or "").split(":", 1)[0], e)
+        chosen, grouped = list(by_kind.values()), True
+
+    head = f'The previous answer to "{prior.query}" rests on {len(pool)} item(s)'
+    if grouped:
+        head += (f", of {len(chosen)} kind(s). One of each kind is traced below; items "
+                 f"of the same kind were arrived at the same way.")
+    else:
+        head += ", each traced below."
+    lines = [head, ""]
+    for i, e in enumerate(chosen):
+        d = provenance.explain(e, role=role, ps=ps, operation=op, subject_id=subject)
+        if i:
+            lines.append("")
+        lines.append(provenance.as_text(d))
+
+    truth = provenance.describe_result_set((prior.result_context or {}))
+    if truth:
+        lines += ["", truth]
+    # The same "(s)" convention the synthesis path resolves — an explanation is prose
+    # an officer reads, and a form field in the middle of it is no better here.
+    from data.nlp.translate import resolve_plural_markers
+    return resolve_plural_markers("\n".join(lines))
+
+
+# Above this many items, explain one per KIND rather than one per item.
+_EXPLAIN_EACH_UPTO = 3
+
+
+def _evidence_explanation(prior, state: InvestigationState) -> str:
+    """'What supports this?' — the records under the claim, and how strongly.
+
+    Where the question points at ONE item ("what supports the third event"), that
+    item's own source records are named; otherwise the whole citation list is
+    restated. Either way it reads from the previous turn rather than re-running
+    retrieval, which would search the index for the literal words "what supports
+    this" and answer from whatever it found.
+    """
+    if not prior.citations and not prior.evidence_items:
         return (f'The previous answer to "{prior.query}" carried no citations — it was '
                 f"either a refusal or a description of this tool's own capabilities, not "
                 f"a claim drawn from the records.")
+
+    item = _explain_target(prior, state)
+    if item is not None:
+        d = provenance.explain(item, role=state.officer_role,
+                               ps=_officer_ps(state.officer_id),
+                               operation=_prior_operation(prior),
+                               subject_id=state.active_entities.active_person)
+        head = [d.claim, "", f"This is {d.basis.upper()} — {d.basis_meaning}", ""]
+        if d.records:
+            head.append("Supported by:")
+            head += [f"  · {r.label}" + (f" — {r.detail}" if r.detail else "")
+                     for r in d.records]
+        else:
+            head.append("Supported by the record it was read from; nothing further is "
+                        "cited beneath it.")
+        if d.qualifies:
+            head += ["", f"Strength: {d.qualifies}"]
+        if d.caveat:
+            head += ["", f"What it does not establish: {d.caveat}"]
+        return "\n".join(head)
+
     lines = [f'The previous answer to "{prior.query}" is supported by:']
     for c in prior.citations:
         lines.append(f"  [{c.get('index')}] {c.get('label')}")
+    truth = provenance.describe_result_set((prior.result_context or {}))
+    if truth:
+        lines += ["", truth]
     return "\n".join(lines)
 
 
@@ -1675,7 +2264,11 @@ def _pin_evidence_from_context(state: InvestigationState, fir_id: str, role: str
     ev: Optional[dict] = None
 
     if prior and target:
-        pool = prior.evidence_items or []
+        # Only items that still carry a body are pinnable: a truncated turn stores
+        # evidence SKELETONS (sessions._skeleton), and pinning one would put an empty
+        # card on the board under a real record's id. The citation fallback below
+        # carries the label, which is what the officer actually saw.
+        pool = [e for e in (prior.evidence_items or []) if e.get("content")]
         ev = next((e for e in pool if e.get("evidence_id") == target), None)
         if not ev:
             c = next((c for c in prior.citations if c.get("evidence_id") == target), None)
@@ -1705,7 +2298,7 @@ def _pin_evidence_from_context(state: InvestigationState, fir_id: str, role: str
         # No specific card was selected — "pin this" meaning "whatever you just
         # showed me". Only reached with no target at all; a target that failed to
         # resolve above must never silently fall back to a different item.
-        pool = prior.evidence_items or []
+        pool = [e for e in (prior.evidence_items or []) if e.get("content")]
         if pool:
             ev = pool[0]
         elif prior.citations:
@@ -1934,7 +2527,11 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # record behind it, and the console renders a citation-free turn as a refusal — so
     # the answer says plainly that it is about the system rather than the records.
     if state.intent == "CAPABILITY":
-        answer = intents.capability_answer()
+        # The query decides WHICH answer: "do you decide guilt" and "what can
+        # you do" are both capability questions and must not get the same
+        # paragraph — a judge handed a feature list in reply to the first has
+        # been answered in form and not in substance.
+        answer = intents.capability_answer(state.original_query or "")
         if state.language != "en":
             answer, _ = translation_agent.to_language(answer, state.language)
         state.final_answer = answer
@@ -1968,7 +2565,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # circuit. Answered here rather than there because the answer is built from
     # storage, not from anything node_retrieve/node_evaluate compute.
     if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR"):
-        prior = _last_turn(state.session_id)
+        prior = _last_substantive_turn(state.session_id)
         if not prior:
             answer = refusal_message("nothing_prior")
             note = None
@@ -1983,8 +2580,8 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
             _trace(state, "Synthesis", "Refused to answer — nothing_prior", t0)
             return state
 
-        answer = (_reasoning_explanation(prior) if state.intent == "EXPLAIN_REASONING"
-                 else _evidence_explanation(prior))
+        answer = (_reasoning_explanation(prior, state) if state.intent == "EXPLAIN_REASONING"
+                 else _evidence_explanation(prior, state))
         note = None
         if state.language != "en":
             answer, note = translation_agent.to_language(answer, state.language)
@@ -1992,11 +2589,16 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
             answer = f"{answer}\n\n{note}"
         state.final_answer = answer
         # Re-show the same citations the previous turn had — the officer asked what
-        # backs THAT answer, not for a new one. evidence_items round-trips only when
-        # the stored turn wasn't truncated (sessions._pack sheds it first under the
-        # Data Store text-column cap); citations always survive, so they always show.
+        # backs THAT answer, not for a new one. citations always survive storage;
+        # evidence_items may come back as SKELETONS (identity fields only, no body)
+        # when the stored turn was over the Data Store's text-column budget, and a
+        # skeleton cannot be rehydrated into an EvidenceItem — `content` has no
+        # default and never should, since an evidence item with no content is not
+        # evidence. Skeletons are still read for their ids by the explanation path
+        # above; they simply do not go back on screen as sources.
         state.citations = [Citation(**c) for c in prior.citations]
-        state.evidence_items = [EvidenceItem(**e) for e in prior.evidence_items]
+        state.evidence_items = [EvidenceItem(**e) for e in prior.evidence_items
+                                if e.get("content")]
         _trace(state, "Synthesis",
                f"Explained the previous turn ({len(prior.citations)} citation(s))", t0)
         return state
@@ -2037,8 +2639,39 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # to answer at all, and synthesis now honours the same line instead of citing the
     # whole neighbourhood.
     evidence = supporting(_rank_evidence(state))[:12]
+
+    # "case(s)" is a convention for a count the producing branch does not always
+    # have at the point the sentence is written. It was only ever resolved on the
+    # way into the translation model, so an English reader was left with the marker
+    # itself — a form field in the middle of a finding.
+    #
+    # Resolved BEFORE synthesis, not after: a citation's label is built from the
+    # evidence content (synthesis_agent._label), so resolving afterwards cleaned the
+    # answer and the evidence rail while leaving every citation chip still reading
+    # "1 hop(s) away". Found by driving the console, not by a test — the answer and
+    # the chip beside it disagreed about the same sentence.
+    from data.nlp.translate import resolve_plural_markers
+    for e in evidence:
+        e.content = resolve_plural_markers(e.content)
+
     answer, citations = synthesis_agent.synthesize(
         state.original_query or "", evidence, operation=state.intent)
+    answer = resolve_plural_markers(answer)
+
+    # What KIND of result set this is — sampled, filtered, ranked, exhaustive,
+    # modelled. Stated because the quiet failure is the dangerous one: five cases
+    # listed under a question that asked for "the cases" reads as all of them, and
+    # the officer has no way to tell from the answer that it was a sample. The fact
+    # is already recorded by whichever branch produced the set (result_context);
+    # this is where it stops being internal.
+    truth = provenance.describe_result_set(state.result_context or {})
+    if truth:
+        answer = f"{answer}\n\n{truth}"
+
+    # Structured fields beat generated prose. Checked BEFORE translation, so a
+    # contradiction cannot be laundered through the model into a language the check
+    # does not read.
+    answer = _reconcile_with_records(answer, evidence, state)
 
     note = None
     if state.language != "en":
@@ -2056,6 +2689,125 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     return state
 
 
+# --- contradiction checking: the structured field beats the generated sentence ----
+#
+# A case whose CaseStatusName is "Convicted" and whose generated narrative says "the
+# investigation is being carried out" is not a wording problem — it is the system
+# telling an officer something the file contradicts, in the register of a finding. The
+# status column is authoritative; the prose is a rephrasing, and where they disagree
+# the prose is what is wrong.
+#
+# The check runs BEFORE translation, deliberately: a contradiction laundered through
+# NLLB into Kannada is one no English pattern here would ever see again.
+#
+# Only two things are checked, and both are checked narrowly. This is a place where a
+# false positive is expensive — an officer told "the record says otherwise" about a
+# sentence that was in fact correct learns to ignore the warning — so anything that
+# cannot be decided from a structured column the cited records actually carry is left
+# alone rather than guessed at.
+
+# Status families. Two phrases in DIFFERENT families are a contradiction; two in the
+# same family are a paraphrase. Keyed by the family the CaseStatusName itself falls in.
+_STATUS_FAMILIES: dict[str, re.Pattern] = {
+    "open": re.compile(
+        r"\b(under investigation|investigation is (ongoing|continuing|underway|in progress"
+        r"|being carried out|pending|yet to)|still being investigated|remains? open"
+        r"|enquiry is (ongoing|underway|in progress))\b", re.I),
+    "chargesheeted": re.compile(
+        r"\b(charge ?sheet (has been |was )?filed|charge ?sheeted)\b", re.I),
+    "convicted": re.compile(r"\b(was convicted|has been convicted|conviction was)\b", re.I),
+    "acquitted": re.compile(r"\b(was acquitted|has been acquitted|acquittal)\b", re.I),
+    "closed": re.compile(r"\b(case (was |has been )?closed|closed as|disposed of)\b", re.I),
+}
+
+
+def _status_family(status: str) -> Optional[str]:
+    s = (status or "").lower()
+    if not s:
+        return None
+    if "convict" in s:
+        return "convicted"
+    if "acquit" in s:
+        return "acquitted"
+    if "charge" in s:
+        return "chargesheeted"
+    if "clos" in s or "dispos" in s:
+        return "closed"
+    if "investigat" in s or "pending" in s or "open" in s:
+        return "open"
+    return None
+
+
+def _reconcile_with_records(answer: str, evidence: list[EvidenceItem],
+                            state: InvestigationState) -> str:
+    """Append a correction where the prose contradicts a structured field.
+
+    The prose is not rewritten. String surgery on a generated sentence produces a
+    sentence nobody wrote and nobody can audit; naming the record's own value beside
+    it leaves both on screen and makes the disagreement itself visible, which is what
+    an officer needs in order to trust the rest of the answer.
+    """
+    flags: list[str] = []
+
+    # 1. Case status. Only checked when the cited records agree on ONE status — a
+    #    person's history legitimately spans several, and any status phrase in the
+    #    prose is then legitimately about one of them.
+    statuses = {r.get("case_status") for r in state.sql_query_results if r.get("case_status")}
+    if len(statuses) == 1:
+        recorded = next(iter(statuses))
+        fam = _status_family(recorded)
+        if fam:
+            for other, pat in _STATUS_FAMILIES.items():
+                if other != fam and pat.search(answer):
+                    flags.append(
+                        f"Correction from the record: the case status on file is "
+                        f'"{recorded}". The sentence above describes it differently; '
+                        f"the recorded status is what governs.")
+                    break
+
+    # 2. A district named in the prose that no cited record and no part of the
+    #    question mentions. A district is the coarsest thing an FIR states, so a
+    #    district appearing from nowhere is the cheapest hallucination to catch.
+    #
+    #    "Grounded" has to mean grounded in the EVIDENCE, not in one particular
+    #    field of one particular producer. The first version read only
+    #    sql_query_results, which the timeline, graph and financial branches never
+    #    populate — so a timeline answer citing five real FIRs in five real
+    #    districts was flagged as naming four districts "in none of the records
+    #    cited here", with those exact districts printed in the citations directly
+    #    above. Found live on the second turn of the flow this check was written
+    #    for. A false positive here is expensive: an officer told the record says
+    #    otherwise about a correct sentence learns to ignore the warning.
+    try:
+        from data.districts import all_districts
+        known = {d.name for d in all_districts()}
+    except Exception:
+        known = set()
+    if known:
+        grounded_text = " ".join(
+            [str(r.get("district") or "") for r in state.sql_query_results]
+            + [e.content for e in evidence])
+        asked = (state.original_query or "") + " " + " ".join(
+            str(v) for v in (state.constraints or {}).values() if v)
+        invented = sorted(
+            d for d in known
+            if re.search(r"\b" + re.escape(d) + r"\b", answer, re.I)
+            and not re.search(r"\b" + re.escape(d) + r"\b", grounded_text, re.I)
+            and not re.search(r"\b" + re.escape(d) + r"\b", asked, re.I))
+        if invented:
+            flags.append(
+                f"Not supported by the cited records: {', '.join(invented)} "
+                f"{'is' if len(invented) == 1 else 'are'} named above but appear"
+                f"{'s' if len(invented) == 1 else ''} in none of the records cited here.")
+
+    if not flags:
+        return answer
+    _trace(state, "Record reconciliation",
+           f"{len(flags)} contradiction(s) between the answer and the structured "
+           f"record", time.perf_counter())
+    return answer + "\n\n" + "\n".join(flags)
+
+
 # The evidence type that most directly answers each intent. Confidence alone ranks a
 # high-confidence FIR fact above the risk score the officer actually asked for, so the
 # answer to "what is his risk of reoffending" would open with an unrelated theft.
@@ -2070,9 +2822,12 @@ _INTENT_ANSWERS_WITH = {
 def _rank_evidence(state: InvestigationState) -> list[EvidenceItem]:
     """Citation [1] should be the best support for THIS question, not merely the
     most confident thing retrieved."""
-    if state.intent in ("TIMELINE", "TIMELINE_CONNECTION"):
-        # Already chronological (see _handle_timeline/_handle_timeline_connection) —
-        # resorting by confidence would scramble the order that IS the answer.
+    if state.intent in ("TIMELINE", "TIMELINE_CONNECTION",
+                        "OFFENDER_RANKING", "CASE_STATS"):
+        # Emitted in the order that IS the answer — chronological for a timeline,
+        # rank 1..N for a ranking, denominator-before-rate for a statistic. Resorting
+        # by confidence would scramble it, and a "top 5" whose first line is number
+        # three is not a ranking.
         return list(state.evidence_items)
     preferred = _INTENT_ANSWERS_WITH.get(state.intent)
     alias = state.intent == "ALIAS_CHECK"

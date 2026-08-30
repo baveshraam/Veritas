@@ -80,12 +80,59 @@ def fir_by_number(fir_number: str, officer_role: str, officer_ps_code: str) -> l
     return [_case(r) for r in rows]
 
 
-def search_firs(officer_role: str, officer_ps_code: str,
-                crime_type: Optional[str] = None, district: Optional[str] = None,
-                date_from: Optional[date] = None, date_to: Optional[date] = None,
-                limit: int = 25) -> list[dict]:
-    scope, extra = _ps_scope(officer_role, officer_ps_code)
-    clauses, params = [], {"limit": limit, **extra}
+def crime_heads_for_section(section: str) -> list[int]:
+    """The MAJOR crime-head ids an IPC section is registered under.
+
+    The organizers' ER attaches sections to a crime head, not to a case
+    (`CrimeHeadActSection`), and that head is the MAJOR head — `CaseMaster`'s
+    `CrimeMajorHeadID`, not the `CrimeMinorHeadID` that names the offence type. Joining
+    the minor head instead looks plausible and is wrong: section 379 resolved to head 2,
+    and CrimeSubHeadID 2 is "Hurt", so "show me cases under 379" returned assault cases.
+    Caught by reading the crime types back out of the result rather than trusting the
+    count beside them.
+
+    The consequence is a real limit and callers must state it: a major head groups
+    several offence types (379/380 and 454/457 share one), so this selects the offence
+    GROUP that carries the section, not only the offence type that names it. That is
+    what the schema records; narrowing further would mean parsing section numbers out of
+    narrative prose, which is not a filter, it is a guess.
+    """
+    rows = ds.query(
+        'SELECT "CrimeHeadID" FROM "CrimeHeadActSection" WHERE "SectionCode" = :s',
+        {"s": str(section).strip()})
+    return sorted({int(r["CrimeHeadID"]) for r in rows})
+
+
+def section_scope_note(section: str) -> Optional[str]:
+    """What a section filter actually selected, in the officer's terms — the honest
+    caption for the limit `crime_heads_for_section` documents."""
+    heads = crime_heads_for_section(section)
+    if not heads:
+        return (f"No offence in these records is registered under section {section}, "
+                f"so nothing matched.")
+    names = ds.query(
+        'SELECT "CrimeHeadName" FROM "CrimeSubHead" WHERE "CrimeHeadID" IN :h',
+        {"h": heads})
+    kinds = sorted({r["CrimeHeadName"] for r in names if r.get("CrimeHeadName")})
+    if not kinds:
+        return None
+    return (f"Section {section} is registered against the offence group covering "
+            f"{', '.join(kinds)}; these are that group's cases.")
+
+
+def _filters(crime_type: Optional[str], district: Optional[str],
+             date_from: Optional[date], date_to: Optional[date],
+             case_status: Optional[str], ps_code: Optional[str],
+             section: Optional[str]) -> tuple[list[str], dict]:
+    """One WHERE-clause builder for both the search and the count.
+
+    They were two copies of the same four clauses, and every filter added to one and
+    not the other is a count that does not describe the list printed under it — the
+    most quietly wrong thing this layer can produce. Status, station and section were
+    added here rather than to either caller.
+    """
+    clauses: list[str] = []
+    params: dict = {}
     if crime_type:
         clauses.append('AND "CrimeSubHead"."CrimeHeadName" LIKE :ct')
         params["ct"] = f"%{crime_type}%"
@@ -98,7 +145,46 @@ def search_firs(officer_role: str, officer_ps_code: str,
     if date_to:
         clauses.append('AND "CaseMaster"."CrimeRegisteredDate" < :d1')
         params["d1"] = date_to
+    if case_status:
+        clauses.append('AND "CaseStatusMaster"."CaseStatusName" LIKE :st')
+        params["st"] = f"%{case_status}%"
+    if ps_code:
+        clauses.append('AND "CaseMaster"."PoliceStationID" = :psf')
+        params["psf"] = int(ps_code)
+    if section:
+        heads = crime_heads_for_section(section)
+        # No head carries this section: the honest filter is one that matches nothing,
+        # not one that is silently dropped and answers about every case instead.
+        clauses.append('AND "CaseMaster"."CrimeMajorHeadID" IN :heads')
+        params["heads"] = heads or [-1]
+    return clauses, params
 
+
+# Every JOIN the filters above can reference. `count_firs` used to omit
+# CaseStatusMaster, which is fine until a status filter exists — then the count and the
+# list it captions come from different queries. Both use this now.
+_FILTERED_FROM = (
+    ' FROM "CaseMaster" '
+    'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
+    'JOIN "District" ON "Unit"."DistrictID" = "District"."DistrictID" '
+    'LEFT JOIN "CrimeSubHead" '
+    '  ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID" '
+    'LEFT JOIN "CaseStatusMaster" '
+    '  ON "CaseMaster"."CaseStatusID" = "CaseStatusMaster"."CaseStatusID" '
+)
+_COUNT_FROM = 'SELECT "CaseMaster"."CaseMasterID"' + _FILTERED_FROM
+_STATUS_FROM = 'SELECT "CaseStatusMaster"."CaseStatusName"' + _FILTERED_FROM
+
+
+def search_firs(officer_role: str, officer_ps_code: str,
+                crime_type: Optional[str] = None, district: Optional[str] = None,
+                date_from: Optional[date] = None, date_to: Optional[date] = None,
+                case_status: Optional[str] = None, ps_code: Optional[str] = None,
+                section: Optional[str] = None, limit: int = 25) -> list[dict]:
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = _filters(crime_type, district, date_from, date_to,
+                               case_status, ps_code, section)
+    params.update(limit=limit, **extra)
     rows = ds.query(
         f'{_CASE_SELECT} WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)} '
         f'ORDER BY "CaseMaster"."CrimeRegisteredDate" DESC LIMIT :limit', params)
@@ -107,32 +193,97 @@ def search_firs(officer_role: str, officer_ps_code: str,
 
 def count_firs(officer_role: str, officer_ps_code: str,
                crime_type: Optional[str] = None, district: Optional[str] = None,
-               date_from: Optional[date] = None, date_to: Optional[date] = None) -> int:
+               date_from: Optional[date] = None, date_to: Optional[date] = None,
+               case_status: Optional[str] = None, ps_code: Optional[str] = None,
+               section: Optional[str] = None) -> int:
     """The exact count for a "how many X cases in Y" question — ZCQL has no GROUP BY
     over a join this deep, so this counts rows in Python over the same scoped WHERE
     clause search_firs uses, rather than approximating from a sample page."""
     scope, extra = _ps_scope(officer_role, officer_ps_code)
-    clauses, params = [], dict(extra)
-    if crime_type:
-        clauses.append('AND "CrimeSubHead"."CrimeHeadName" LIKE :ct')
-        params["ct"] = f"%{crime_type}%"
-    if district:
-        clauses.append('AND "District"."DistrictName" LIKE :d')
-        params["d"] = f"%{district}%"
-    if date_from:
-        clauses.append('AND "CaseMaster"."CrimeRegisteredDate" >= :d0')
-        params["d0"] = date_from
-    if date_to:
-        clauses.append('AND "CaseMaster"."CrimeRegisteredDate" < :d1')
-        params["d1"] = date_to
+    clauses, params = _filters(crime_type, district, date_from, date_to,
+                               case_status, ps_code, section)
+    params.update(extra)
     rows = ds.query(
-        'SELECT "CaseMaster"."CaseMasterID" FROM "CaseMaster" '
-        'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
-        'JOIN "District" ON "Unit"."DistrictID" = "District"."DistrictID" '
-        'LEFT JOIN "CrimeSubHead" '
-        '  ON "CaseMaster"."CrimeMinorHeadID" = "CrimeSubHead"."CrimeSubHeadID" '
-        f'WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}', params)
+        f'{_COUNT_FROM} WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}',
+        params)
     return len(rows)
+
+
+def status_breakdown(officer_role: str, officer_ps_code: str,
+                     crime_type: Optional[str] = None,
+                     district: Optional[str] = None) -> dict[str, int]:
+    """How the matching cases are distributed across CaseStatusName.
+
+    This is what "how many are pending", "what is the conviction rate" and "how many
+    were solved" all actually need, and none of them had anywhere to go: each fell to
+    CRIME_SEARCH, which dropped the word it turned on and answered with a count of
+    every case in scope. Counted in Python for the same reason count_firs is — ZCQL has
+    no GROUP BY over a join this deep.
+    """
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = _filters(crime_type, district, None, None, None, None, None)
+    params.update(extra)
+    rows = ds.query(
+        f'{_STATUS_FROM} WHERE "CaseMaster"."CaseMasterID" > 0 {scope} '
+        f'{" ".join(clauses)}', params)
+    out: dict[str, int] = {}
+    for r in rows:
+        name = r.get("CaseStatusName") or "not recorded"
+        out[name] = out.get(name, 0) + 1
+    return out
+
+
+def ranked_offenders(officer_role: str, officer_ps_code: str,
+                     district: Optional[str] = None, crime_type: Optional[str] = None,
+                     habitual_only: bool = False, limit: int = 5) -> list[dict]:
+    """The people with the most cases on record, within this officer's scope.
+
+    "Who is the most active offender in Mandya?" and "top 5 habitual offenders" are the
+    first questions an officer asks and had no home at all — both fell to CRIME_SEARCH
+    and were answered with a count of every case in scope plus five arbitrary FIRs.
+    They are answerable, and this is the payoff of the identity layer: the organizers'
+    ER has no cross-case person (CLAUDE.md §0), so "how many cases has this man been
+    accused in" is a question that only exists because Fellegi-Sunter reconstructed him.
+
+    Ranked by CASE COUNT, not by PageRank or RiskScore. Case count is a fact the
+    records state; the other two are derived and modelled, and neither means "most
+    active" — putting a model's ranking under that question would be exactly the
+    category error this platform works to avoid. Scope is applied by counting only the
+    cases the officer may see, so an IO's "most active" is their station's, and the
+    same query at IG rank returns the state's.
+    """
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = _filters(crime_type, district, None, None, None, None, None)
+    params.update(extra)
+    rows = ds.query(
+        'SELECT "vx_accused_identity"."PersonUID", "CaseMaster"."CaseMasterID"'
+        + _FILTERED_FROM.replace(
+            'FROM "CaseMaster" ',
+            'FROM "CaseMaster" '
+            'JOIN "Accused" ON "Accused"."CaseMasterID" = "CaseMaster"."CaseMasterID" '
+            'JOIN "vx_accused_identity" '
+            '  ON "vx_accused_identity"."AccusedMasterID" = "Accused"."AccusedMasterID" ',
+            1)
+        + f'WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}', params)
+
+    counts: dict[str, set] = {}
+    for r in rows:
+        counts.setdefault(str(r["PersonUID"]), set()).add(str(r["CaseMasterID"]))
+    if not counts:
+        return []
+
+    people = ds.query(
+        'SELECT "PersonUID", "CanonicalName", "IsHabitualOffender", "CommunityID" '
+        'FROM "vx_person" WHERE "PersonUID" IN :ids',
+        {"ids": [int(p) for p in counts]})
+    out = [{"person_id": str(p["PersonUID"]), "name": p["CanonicalName"],
+            "cases": len(counts[str(p["PersonUID"])]),
+            "habitual": bool(p["IsHabitualOffender"]),
+            "community": p["CommunityID"]}
+           for p in people]
+    if habitual_only:
+        out = [p for p in out if p["habitual"]]
+    return sorted(out, key=lambda p: (-p["cases"], p["name"] or ""))[:limit]
 
 
 def cases_by_ids(fir_ids: list[str]) -> list[dict]:
@@ -239,6 +390,51 @@ def crime_counts_by_district(limit: int = 10) -> list[dict]:
     # int(code[2:]). Emitting the raw id here made that int('') and failed the turn.
     return [{"district": names.get(did, str(did)), "district_code": f"KA{int(did):02d}",
              "fir_count": n} for did, n in ranked]
+
+
+def _grouped_counts(officer_role: str, officer_ps_code: str, column: str,
+                    crime_type: Optional[str] = None, district: Optional[str] = None,
+                    case_status: Optional[str] = None) -> dict[str, int]:
+    """Counts of matching cases grouped by one already-joined column.
+
+    ZCQL has no GROUP BY over a join this deep, so the group is counted in Python over
+    the same scoped WHERE clause `count_firs` uses — the same trade `count_firs` and
+    `crime_counts_by_district` already make, and for the same reason. `column` is
+    chosen from a fixed set by the caller, never from user text.
+    """
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = _filters(crime_type, district, None, None, case_status, None, None)
+    params.update(extra)
+    rows = ds.query(
+        f'SELECT {column}{_FILTERED_FROM} '
+        f'WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}', params)
+    key = column.split(".")[-1].strip('"')
+    out: dict[str, int] = {}
+    for r in rows:
+        name = r.get(key)
+        name = "not recorded" if name is None else str(name)
+        out[name] = out.get(name, 0) + 1
+    return out
+
+
+# The groupings a "which X has the most cases" question can ask for. A fixed table, so
+# the column in the query is never assembled from anything the officer typed.
+GROUPINGS = {
+    "district": '"District"."DistrictName"',
+    "station": '"Unit"."UnitName"',
+    "crime_type": '"CrimeSubHead"."CrimeHeadName"',
+    "status": '"CaseStatusMaster"."CaseStatusName"',
+}
+
+
+def counts_by(officer_role: str, officer_ps_code: str, grouping: str,
+              crime_type: Optional[str] = None, district: Optional[str] = None,
+              case_status: Optional[str] = None) -> list[tuple[str, int]]:
+    """`[(name, cases)]`, commonest first — the answer to "which district/station/
+    offence has the most", within this officer's own scope."""
+    counts = _grouped_counts(officer_role, officer_ps_code, GROUPINGS[grouping],
+                             crime_type, district, case_status)
+    return sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
 
 
 def filter_viewable(rows: list[dict], officer_role: str, officer_ps_code: str) -> list[dict]:

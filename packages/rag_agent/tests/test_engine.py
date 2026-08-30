@@ -198,9 +198,19 @@ def test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_exp
     _KNOWN = {
         ("PERSON_HISTORY", "previous cases", "CRIME_SEARCH", "cases"),
         ("FINANCIAL", "account", "CRIME_SEARCH", "count"),
+        # ...and its plural, added when "show me the bank transfers" turned out to
+        # score CRIME_SEARCH because FINANCIAL listed only the singulars. Harmless
+        # for the same reason the singular is: matching is word-bounded, so "count"
+        # never fires inside "accounts".
+        ("FINANCIAL", "accounts", "CRIME_SEARCH", "count"),
         ("SIMILAR_CASES", "matching cases", "CRIME_SEARCH", "cases"),
         ("SIMILAR_CASES", "related cases", "CRIME_SEARCH", "cases"),
         ("CRIME_SEARCH", "firs", "FIR_LOOKUP", "fir"),
+        # Wanted, not tolerated: "is there a duplicate record for him" scores
+        # PERSON_HISTORY on "record" and ALIAS_CHECK on "duplicate". The two-word
+        # keyword is what gives ALIAS_CHECK the second hit that breaks the tie
+        # toward the correct read.
+        ("ALIAS_CHECK", "duplicate record", "PERSON_HISTORY", "record"),
     }
     found = set()
     for name_a, (kws_a, _) in intents_mod.INTENTS.items():
@@ -1900,7 +1910,15 @@ def _prior_turn(**over):
     return ConversationTurn(**base)
 
 
-def test_explain_reasoning_restates_the_previous_trace():
+def test_explain_reasoning_answers_the_claim_not_the_pipeline():
+    """'Why are you showing me these people?' must be answered with the derivation of
+    the RESULT, never by restating the agent trace.
+
+    This assertion is inverted from what it used to be, deliberately. The old answer
+    was the trace ("SQL Agent: 1 criminal-record row(s)"), which is true, is written
+    for an engineer, and is not what was asked — an officer wants the records and the
+    relationship, not the name of the component that fetched them. The trace has not
+    gone anywhere; it is one click away in the Reasoning Trace panel."""
     import rag_agent.orchestrator as orch
     from rag_agent.state import InvestigationState
 
@@ -1917,7 +1935,13 @@ def test_explain_reasoning_restates_the_previous_trace():
     finally:
         orch._last_turn = saved
 
-    assert "criminal-record row" in state.final_answer
+    # The provenance chain's own vocabulary: what kind of thing this is, and why it
+    # is on screen.
+    assert "RECORD" in state.final_answer
+    assert "How it was arrived at" in state.final_answer
+    # And explicitly NOT the internal step names the trace is written in.
+    assert "SQL Agent" not in state.final_answer
+    assert "criminal-record row" not in state.final_answer
     assert len(state.citations) == 1
 
 

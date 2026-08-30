@@ -7,6 +7,13 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/apps/web"
+# A deploy build must never inherit a local override. apps/web/.env.local is the
+# right way to point `next dev` at a local API, and it is gitignored — but Next
+# reads it during `next build` too, so on a developer machine that has one this
+# would quietly ship "http://localhost:8000" to every officer's browser. The
+# guard below catches that; pinning it here means it never happens. An explicit
+# NEXT_PUBLIC_API_URL in the environment still wins, for a staging deploy.
+export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://veritas-api-50043864344.development.catalystappsail.in}"
 npm run build
 
 cd "$ROOT"

@@ -31,6 +31,19 @@ export default function TopBar({
   const [openSys, setOpenSys] = useState(false);
   const sysRef = useRef<HTMLDivElement>(null);
 
+  /* Light is the default and the one this console is designed in; dark is a
+   * preference some officers work a night shift in, so it is offered where the
+   * other system-level settings are rather than given a button in the chrome. */
+  const [theme, setTheme] = useState<"light" | "dark">("light");
+  useEffect(() => {
+    const saved = localStorage.getItem("veritas-theme");
+    if (saved === "dark") setTheme("dark");
+  }, []);
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("veritas-theme", theme);
+  }, [theme]);
+
   useEffect(() => {
     getHealth().then(setHealth).catch(() => setDown(true));
   }, []);
@@ -114,6 +127,15 @@ export default function TopBar({
             )}
             <div className="meta" style={{ marginTop: 8, color: "var(--t-4)" }}>
               Every answer is drawn from this set. Nothing outside it can be cited.
+            </div>
+            <div className="syspop-foot">
+              <span className="label">Appearance</span>
+              <div className="seg" role="group" aria-label="Appearance">
+                <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}
+                  aria-pressed={theme === "light"}>Light</button>
+                <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}
+                  aria-pressed={theme === "dark"}>Dark</button>
+              </div>
             </div>
           </div>
         )}

@@ -1,8 +1,10 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
+import WhyChain from "../WhyChain";
+import { caseIdOf } from "@/lib/evidence";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ramp, rgba, ACCENT, MAP_POINT } from "./palette";
+import { ACCENT, MAP_POINT, ramp, rgba } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
 type Point = {
@@ -98,15 +100,20 @@ function escapeHtml(s: string): string {
  * than invented as a fourth hue.
  */
 export default function MapView({
-  data, onSelect, activeEvidenceId,
+  data, onSelect, activeEvidenceId, onAsk, sessionId,
 }: {
   data: { polygons: Hotspot[]; fir_points: Point[] };
   onSelect?: (id: string) => void;
   activeEvidenceId?: string | null;
+  /** A selected case is an investigation entry point, not just a highlight —
+   *  these are the questions the engine can actually answer about it. */
+  onAsk?: (q: string) => void;
+  sessionId?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [showHotspots, setShowHotspots] = useState(true);
+  const [why, setWhy] = useState(false);
   // Latest callback without re-registering the click handler on every render —
   // interactions are wired up ONCE (see addInteractions below).
   const onSelectRef = useRef(onSelect);
@@ -125,7 +132,6 @@ export default function MapView({
     });
     map.current.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
     map.current.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: "metric" }), "bottom-left");
-    map.current.addControl(new maplibregl.AttributionControl({ compact: true }), "bottom-right");
 
     const addDistricts = () => {
       const m = map.current;
@@ -305,7 +311,7 @@ export default function MapView({
           filter: ["has", "point_count"],
           paint: {
             "circle-radius": ["step", ["get", "point_count"], 11, 10, 14, 50, 17, 200, 20],
-            "circle-color": MAP_POINT,
+            "circle-color": MAP_POINT(),
           },
         });
         m.addLayer({
@@ -342,7 +348,7 @@ export default function MapView({
           filter: ["!", ["has", "point_count"]],
           paint: {
             "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, CASE_R * 0.6, 13, CASE_R],
-            "circle-color": MAP_POINT,
+            "circle-color": MAP_POINT(),
             "circle-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.55, 13, 1],
             "circle-stroke-width": 1.5, "circle-stroke-color": "#ffffff",
           },
@@ -370,7 +376,7 @@ export default function MapView({
           filter: ["==", ["get", "fir_id"], "__none__"],
           paint: {
             "circle-radius": SELECT_RING_R, "circle-color": "rgba(0,0,0,0)",
-            "circle-stroke-width": 2.5, "circle-stroke-color": ACCENT,
+            "circle-stroke-width": 2.5, "circle-stroke-color": ACCENT(),
           },
         });
       }
@@ -404,7 +410,11 @@ export default function MapView({
   useEffect(() => {
     const m = map.current;
     if (!m || !m.getLayer("fir-pts-selected")) return;
-    const fid = activeEvidenceId?.startsWith("fir:") ? activeEvidenceId.slice(4) : "__none__";
+    // Either evidence_id shape names the same case — `fir:1194` from the structured
+    // layer, `vec:fir_narrative:1194` from semantic search. Reading only the first
+    // meant that on a hotspot answer, where every cited case arrives from semantic
+    // search, selecting a case lit up no point at all.
+    const fid = caseIdOf(activeEvidenceId) ?? "__none__";
     const filter: maplibregl.FilterSpecification = ["==", ["get", "fir_id"], fid];
     m.setFilter("fir-pts-selected", filter);
     m.setFilter("fir-pts-selected-halo", filter);
@@ -427,9 +437,71 @@ export default function MapView({
 
   const hasHotspots = (data.polygons ?? []).length > 0;
 
+  // The case behind the current selection, if the selection is one of the points
+  // on this map. A click already highlighted the evidence card; this is what turns
+  // that highlight into somewhere to go next.
+  const selectedFir = caseIdOf(activeEvidenceId);
+  const selectedPoint = selectedFir
+    ? (data.fir_points ?? []).find((p) => String(p.fir_id) === selectedFir) ?? null
+    : null;
+  // Collapse the chain whenever the selection moves — a chain left open from the
+  // previous case would be read as this one's.
+  useEffect(() => setWhy(false), [activeEvidenceId]);
+
   return (
     <div className="map-shell">
       <div ref={ref} className="map-canvas" />
+
+      {selectedPoint && (
+        <div className="map-probe probe">
+          <div className="probe-head">
+            <span className="probe-what mono">{selectedPoint.crime_no ?? `FIR ${selectedPoint.fir_id}`}</span>
+            <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+          </div>
+          <div className="meta">
+            {[selectedPoint.crime_type, selectedPoint.district,
+              selectedPoint.filed ? `filed ${fmtDate(selectedPoint.filed)}` : null]
+              .filter(Boolean).join(" · ")}
+            <br />
+            Plotted here because the case file records these coordinates.
+          </div>
+
+          {why && (
+            <div className="probe-body">
+              <WhyChain evidenceId={`fir:${selectedPoint.fir_id}`} sessionId={sessionId}
+                onAsk={onAsk} />
+            </div>
+          )}
+
+          <div className="probe-acts">
+            <button className="btn btn-sm" onClick={() => setWhy((v) => !v)} aria-expanded={why}>
+              {why ? "Hide chain" : "Why is this here?"}
+            </button>
+            {onAsk && (
+              <>
+                <button className="btn btn-sm"
+                  onClick={() => onAsk(`What is the status of FIR ${selectedPoint.crime_no ?? selectedPoint.fir_id}?`)}>
+                  What happened here?
+                </button>
+                <button className="btn btn-sm" onClick={() => onAsk("Who are all involved?")}>
+                  Who was involved?
+                </button>
+                <button className="btn btn-sm" onClick={() => onAsk("Show me the timeline.")}>
+                  Timeline
+                </button>
+                <button className="btn btn-sm" onClick={() => onAsk("Find similar cases.")}>
+                  Related cases
+                </button>
+                <button className="btn btn-sm"
+                  onClick={() => onAsk("Pin this to the case board")}>
+                  Add to board
+                </button>
+              </>
+            )}
+            <button className="btn btn-sm btn-quiet" onClick={() => onSelect?.("")}>Clear</button>
+          </div>
+        </div>
+      )}
 
       {hasHotspots && (
         <div style={{ position: "absolute", left: 10, top: 10, zIndex: 2 }}>
@@ -437,7 +509,7 @@ export default function MapView({
             className="btn btn-sm"
             onClick={() => setShowHotspots((v) => !v)}
             aria-pressed={showHotspots}
-            style={{ background: "rgba(15,20,27,0.94)" }}
+            style={{ background: "var(--float)" }}
           >
             {showHotspots ? "Hide density" : "Show density"}
           </button>

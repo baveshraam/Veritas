@@ -1,6 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
-import { CHART_BASE, PRIMARY, TEXT_DIM, ramp, rgba } from "./palette";
+import { PRIMARY, TEXT_DIM, TEXT_FAINT, chartBase, ramp, rgba, sevGradient } from "./palette";
 
 /** The money trail.
  *
@@ -39,15 +39,18 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
       )
     : null;
 
+  const base = chartBase();
+  const faint = TEXT_FAINT();
+
   const option = {
-    ...CHART_BASE,
+    ...base,
     tooltip: {
-      ...CHART_BASE.tooltip,
+      ...base.tooltip,
       formatter: (p: any) =>
         p.dataType === "edge"
           ? `<b>₹${Number(p.data.value).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</b><br/>` +
-            `<span style="color:#64768a">${short(p.data.source)} → ${short(p.data.target)}</span>`
-          : `<b>${short(p.name)}</b><br/><span style="color:#64768a">₹${Math.round(flowOf.get(p.name) ?? 0).toLocaleString("en-IN")} through this account</span>`,
+            `<span style="color:${faint}">${short(p.data.source)} → ${short(p.data.target)}</span>`
+          : `<b>${short(p.name)}</b><br/><span style="color:${faint}">₹${Math.round(flowOf.get(p.name) ?? 0).toLocaleString("en-IN")} through this account</span>`,
     },
     series: [{
       type: "sankey",
@@ -56,13 +59,13 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
       nodeGap: 10,
       emphasis: { focus: "adjacency" },
       label: {
-        color: TEXT_DIM, fontSize: 10,
+        color: TEXT_DIM(), fontSize: 10,
         fontFamily: "var(--font-mono), ui-monospace, monospace",
         formatter: (p: any) => (labeled && !labeled.has(p.name) ? "" : short(p.name)),
       },
       lineStyle: { curveness: 0.5 },
       itemStyle: { borderWidth: 0 },
-      data: nodes.map((n) => ({ name: n.name, itemStyle: { color: rgba(PRIMARY, 0.75) } })),
+      data: nodes.map((n) => ({ name: n.name, itemStyle: { color: rgba(PRIMARY(), 0.75) } })),
       links: links.map((l) => ({
         ...l,
         lineStyle: { color: ramp((l.value ?? 0) / max), opacity: 0.38 },
@@ -77,10 +80,10 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
         <span className="label">Transfer size</span>
         <div className="viz-legend-row">
           <span className="viz-legend-scale"
-            style={{ background: "linear-gradient(90deg, #3f9d6d, #d4883c, #dc5b5f)" }} />
+            style={{ background: sevGradient() }} />
           <span>smaller → larger</span>
         </div>
-        <span className="meta" style={{ color: "var(--t-4)" }}>Left to right is the direction of payment.</span>
+        <span className="meta">Left to right is the direction of payment.</span>
       </div>
     </div>
   );

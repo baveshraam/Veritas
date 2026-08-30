@@ -560,7 +560,12 @@ _ORDINAL_WORDS = {
 }
 _ORDINAL_RE = re.compile(
     r"\bthe\s+(" + "|".join(_ORDINAL_WORDS) + r"|\d+(?:st|nd|rd|th))\s+"
-    r"(?:one|case|person|fir|associate|record|account|transaction|item)\b"
+    # The noun list is the set of things a previous answer can list. "event",
+    # "hotspot", "transfer", "lead" and "finding" were missing, so "what supports
+    # the third event" — one of the shortest ways an officer interrogates a
+    # timeline — resolved to no position at all and fell through to a fresh search.
+    r"(?:one|case|person|fir|associate|record|account|transaction|item|event|"
+    r"hotspot|cluster|transfer|payment|lead|finding|result|name)\b"
     r"|\b(?:item|number|record)\s*#?\s*(\d+)\b",
     re.I,
 )
@@ -574,7 +579,13 @@ _OTHER_RE = re.compile(r"\bthe\s+other\s+(?:one|person)\b", re.I)
 _AMBIGUOUS_MORE_RE = re.compile(
     r"\bonly\s+these\??\b|\bis\s+that\s+all\??\b|\bare\s+there\s+more\??\b"
     r"|\bany(?:thing)?\s+else\b|\bwhat\s+else\b|\bthat'?s\s+it\??\b"
-    r"|\bjust\s+these\??\b|\bmore\s+than\s+(?:this|these|that|those)\??\b",
+    r"|\bjust\s+these\??\b|\bmore\s+than\s+(?:this|these|that|those)\??\b"
+    # "Is this a complete list?" and "is this a sample?" ask the same thing in the
+    # words an auditor uses, and matched none of the above — so they fell to
+    # CRIME_SEARCH on the bare word "list" and re-ran the search they were querying.
+    r"|\bis\s+(?:this|that)\s+(?:a\s+)?(?:complete|full|exhaustive|whole)\b"
+    r"|\bis\s+(?:this|that)\s+(?:a\s+)?sample\b"
+    r"|\bis\s+(?:this|that)\s+everything\b",
     re.I,
 )
 # Unambiguous elaboration cues — never mean "more items of the same list".
@@ -697,6 +708,88 @@ def crime_type_from_query(query: str) -> Optional[str]:
     q = (query or "").lower()
     matches = [ct for ct in crime_type_names() if ct.lower() in q]
     return max(matches, key=len) if matches else None
+
+
+# --- the qualifiers a case search is actually asked with ------------------------
+#
+# CRIME_SEARCH used to read exactly two: crime type and district. Everything else an
+# officer says — "pending", "solved", "under section 379", "from PS 2201", "in June
+# 2026" — was dropped WITHOUT A WORD, and the answer came back as a count of every
+# case in scope with five arbitrary FIRs under it, cited and confident. Measured
+# live: "How many cases are pending in Mandya?" answered 263 (every Mandya case);
+# "Show me cases under section 379" answered 10,000 (every case in the state).
+#
+# Answering a different question than the one asked, without saying so, is the worst
+# failure this system can produce short of inventing a record. These extractors and
+# the filters behind them (sql_agent._filters) exist to close that.
+
+# Status words as an officer says them, mapped to the CaseStatusMaster values.
+_STATUS_WORDS: tuple[tuple[str, str], ...] = (
+    (r"\bunder investigation\b|\bpending\b|\bopen cases?\b|\bunsolved\b|\bstill open\b",
+     "Under Investigation"),
+    (r"\bcharge ?sheeted\b|\bcharge ?sheet(s)? (filed|have been filed)\b", "Chargesheeted"),
+    (r"\bconvicted\b|\bconvictions?\b", "Convicted"),
+    (r"\bacquitted\b|\bacquittals?\b", "Acquitted"),
+    (r"\bclosed cases?\b|\bdisposed\b", "Closed"),
+)
+_STATUS_RE = tuple((re.compile(p, re.I), v) for p, v in _STATUS_WORDS)
+
+# "under section 379", "u/s 420", "IPC 457", "section 302". Floored at two digits so a
+# bare year or a case count can never be read as a section.
+_SECTION_RE = re.compile(
+    r"\b(?:u/?s|under section|section|sections|ipc)\s*\.?\s*(\d{2,3}[A-Za-z]?)\b", re.I)
+
+# "PS 2201", "police station 2201", "station 2201". The ER's station key is numeric.
+_STATION_RE = re.compile(
+    r"\b(?:ps|police station|station)\s*[-#]?\s*(\d{3,5})\b", re.I)
+
+_MONTHS = {m: i for i, m in enumerate(
+    ("january", "february", "march", "april", "may", "june", "july",
+     "august", "september", "october", "november", "december"), start=1)}
+_MONTH_YEAR_RE = re.compile(
+    r"\b(" + "|".join(_MONTHS) + r")\s+(\d{4})\b", re.I)
+_YEAR_RE = re.compile(r"\b(?:in|during|of|for)\s+(20\d{2})\b", re.I)
+
+
+def case_status_from_query(query: str) -> Optional[str]:
+    """The CaseStatusMaster value a question turns on, if it names one."""
+    for pattern, value in _STATUS_RE:
+        if pattern.search(query or ""):
+            return value
+    return None
+
+
+def section_from_query(query: str) -> Optional[str]:
+    m = _SECTION_RE.search(query or "")
+    return m.group(1) if m else None
+
+
+def station_from_query(query: str) -> Optional[str]:
+    m = _STATION_RE.search(query or "")
+    return m.group(1) if m else None
+
+
+def date_window_from_query(query: str) -> tuple[Optional[date], Optional[date]]:
+    """A month or a year named in the question, as a half-open [from, to) window.
+
+    Deliberately only the two absolute forms. "Last year" and "the last 30 days" are
+    relative to a clock this module does not own — the model path already extracts
+    those into `date_before`/`date_after` constraints, and inventing a second, silently
+    different reading of them here is how two parts of one answer end up describing
+    different windows.
+    """
+    q = query or ""
+    m = _MONTH_YEAR_RE.search(q)
+    if m:
+        month, year = _MONTHS[m.group(1).lower()], int(m.group(2))
+        start = date(year, month, 1)
+        end = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        return start, end
+    m = _YEAR_RE.search(q)
+    if m:
+        year = int(m.group(1))
+        return date(year, 1, 1), date(year + 1, 1, 1)
+    return None, None
 
 
 def _interpret_deterministic(

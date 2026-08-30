@@ -1,6 +1,7 @@
 import type {
-  BoardItem, BoardItemType, CaseBoard, CaseIndex, CopilotBrief, EvidenceItem, FinalEvent,
-  Officer, TimelineEvent, TimelineResult, TraceEntry,
+  BoardItem, BoardItemType, CaseBoard, CaseDetail, CaseIndex, CopilotBrief, Derivation,
+  EvidenceItem, FinalEvent, Officer, PersonDetail, SearchHit, TimelineEvent,
+  TimelineResult, TraceEntry,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -190,6 +191,30 @@ export async function listCases(
   return r.json();
 }
 
+/** One case, in full: its own columns plus the accused, the victims and the IPC
+ *  sections — all already masked by rank server-side. The Overview reads this;
+ *  nothing here is a second copy of the record. */
+export async function getFir(firId: string): Promise<CaseDetail> {
+  const r = await fetch(`${BASE}/fir/${firId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(
+    r.status === 404 ? "This case is not in the records"
+    : r.status === 403 ? "This case was filed at another police station"
+    : "The case record could not be loaded");
+  return r.json();
+}
+
+/** One reconstructed person. The Overview reads this only to answer a question
+ *  the case file cannot: the file records "Suma Nadkarni D/o Eshwar" while every
+ *  derived surface calls the same PersonUID "Soom Nadkarni". Both are true — one
+ *  is as-filed, one is the identity Fellegi-Sunter resolved — and showing them
+ *  apart with nothing linking them is how an officer concludes there are two
+ *  people. */
+export async function getPerson(personId: string): Promise<PersonDetail> {
+  const r = await fetch(`${BASE}/person/${personId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error("Person not found");
+  return r.json();
+}
+
 export async function getCopilotBrief(firId: string): Promise<CopilotBrief> {
   const r = await fetch(`${BASE}/copilot/${firId}`, { headers: authHeaders() });
   if (!r.ok) throw new Error(r.status === 404 ? "FIR not found" : "Copilot brief failed");
@@ -259,6 +284,41 @@ export async function getPersonTimeline(personId: string): Promise<TimelineResul
  *  mechanism every other evidence item already uses, with no server round trip. */
 export function timelineEvidenceId(e: TimelineEvent): string {
   return `timeline:${e.event_type}:${e.entity_id}:${e.date}`;
+}
+
+/** The one search box — GET /search.
+ *
+ *  Distinct from `listCases({q})`, which filters the browsable register. This is
+ *  ranked and typed: cases and people together, each hit carrying the fields that
+ *  actually matched it. The register's own `q` matched the WHOLE query inside ONE
+ *  field, so "theft mandya" found nothing at all. */
+export async function searchRecords(q: string, limit = 20): Promise<SearchHit[]> {
+  const r = await fetch(`${BASE}/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    { headers: authHeaders() });
+  if (!r.ok) throw new Error("Search is unavailable");
+  return (await r.json()).hits as SearchHit[];
+}
+
+/** "Why is this here?" for one result — GET /explain.
+ *
+ *  The REST half of the same question the copilot answers when it is typed
+ *  ("why is this person connected?"). Both call rag_agent.provenance.explain, so a
+ *  result explained by clicking and the same result explained by asking are one
+ *  explanation shown twice.
+ *
+ *  `sessionId` is what lets the server say why THIS case, of ten thousand, is on
+ *  screen — the same FIR is there for a different reason depending on whether it was
+ *  looked up by number, matched a filter, or was ranked as similar to another case. */
+export async function explainEvidence(
+  evidenceId: string, sessionId?: string,
+): Promise<Derivation> {
+  const q = new URLSearchParams({ evidence_id: evidenceId });
+  if (sessionId) q.set("session_id", sessionId);
+  const r = await fetch(`${BASE}/explain?${q}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(
+    r.status === 403 ? "That result is outside your access scope"
+    : "Could not reconstruct where this came from");
+  return r.json();
 }
 
 export async function deleteBoardItem(firId: string, itemId: string): Promise<void> {

@@ -36,49 +36,70 @@
  *    character, not read as prose.
  * ========================================================================== */
 
+/* ============================================================================
+ * TOKENS
+ *
+ * LIGHT IS THE DEFAULT. An investigative workstation is read for hours, in
+ * daylight, next to paper. A warm off-white ground, white work surfaces, cool
+ * slate rules and deep navy text is the register of an institutional record
+ * system; the previous ink-dark shell read as an analytics product. Dark
+ * remains available (`data-theme="dark"`) — every value below is redefined
+ * there and nothing else in this file changes.
+ * ========================================================================== */
+
 :root {
   /* ---- neutral ladder: the 90% ---------------------------------------- */
-  --n-0: #0a0d12;          /* app ground, behind everything */
-  --n-1: #0f141b;          /* panel surface */
-  --n-2: #151c25;          /* elevated: rows, inputs, wells */
-  --n-3: #1c2531;          /* hover / raised */
-  --n-4: #243040;          /* pressed / strong hover */
+  --n-0: #f1f0ec;          /* app ground — warm off-white, never pure white */
+  --n-1: #ffffff;          /* work surface: panels */
+  --n-2: #f6f7f8;          /* elevated: rows, inputs, wells */
+  --n-3: #eceff2;          /* hover / raised */
+  --n-4: #dfe4e9;          /* pressed / strong hover */
 
-  --line: #1e2833;         /* hairline divider — the primary structural tool */
-  --line-2: #2a3746;       /* stronger divider, control borders */
-  --line-3: #3a4a5c;       /* focus / hover border */
+  --line: #e5e8ec;         /* hairline divider — the primary structural tool */
+  --line-2: #d2d8df;       /* stronger divider, control borders */
+  --line-3: #adb7c2;       /* focus / hover border */
 
-  --t-1: #e8eef5;          /* primary text */
-  --t-2: #9aabbd;          /* secondary text, body prose */
-  --t-3: #64768a;          /* metadata, labels at rest */
-  --t-4: #465768;          /* disabled, watermark */
+  --t-1: #16202b;          /* primary text — deep navy slate */
+  --t-2: #41505f;          /* secondary text, body prose */
+  --t-3: #6a7787;          /* metadata, labels at rest */
+  --t-4: #97a2ad;          /* disabled, watermark */
 
   /* ---- identity + action ----------------------------------------------- */
-  /* Gold, from the KSP uniform. Identity and selection. Never a severity. */
-  --gold: #c9a44c;
-  --gold-hi: #e0bd6b;
-  --gold-dim: rgba(201, 164, 76, 0.14);
-  --gold-line: rgba(201, 164, 76, 0.42);
+  /* Ochre, from the KSP uniform. Identity and selection. Never a severity. */
+  --gold: #96701c;
+  --gold-hi: #74560f;
+  --gold-dim: rgba(150, 112, 28, 0.11);
+  --gold-line: rgba(150, 112, 28, 0.40);
 
   /* Restrained blue: primary action, neutral analytical selection, RECORD. */
-  --pri: #4084d8;
-  --pri-hi: #5a99e6;
-  --pri-dim: rgba(64, 132, 216, 0.14);
-  --pri-line: rgba(64, 132, 216, 0.40);
+  --pri: #1f6ed0;
+  --pri-hi: #1656a8;
+  --pri-dim: rgba(31, 110, 208, 0.09);
+  --pri-line: rgba(31, 110, 208, 0.38);
 
   /* ---- semantic: each hue carries exactly one meaning ------------------ */
-  --ok: #3f9d6d;           /* supported · verified · strong · low severity */
-  --ok-dim: rgba(63, 157, 109, 0.14);
-  --amber: #d4883c;        /* DERIVED · attention · medium severity */
-  --amber-dim: rgba(212, 136, 60, 0.15);
-  --red: #dc5b5f;          /* anomaly · error · weak · high severity */
-  --red-dim: rgba(220, 91, 95, 0.15);
-  --violet: #8b82d8;       /* MODEL OUTPUT · prediction */
-  --violet-dim: rgba(139, 130, 216, 0.16);
+  --ok: #1c7a4c;           /* supported · verified · strong · low severity */
+  --ok-dim: rgba(28, 122, 76, 0.11);
+  --amber: #9c6410;        /* DERIVED · attention · medium severity */
+  --amber-dim: rgba(156, 100, 16, 0.12);
+  --red: #b8362e;          /* anomaly · error · weak · high severity */
+  --red-dim: rgba(184, 54, 46, 0.10);
+  --violet: #574bb0;       /* MODEL OUTPUT · prediction */
+  --violet-dim: rgba(87, 75, 176, 0.11);
 
   /* A located case on the map: cartographic navy. Outside the severity ramp
    * (a hotspot's colours) and outside gold (the selected mark). */
   --map-point: #1e4a78;
+
+  /* ---- surfaces that are not neutrals ---------------------------------- */
+  --on-accent: #ffffff;    /* text on a filled --pri / --gold button */
+  --scrim: rgba(22, 32, 43, 0.30);
+  --shadow-pop: 0 8px 24px rgba(20, 30, 42, 0.12);
+  --shadow-drawer: -18px 0 44px rgba(20, 30, 42, 0.14);
+  --shadow-overlay: 0 24px 70px rgba(20, 30, 42, 0.20);
+  --float: rgba(255, 255, 255, 0.94);   /* legend / control over a map or chart */
+  --chart-grid: rgba(22, 32, 43, 0.07);
+  --map-ctrl-invert: 0;                 /* MapLibre's icons are dark by default */
 
   /* ---- geometry -------------------------------------------------------- */
   --r-sm: 4px;
@@ -88,11 +109,64 @@
   --ease: cubic-bezier(0.2, 0, 0, 1);
   --dur: 180ms;
 
-  --font-body: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-body: var(--font-sans), var(--font-kn), ui-sans-serif, system-ui, sans-serif;
   --font-label: var(--font-cond), var(--font-sans), ui-sans-serif, sans-serif;
   --font-rec: var(--font-mono), ui-monospace, Menlo, monospace;
 
   --topbar-h: 46px;
+}
+
+/* Kannada is a first-class system language, not a fallback. Noto Sans Kannada
+ * carries the script; the extra line-height is not cosmetic — Kannada's
+ * ascenders and vowel signs are clipped at the Latin ratio. */
+:lang(kn), .kn {
+  font-family: var(--font-kn), var(--font-sans), ui-sans-serif, sans-serif;
+  line-height: 1.85;
+}
+
+[data-theme="dark"] {
+  --n-0: #0a0d12;
+  --n-1: #0f141b;
+  --n-2: #151c25;
+  --n-3: #1c2531;
+  --n-4: #243040;
+
+  --line: #1e2833;
+  --line-2: #2a3746;
+  --line-3: #3a4a5c;
+
+  --t-1: #e8eef5;
+  --t-2: #9aabbd;
+  --t-3: #64768a;
+  --t-4: #465768;
+
+  --gold: #c9a44c;
+  --gold-hi: #e0bd6b;
+  --gold-dim: rgba(201, 164, 76, 0.14);
+  --gold-line: rgba(201, 164, 76, 0.42);
+
+  --pri: #4084d8;
+  --pri-hi: #5a99e6;
+  --pri-dim: rgba(64, 132, 216, 0.14);
+  --pri-line: rgba(64, 132, 216, 0.40);
+
+  --ok: #3f9d6d;
+  --ok-dim: rgba(63, 157, 109, 0.14);
+  --amber: #d4883c;
+  --amber-dim: rgba(212, 136, 60, 0.15);
+  --red: #dc5b5f;
+  --red-dim: rgba(220, 91, 95, 0.15);
+  --violet: #8b82d8;
+  --violet-dim: rgba(139, 130, 216, 0.16);
+
+  --on-accent: #06101d;
+  --scrim: rgba(4, 7, 11, 0.6);
+  --shadow-pop: 0 14px 40px rgba(0, 0, 0, 0.55);
+  --shadow-drawer: -24px 0 60px rgba(0, 0, 0, 0.5);
+  --shadow-overlay: 0 30px 90px rgba(0, 0, 0, 0.6);
+  --float: rgba(15, 20, 27, 0.94);
+  --chart-grid: rgba(255, 255, 255, 0.055);
+  --map-ctrl-invert: 0.82;
 }
 
 * { box-sizing: border-box; }
@@ -157,7 +231,13 @@ body {
   grid-template-columns: minmax(330px, 25%) minmax(0, 1fr) minmax(300px, 22%);
   min-height: 0;
   border-top: 1px solid var(--line);
+  transition: grid-template-columns 260ms var(--ease);
 }
+/* Nothing has been cited yet, so the evidence column has nothing to hold. It
+ * keeps a narrow strip — enough to say what it is for and to stay in the same
+ * place once a source arrives — instead of spending a fifth of the workstation
+ * on the words "no sources yet". */
+.workbench.lean { grid-template-columns: minmax(330px, 26%) minmax(0, 1fr) 210px; }
 
 .col {
   display: flex;
@@ -203,11 +283,12 @@ body {
 
 @media (max-width: 1400px) {
   .workbench { grid-template-columns: 320px minmax(0, 1fr) 300px; }
+  .workbench.lean { grid-template-columns: 320px minmax(0, 1fr) 190px; }
 }
 @media (max-width: 1180px) {
   /* Evidence becomes contextual — reachable through the inspector, which is a
    * full overlay at this width. The workspace keeps the room. */
-  .workbench { grid-template-columns: 310px minmax(0, 1fr); }
+  .workbench, .workbench.lean { grid-template-columns: 310px minmax(0, 1fr); }
   .col-evidence { display: none; }
 }
 @media (max-width: 860px) {
@@ -348,7 +429,7 @@ body {
   background: var(--n-2);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.55);
+  box-shadow: var(--shadow-pop);
   cursor: default;
   animation: pop var(--dur) var(--ease) both;
 }
@@ -359,6 +440,12 @@ body {
 }
 .syspop-row + .syspop-row { border-top: 1px solid var(--line); }
 .syspop-row b { color: var(--t-2); font-weight: 500; font-family: var(--font-rec); font-size: 11.5px; }
+.syspop-foot {
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 10px; padding-top: 9px;
+  border-top: 1px solid var(--line);
+}
+.syspop-foot .seg { margin-left: auto; }
 @keyframes pop { from { opacity: 0; transform: translateY(-4px); } }
 
 /* ============================================================================
@@ -529,10 +616,10 @@ body {
 .btn-primary {
   background: var(--pri);
   border-color: var(--pri);
-  color: #06101d;
+  color: var(--on-accent);
   font-weight: 600;
 }
-.btn-primary:hover:not(:disabled) { background: var(--pri-hi); border-color: var(--pri-hi); color: #06101d; }
+.btn-primary:hover:not(:disabled) { background: var(--pri-hi); border-color: var(--pri-hi); color: var(--on-accent); }
 
 .btn-quiet { background: none; border-color: transparent; color: var(--t-3); }
 .btn-quiet:hover:not(:disabled) { background: var(--n-2); border-color: var(--line-2); }
@@ -632,6 +719,39 @@ body {
   color: var(--t-1);
 }
 .finding-body .dim { display: block; margin-top: 6px; }
+.finding-p { margin: 0 0 9px; }
+.finding-p:last-child { margin-bottom: 0; }
+
+/* The engine's own "Based on N records" line. True, and a caption — not the
+ * first sentence of the finding. */
+.finding-caption {
+  font-family: var(--font-label);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--t-4);
+  margin-bottom: 7px;
+}
+
+/* One cited claim. The chip is the anchor; the sentence hangs off it. */
+.claim {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid var(--line);
+}
+.claim:first-of-type { border-top: 0; padding-top: 0; }
+.claim .cite { flex: 0 0 auto; margin-top: 2px; }
+.claim-body { min-width: 0; }
+
+/* "no inference has been added" — the strongest sentence in the product, and
+ * the one an officer needs least often. It stays; it stops shouting. */
+.finding-footnote {
+  margin-top: 9px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--t-3);
+}
 
 /* A refusal is a first-class product state, not an error. Calm, informative,
  * never red, never shaped like a failure. */
@@ -685,7 +805,7 @@ body {
   transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
 }
 .cite:hover { background: var(--gold-dim); }
-.cite.lit { background: var(--gold); border-color: var(--gold); color: #100c04; }
+.cite.lit { background: var(--gold); border-color: var(--gold); color: var(--on-accent); }
 
 /* Support strip: how well corroborated the finding is, in words first. */
 .support {
@@ -735,10 +855,123 @@ body {
 .entity-rank {
   flex: 0 0 auto;
   width: 15px;
+  align-self: flex-start;
+  padding-top: 1px;
   font-family: var(--font-rec);
   font-size: 10.5px;
   color: var(--t-4);
 }
+
+/* A secondary heading inside an answer module — quieter than the module's own. */
+.module-head.sub { margin-top: 11px; margin-bottom: 3px; }
+
+/* The sentence that reconciles "the answer named two people" with "the graph
+ * draws forty". Without it an officer reads the graph as forty accused. */
+.layer-note {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--t-2);
+}
+.layer-note b { color: var(--t-1); font-weight: 600; }
+
+.entity-row.conn { align-items: flex-start; padding: 6px 7px; }
+.conn-main { display: flex; flex-direction: column; min-width: 0; gap: 1px; }
+.conn-name { font-size: 13px; color: var(--t-1); font-weight: 500; }
+.conn-read {
+  display: flex; flex-wrap: wrap; gap: 4px 8px;
+  font-size: 11.5px; color: var(--t-3);
+}
+.conn-more { padding: 3px 0 2px 30px; }
+.conn-measure {
+  font-family: var(--font-rec);
+  font-size: 10.5px;
+  color: var(--t-4);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------------------------------
+ * WHY IS THIS HERE — the provenance chain (components/WhyChain.tsx).
+ *
+ * Reads as a short structured document, not as a card: an officer is checking
+ * whether to rely on a claim, and the sections have to be scannable in that
+ * order. Nothing here carries a severity colour — a derivation is never an
+ * alarm — and the one ruled block is the caveat, in the same amber the DERIVED
+ * rail uses everywhere else, because "this is not a finding of guilt" is the
+ * system working correctly rather than an error.
+ * ------------------------------------------------------------------------- */
+.why { display: flex; flex-direction: column; gap: 13px; }
+.why-claim {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--t-1);
+  font-weight: 500;
+}
+.why-basis { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.why-sec { display: flex; flex-direction: column; gap: 5px; }
+.why-text { margin: 0; font-size: 12.5px; line-height: 1.6; color: var(--t-2); }
+
+.why-records { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.why-records li {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 5px 8px;
+  background: var(--n-2);
+  border-left: 2px solid var(--pri);
+  border-radius: 0 3px 3px 0;
+}
+.why-rec-label { font-size: 12px; color: var(--t-1); }
+.why-rec-detail { font-size: 11.5px; color: var(--t-3); line-height: 1.45; }
+
+/* Numbered because the steps are ordered: this is the sequence the reasoning
+ * actually ran in, and reading it out of order changes what it claims. */
+.why-steps {
+  margin: 0; padding: 0 0 0 18px;
+  display: grid; gap: 6px;
+  font-size: 12.5px; line-height: 1.6; color: var(--t-2);
+}
+.why-steps li::marker { color: var(--t-4); font-family: var(--font-rec); font-size: 11px; }
+
+.why-caveat {
+  display: flex; flex-direction: column; gap: 4px;
+  padding: 8px 10px;
+  background: var(--amber-dim);
+  border-left: 2px solid var(--amber);
+  border-radius: 0 3px 3px 0;
+}
+.why-incomplete {
+  margin: 0;
+  font-size: 12px; line-height: 1.55; color: var(--t-3);
+  font-style: italic;
+}
+.why-asks { display: flex; flex-wrap: wrap; gap: 5px; }
+
+/* The map's own probe sits over the canvas, bottom-right — clear of the legend
+ * (bottom-left), the density toggle (top-left) and MapLibre's zoom (top-right). */
+.map-probe {
+  position: absolute;
+  right: 12px; bottom: 12px;
+  z-index: 3;
+  width: 300px;
+  max-width: calc(100% - 24px);
+  background: var(--float);
+  box-shadow: var(--shadow-pop);
+  animation: pop var(--dur) var(--ease) both;
+}
+
+/* The click-to-investigate panel: what a selected node / map case / timeline
+ * event becomes. Shares the chain's own rendering; this is only the frame. */
+.probe {
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 11px 12px;
+  background: var(--n-1);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+}
+.probe-head { display: flex; align-items: center; gap: 8px; }
+.probe-what { font-size: 13.5px; color: var(--t-1); font-weight: 600; min-width: 0; }
+.probe-body { max-height: 340px; overflow-y: auto; padding-right: 2px; }
+.probe-acts { display: flex; flex-wrap: wrap; gap: 5px; }
 
 /* Suggested follow-ups: real questions, one click. */
 .suggests { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 11px; }
@@ -828,6 +1061,7 @@ body {
 }
 .composer-box {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 6px;
   padding: 6px;
@@ -851,9 +1085,92 @@ body {
 }
 .composer textarea:focus { outline: none; }
 .composer textarea::placeholder { color: var(--t-4); }
-.composer-acts { display: flex; align-items: center; gap: 5px; }
-.mic-wave { flex: 1 1 auto; height: 34px; border-radius: var(--r-sm); background: var(--n-3); }
-.btn-rec { border-color: var(--red); color: var(--red); background: var(--red-dim); }
+.composer textarea { min-width: 0; }
+/* The mic and Ask are direct children of the box now (the wrapper div is gone), so
+ * the recording bar can claim a row of its own without escaping a nested flex
+ * context. Ask stays pinned right whatever the field is doing. */
+.composer-ask { margin-left: auto; }
+@media (max-width: 1240px) {
+  /* Two buttons beside a field this narrow leave no room for the prompt text. */
+  .composer textarea { flex: 1 1 100%; }
+}
+/* ---- push-to-talk ------------------------------------------------------
+ * A mic button that becomes a recording BAR. The bar carries everything the
+ * officer needs to decide what to do with the recording — that it is live, how
+ * loud, how long, and the two things they can do about it — because the old
+ * control offered a single "Stop" that sent, with no way to abandon a recording
+ * that had already gone wrong.
+ * ---------------------------------------------------------------------- */
+/* Visually hidden, still announced. The microphone going live is a state change
+ * a screen reader user has no other way to notice. */
+.sr-only {
+  position: absolute;
+  width: 1px; height: 1px;
+  padding: 0; margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Why a search hit is in the list. Quiet, and always present: a ranked order the
+ * officer cannot account for is one they stop reading. */
+.palette-why {
+  font-size: 10.5px;
+  color: var(--t-4);
+  font-family: var(--font-rec);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.btn-mic { display: inline-flex; align-items: center; gap: 5px; }
+.btn-mic svg { opacity: 0.75; }
+.btn-mic:hover:not(:disabled) svg { opacity: 1; }
+
+.rec {
+  /* Its own full-width row, ABOVE the field. The question stays typed and the Ask
+     button stays reachable; nested in the button cluster the bar overflowed a
+     390px column and pushed Ask past the edge of the panel. */
+  flex: 1 1 100%;
+  order: -1;
+  display: flex; align-items: center; gap: 7px;
+  padding: 3px 4px 3px 8px;
+  border: 1px solid var(--red-dim);
+  border-radius: var(--r-sm);
+  background: var(--red-dim);
+  animation: pop var(--dur) var(--ease) both;
+}
+.rec-off { padding: 5px 6px 5px 9px; border-color: var(--line-2); background: var(--n-2); }
+.rec-off .meta { max-width: 260px; }
+
+/* The dot is always visible (recording is on) and pulses only while sound is
+ * actually arriving — so a dead microphone looks different from a live one,
+ * which is the failure a bare "Stop" button could not show. */
+.rec-dot {
+  flex: 0 0 auto;
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--red);
+  opacity: 0.45;
+  transition: opacity 120ms linear;
+}
+.rec-dot.is-live { opacity: 1; animation: rec-pulse 1s ease-in-out infinite; }
+@keyframes rec-pulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.35); }
+}
+
+.rec-wave { flex: 1 1 auto; min-width: 60px; height: 26px; }
+.rec-time {
+  font-size: 11px; color: var(--t-3);
+  font-variant-numeric: tabular-nums;
+  min-width: 30px; text-align: right;
+}
+.rec-time.is-near { color: var(--red); font-weight: 600; }
+
+@media (prefers-reduced-motion: reduce) {
+  .rec-dot.is-live { animation: none; }
+}
 
 /* ---- opening state: what this console answers ------------------------- */
 .opening { padding: 14px 13px; }
@@ -886,6 +1203,20 @@ body {
 /* ============================================================================
  * EVIDENCE COLUMN + INSPECTOR
  * ========================================================================== */
+
+.evidence-idle {
+  padding: 16px 12px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--t-3);
+}
+.evidence-idle b {
+  display: block;
+  font-family: var(--font-label);
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.09em; text-transform: uppercase;
+  color: var(--t-4);
+  margin-bottom: 6px;
+}
 
 .evidence-summary {
   padding: 11px 12px;
@@ -927,7 +1258,7 @@ body {
   font-family: var(--font-rec);
   font-size: 10px;
 }
-.ev.on .ev-idx { background: var(--gold); color: #100c04; }
+.ev.on .ev-idx { background: var(--gold); color: var(--on-accent); }
 .ev-body {
   font-size: 12.5px;
   line-height: 1.5;
@@ -953,7 +1284,7 @@ body {
   flex-direction: column;
   background: var(--n-1);
   border-left: 1px solid var(--line-2);
-  box-shadow: -24px 0 60px rgba(0, 0, 0, 0.5);
+  box-shadow: var(--shadow-drawer);
   animation: drawer 220ms var(--ease) both;
 }
 @keyframes drawer { from { transform: translateX(24px); opacity: 0; } }
@@ -997,7 +1328,7 @@ body {
 
 .scrim {
   position: fixed; inset: 0; z-index: 65;
-  background: rgba(4, 7, 11, 0.55);
+  background: var(--scrim);
   animation: fade 200ms var(--ease) both;
 }
 @keyframes fade { from { opacity: 0; } }
@@ -1029,26 +1360,45 @@ body {
 
 .workspace { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
+/* Four things, in the order an investigator needs them: what this is, what it
+ * FOUND, the counts behind that, and the next move. The finding is the headline
+ * and the measurement sits under it — never the other way round. */
 .analysis {
   flex: 0 0 auto;
   display: flex;
-  align-items: flex-end;
-  gap: 20px;
-  padding: 11px 14px 10px;
+  align-items: center;
+  gap: 22px;
+  padding: 11px 14px 11px;
   border-bottom: 1px solid var(--line);
 }
-.analysis-title { font-size: 14.5px; font-weight: 600; color: var(--t-1); line-height: 1.25; }
-.analysis-sub { font-size: 12px; color: var(--t-3); margin-top: 2px; }
-.analysis-figs { display: flex; gap: 20px; margin-left: auto; }
+.analysis-id { min-width: 0; flex: 1 1 auto; }
+.analysis-title { font-size: 15px; font-weight: 600; color: var(--t-1); line-height: 1.25; }
+.analysis-sub { font-size: 12.5px; color: var(--t-3); margin-top: 3px; line-height: 1.45; }
+
+.analysis-lead {
+  flex: 0 0 auto;
+  padding-left: 22px;
+  border-left: 1px solid var(--line);
+  text-align: right;
+}
+.analysis-lead .prov { margin-bottom: 3px; }
+.analysis-lead-n { font-size: 17px; font-weight: 600; color: var(--t-1); line-height: 1.2; }
+.analysis-lead-m {
+  font-size: 11px; color: var(--t-3); margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.analysis-figs { display: flex; gap: 20px; flex: 0 0 auto; }
 .analysis-fig { text-align: right; }
-.analysis-fig-n { font-family: var(--font-rec); font-size: 15px; color: var(--t-1); line-height: 1.15; }
+.analysis-fig-n { font-family: var(--font-rec); font-size: 15px; color: var(--t-2); line-height: 1.15; }
 .analysis-fig-l {
   font-family: var(--font-label);
   font-size: 9.5px; letter-spacing: 0.09em; text-transform: uppercase;
   color: var(--t-4); margin-top: 1px;
 }
-.analysis-acts { display: flex; gap: 6px; margin-left: auto; }
-.analysis-figs + .analysis-acts { margin-left: 14px; }
+.analysis-acts { display: flex; gap: 6px; flex: 0 0 auto; }
+@media (max-width: 1500px) { .analysis-figs { display: none; } }
+@media (max-width: 1240px) { .analysis-acts { display: none; } }
 
 .stage { flex: 1 1 auto; min-height: 0; position: relative; padding: 10px; }
 .stage.flush { padding: 0; }
@@ -1076,6 +1426,91 @@ body {
 }
 .empty h3 { margin: 0; font-size: 14px; font-weight: 600; color: var(--t-2); }
 .empty p { margin: 0; max-width: 380px; font-size: 12.5px; line-height: 1.6; color: var(--t-4); }
+
+/* ============================================================================
+ * CASE OVERVIEW — the hero screen when a case is open.
+ *
+ * Sections separated by space and a hairline, not by cards. Every fact carries
+ * the same provenance rail as everywhere else in the console.
+ * ========================================================================== */
+
+.overview { height: 100%; overflow-y: auto; padding: 16px 18px 24px; }
+
+.ov-block { margin-bottom: 22px; }
+.ov-head {
+  display: flex; align-items: baseline; gap: 10px;
+  padding-bottom: 6px; margin-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ov-head .label { color: var(--t-2); }
+.ov-count { margin-left: auto; font-size: 11.5px; color: var(--t-3); }
+
+.ov-narrative {
+  margin: 0 0 14px;
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--t-1);
+  max-width: 78ch;
+}
+
+.ov-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 10px 22px;
+}
+.ov-fact-l {
+  display: block;
+  font-family: var(--font-label);
+  font-size: 9.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--t-4);
+  margin-bottom: 2px;
+}
+.ov-fact-v { font-size: 13px; color: var(--t-1); }
+
+.ov-cols { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); gap: 26px; }
+@media (max-width: 1080px) { .ov-cols { grid-template-columns: minmax(0, 1fr); } }
+
+.ov-person { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.ov-person:last-of-type { border-bottom: 0; }
+.ov-person-main { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+.ov-person-name { font-size: 13.5px; font-weight: 500; color: var(--t-1); }
+/* The as-filed name and the resolved identity, linked. Without this the two
+ * spellings of one person read as two people — which is the exact failure the
+ * platform's own record linkage exists to prevent. */
+.ov-person-alias {
+  display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap;
+  margin-top: 5px; padding: 6px 9px;
+  background: var(--n-2);
+  border-radius: var(--r-sm);
+  box-shadow: inset 2px 0 0 var(--amber);
+  font-size: 11.5px; line-height: 1.5; color: var(--t-3);
+}
+.ov-person-alias b { color: var(--t-1); font-weight: 600; }
+.ov-person-foot { display: flex; align-items: center; gap: 7px; margin-top: 7px; }
+.ov-person-foot .meta { margin-right: auto; }
+
+.ov-victims { margin-top: 14px; padding-top: 10px; border-top: 1px solid var(--line); }
+.ov-victims .label { display: block; margin-bottom: 5px; }
+.ov-victim { font-size: 13px; color: var(--t-2); padding: 2px 0; }
+
+.ov-lead {
+  padding: 8px 11px;
+  margin-bottom: 5px;
+  background: var(--n-2);
+  border-radius: var(--r-sm);
+  font-size: 12.5px; line-height: 1.55; color: var(--t-1);
+}
+.ov-established { margin-top: 10px; font-size: 11.5px; color: var(--t-3); }
+.ov-established .label { display: block; margin-bottom: 3px; }
+
+.ov-event {
+  display: flex; gap: 12px;
+  padding: 7px 0 7px 10px;
+  border-bottom: 1px solid var(--line);
+}
+.ov-event:last-child { border-bottom: 0; }
+.ov-event-date { flex: 0 0 96px; font-size: 11px; color: var(--t-3); padding-top: 1px; }
+.ov-event-body { font-size: 12.5px; line-height: 1.55; color: var(--t-2); }
 
 /* ============================================================================
  * CASE INDEX — rows, not cards. A dense, scannable register.
@@ -1116,9 +1551,9 @@ body {
 .index-rows { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .case-row {
   display: grid;
-  grid-template-columns: 170px minmax(150px, 1fr) minmax(0, 1.4fr) auto;
+  grid-template-columns: minmax(190px, 1fr) minmax(0, 1.3fr) 168px auto;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
   padding: 9px 14px;
   border-bottom: 1px solid var(--line);
   cursor: pointer;
@@ -1126,7 +1561,7 @@ body {
 }
 .case-row:hover { background: var(--n-2); }
 .case-row.on { background: var(--n-2); box-shadow: inset 2px 0 0 var(--gold); }
-.case-no { font-family: var(--font-rec); font-size: 11.5px; color: var(--t-2); }
+.case-no { font-size: 11px; color: var(--t-3); letter-spacing: -0.01em; text-align: right; }
 .case-primary { min-width: 0; }
 .case-type { font-size: 13px; font-weight: 500; color: var(--t-1); }
 .case-where {
@@ -1137,7 +1572,7 @@ body {
   font-size: 12px; color: var(--t-3); line-height: 1.45;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
 }
-.index-rows.no-mo .case-row { grid-template-columns: 170px minmax(0, 1fr) auto; }
+.index-rows.no-mo .case-row { grid-template-columns: minmax(0, 1fr) 168px auto; }
 .index-rows.no-mo .case-mo { display: none; }
 .case-end { display: flex; align-items: center; gap: 8px; justify-self: end; }
 /* Row actions stay out of the way until the row is the one in play — three
@@ -1145,8 +1580,8 @@ body {
 .case-acts { display: flex; gap: 5px; opacity: 0; transition: opacity var(--dur) var(--ease); }
 .case-row:hover .case-acts, .case-row.on .case-acts, .case-row:focus-within .case-acts { opacity: 1; }
 @media (max-width: 1240px) {
-  .case-row { grid-template-columns: 150px minmax(120px, 1fr) auto; }
-  .case-mo { display: none; }
+  .case-row, .index-rows.no-mo .case-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .case-mo, .case-no { display: none; }
 }
 
 .index-foot {
@@ -1214,7 +1649,7 @@ body {
   position: fixed; inset: 0; z-index: 80;
   display: grid; place-items: center;
   padding: 3vh 3vw;
-  background: rgba(4, 7, 11, 0.6);
+  background: var(--scrim);
   animation: fade 200ms var(--ease) both;
 }
 .overlay-panel {
@@ -1224,7 +1659,7 @@ body {
   background: var(--n-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-overlay);
   overflow: hidden;
   animation: lift 220ms var(--ease) both;
 }
@@ -1378,7 +1813,7 @@ body {
   position: fixed; inset: 0; z-index: 90;
   display: flex; justify-content: center; align-items: flex-start;
   padding-top: 12vh;
-  background: rgba(4, 7, 11, 0.62);
+  background: var(--scrim);
   animation: fade 140ms var(--ease) both;
 }
 .palette {
@@ -1388,7 +1823,7 @@ body {
   background: var(--n-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
-  box-shadow: 0 30px 90px rgba(0, 0, 0, 0.6);
+  box-shadow: var(--shadow-overlay);
   overflow: hidden;
   animation: lift 160ms var(--ease) both;
 }
@@ -1420,8 +1855,17 @@ body {
   cursor: pointer;
 }
 .palette-item:hover, .palette-item.on { background: var(--n-3); color: var(--t-1); }
-.palette-item .mono { color: var(--t-4); font-size: 11px; }
-.palette-item-sub { margin-left: auto; font-size: 11px; color: var(--t-4); }
+/* Two lines, not one. A hit carries a title, a location, an identifier, a kind AND
+ * the fields it matched on; crammed onto one row the "matched crime, district" note
+ * wrapped and squeezed the location down to "Mandya PS-02 · Under In…" — the part
+ * an officer scans for. */
+.palette-item-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.palette-item-title { color: var(--t-1); font-size: 13px; font-weight: 500; white-space: nowrap; }
+.palette-item-where { font-size: 11.5px; color: var(--t-3); white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.palette-item-id { font-size: 10.5px; color: var(--t-4); white-space: nowrap; }
+.palette-item-sub { font-size: 11px; color: var(--t-4); white-space: nowrap;
+  min-width: 52px; text-align: right; }
 .palette-empty { padding: 22px 16px; text-align: center; font-size: 12.5px; color: var(--t-4); }
 .palette-foot {
   flex: 0 0 auto;
@@ -1455,7 +1899,7 @@ body {
   background: var(--n-2);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  box-shadow: var(--shadow-pop);
   animation: alert-in 220ms var(--ease) both;
 }
 @keyframes alert-in { from { opacity: 0; transform: translateY(6px); } }
@@ -1487,11 +1931,12 @@ body {
   place-items: center;
   padding: 24px;
   background:
-    radial-gradient(80% 60% at 50% -10%, rgba(64, 132, 216, 0.07), transparent 70%),
+    radial-gradient(90% 70% at 50% -15%, var(--pri-dim), transparent 70%),
     var(--n-0);
 }
 .gate-card {
-  width: min(430px, 100%);
+  width: min(460px, 100%);
+  box-shadow: var(--shadow-overlay);
   background: var(--n-1);
   border: 1px solid var(--line-2);
   border-radius: var(--r-lg);
@@ -1524,9 +1969,11 @@ body {
 }
 .officer-row:hover:not(:disabled) { border-color: var(--pri-line); background: var(--n-3); }
 .officer-row:disabled { opacity: 0.5; cursor: wait; }
-.officer-row .officer-rank { flex: 0 0 auto; min-width: 58px; }
-.officer-row .who { font-size: 13px; color: var(--t-2); }
-.officer-row .ps { margin-left: auto; font-family: var(--font-rec); font-size: 11px; color: var(--t-4); }
+.officer-row { align-items: flex-start; padding: 11px 12px; }
+.officer-row .officer-rank { flex: 0 0 76px; padding-top: 1px; line-height: 1.35; }
+.officer-row .who { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--t-1); text-align: left; }
+.officer-row .who-note { font-size: 11.5px; color: var(--t-3); line-height: 1.4; }
+.officer-row .ps { margin-left: auto; align-self: center; font-family: var(--font-rec); font-size: 11px; color: var(--t-4); }
 .gate-note {
   margin-top: 12px;
   padding: 11px 12px;
@@ -1549,7 +1996,7 @@ body {
   left: 10px; bottom: 26px;
   z-index: 2;
   padding: 9px 11px;
-  background: rgba(15, 20, 27, 0.94);
+  background: var(--float);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
   display: flex; flex-direction: column; gap: 6px;
@@ -1573,7 +2020,7 @@ body {
 .map-legend-mark--selected i { width: 6px; height: 6px; border-radius: 50%; background: var(--map-point); display: block; }
 .map-legend-ramp {
   width: 34px; height: 7px; border-radius: 2px;
-  background: linear-gradient(90deg, #3f9d6d, #d4883c, #dc5b5f);
+  background: linear-gradient(90deg, var(--ok), var(--amber), var(--red));
 }
 
 .map-district-label {
@@ -1582,8 +2029,8 @@ body {
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
-  color: #35424f;
-  background: rgba(255, 255, 255, 0.82);
+  color: #33404d;
+  background: rgba(255, 255, 255, 0.86);
   padding: 1px 4px;
   border-radius: 2px;
   white-space: nowrap;
@@ -1593,7 +2040,7 @@ body {
 
 .maplibregl-ctrl-logo { display: none !important; }
 .maplibregl-ctrl-attrib {
-  background: rgba(15, 20, 27, 0.88) !important;
+  background: var(--float) !important;
   color: var(--t-4) !important;
   font-size: 10px !important;
   border-radius: var(--r-sm) !important;
@@ -1609,9 +2056,9 @@ body {
 .maplibregl-ctrl-group button { background: transparent !important; }
 .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line-2) !important; }
 .maplibregl-ctrl-group button:hover { background: var(--n-3) !important; }
-.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(0.82); }
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(var(--map-ctrl-invert)); }
 .maplibregl-ctrl-scale {
-  background: rgba(15, 20, 27, 0.88) !important;
+  background: var(--float) !important;
   border-color: var(--line-2) !important;
   color: var(--t-3) !important;
   font-family: var(--font-rec) !important;
@@ -1625,7 +2072,7 @@ body {
   border: 1px solid var(--line-2);
   border-radius: var(--r);
   padding: 9px 11px;
-  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop);
 }
 .veritas-map-popup .maplibregl-popup-tip { display: none; }
 .veritas-map-popup-title { font-size: 12.5px; font-weight: 600; color: var(--t-1); }
@@ -1643,13 +2090,18 @@ body {
   background: var(--n-2);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-pop);
   animation: pop var(--dur) var(--ease) both;
 }
+/* The node card grows when the derivation chain is open — a five-section
+ * document does not fit in the width of a three-row summary, and truncating
+ * the reason a person is connected is the one thing it must not do. */
+.node-card-wide { width: 320px; max-width: calc(100% - 24px); }
 .node-card-name { font-size: 13.5px; font-weight: 600; color: var(--t-1); }
 .node-card-rows { margin: 9px 0 10px; display: flex; flex-direction: column; gap: 5px; }
 .node-card-row { display: flex; justify-content: space-between; gap: 10px; font-size: 11.5px; color: var(--t-3); }
 .node-card-row b { color: var(--t-2); font-weight: 500; font-family: var(--font-rec); }
+.node-card-row.node-card-read span { color: var(--t-1); font-weight: 500; }
 
 /* Graph-scale legend, shared shape with the map legend. */
 .viz-legend {
@@ -1657,7 +2109,7 @@ body {
   left: 12px; bottom: 12px;
   z-index: 2;
   padding: 8px 10px;
-  background: rgba(15, 20, 27, 0.9);
+  background: var(--float);
   border: 1px solid var(--line-2);
   border-radius: var(--r);
   display: flex; flex-direction: column; gap: 5px;

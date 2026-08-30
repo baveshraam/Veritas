@@ -1,10 +1,11 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   band, CONF_MEANING, CONF_NAME, PROV_LABEL, PROV_MEANING, provenanceOf,
   showsPercent, sourceLabel,
 } from "@/lib/evidence";
 import type { EvidenceItem } from "@/lib/types";
+import WhyChain from "./WhyChain";
 
 function stamp(iso: string): string {
   const d = new Date(iso);
@@ -19,21 +20,36 @@ function stamp(iso: string): string {
  *  checking a source has not stopped investigating, and losing the conversation
  *  to read a citation would be the wrong trade.
  *
- *  It answers four questions in a fixed order, because they are the four an
- *  investigator actually asks of a source: what does the record say, where did
- *  it come from, how sure is that, and what exactly was asked to get it. */
+ *  It answers five questions in a fixed order, because they are the ones an
+ *  investigator actually asks of a source: what does the record say, WHY is it
+ *  here, where did it come from, how sure is that, and what exactly was asked to
+ *  get it.
+ *
+ *  "Why is it here" is the one this console could not answer until the
+ *  provenance chain existed. The other four are properties of the item; that one
+ *  is a property of the reasoning that produced it, so it is fetched (GET
+ *  /explain) rather than read off the payload — and it is fetched only when the
+ *  officer opens the section, because most inspections are a glance at the
+ *  record, not an interrogation of it. */
 export default function EvidenceInspector({
-  item, index, total, onClose, onPin, onCopilot, onBoard, onStep,
+  item, index, total, sessionId, onClose, onPin, onCopilot, onBoard, onStep, onAsk,
 }: {
   item: EvidenceItem;
   index: number;
   total: number;
+  sessionId?: string;
   onClose: () => void;
   onPin: (id: string) => void;
   onCopilot: (firId: string) => void;
   onBoard: (firId: string) => void;
   onStep: (delta: number) => void;
+  onAsk?: (query: string) => void;
 }) {
+  const [why, setWhy] = useState(false);
+  // Collapse on navigating to a different source: the chain on screen must always
+  // be the chain for the item on screen, and a stale one is worse than none.
+  useEffect(() => setWhy(false), [item.evidence_id]);
+
   useEffect(() => {
     const key = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -76,6 +92,25 @@ export default function EvidenceInspector({
             <div className={`record-quote ${p === "derived" ? "is-derived" : p === "model" ? "is-model" : ""}`}>
               {item.content}
             </div>
+          </div>
+
+          <div className="field-block">
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+              <span className="label" style={{ margin: 0 }}>Why this is here</span>
+              <button className="btn btn-sm btn-quiet" style={{ marginLeft: "auto" }}
+                onClick={() => setWhy((v) => !v)}
+                aria-expanded={why}>
+                {why ? "Hide" : "Trace it"}
+              </button>
+            </div>
+            {why ? (
+              <WhyChain evidenceId={item.evidence_id} sessionId={sessionId} onAsk={onAsk} />
+            ) : (
+              <div className="meta">
+                The records this rests on, how they were combined, and what it does not
+                establish.
+              </div>
+            )}
           </div>
 
           <div className="field-block">

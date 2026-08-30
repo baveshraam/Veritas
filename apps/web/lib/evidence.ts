@@ -51,12 +51,41 @@ export const PROV_MEANING: Record<Provenance, string> = {
   human: "Written by an investigator. Not a database fact.",
 };
 
-/** The human-readable name of the record type, for the inspector's SOURCE field. */
+/** The human-readable name of the record type, for the inspector's SOURCE field.
+ *  Spelled out rather than de-cased from the enum: sentence-casing FIR_RECORD
+ *  produced "Fir record", which reads as a typo in the one place an officer is
+ *  checking whether a source is what it claims to be. */
+const SOURCE_LABEL: Record<EvidenceItem["source_type"], string> = {
+  FIR_RECORD: "FIR record",
+  CRIMINAL_RECORD: "Criminal record",
+  GRAPH_RELATIONSHIP: "Relationship between people",
+  COMMUNITY_SUMMARY: "Network community",
+  ML_PREDICTION: "Model prediction",
+  GEOSPATIAL_ANALYSIS: "Geospatial analysis",
+};
+
 export function sourceLabel(e: EvidenceItem): string {
-  return e.source_type
-    .toLowerCase()
-    .replace(/_/g, " ")
-    .replace(/^\w/, (c) => c.toUpperCase());
+  return SOURCE_LABEL[e.source_type] ?? e.source_type.replace(/_/g, " ").toLowerCase();
+}
+
+/** The case a piece of evidence is about, when it is about one.
+ *
+ *  The same FIR reaches the console under two evidence_id shapes depending on which
+ *  retriever found it: `fir:1194` from the structured layer, `vec:fir_narrative:1194`
+ *  from semantic search. Both name case 1194. Anything that joins evidence to a case
+ *  has to read both, and the map is where not doing so was visible: on a hotspot
+ *  answer every cited case arrives as `vec:fir_narrative:…`, so selecting one lit up
+ *  no point on the map and opened no case panel — the console silently behaving as
+ *  though the case it had just cited were not on the map in front of it.
+ *
+ *  `criminal_profile` and `community_summary` hits are about a PERSON and a
+ *  COMMUNITY; they deliberately return null rather than being coerced into a case. */
+export function caseIdOf(evidenceId: string | null | undefined): string | null {
+  if (!evidenceId) return null;
+  const fir = /^fir:(\d+)$/.exec(evidenceId);
+  if (fir) return fir[1];
+  const vec = /^vec:fir_narrative:(\d+)$/.exec(evidenceId);
+  return vec ? vec[1] : null;
 }
 
 /* ---------------------------------------------------------------------------
