@@ -1,6 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
 import { loadToken, streamAlerts } from "@/lib/api";
+import { districtName } from "@/lib/districts";
+import { anomalyReading } from "@/lib/metrics";
 import type { AnomalyAlert } from "@/lib/types";
 
 const MAX_KEPT = 12;
@@ -77,24 +79,27 @@ export default function AlertBell() {
                   case volume departs from their own recent baseline.
                 </div>
               )}
-              {alerts.map((a) => (
-                <div key={a.alert_id} className={`alert sev-${a.severity}`}
-                  style={{ borderRadius: 0, border: 0, borderBottom: "1px solid var(--line)", boxShadow: "none", background: "none" }}>
-                  <span className="alert-bar" />
-                  <div className="alert-main">
-                    <div className="alert-head">
-                      <span className="alert-title mono">{a.district_code}</span>
-                      <span className={`pill pill-${a.severity === "high" ? "red" : a.severity === "medium" ? "amber" : "ok"}`}>
-                        {a.severity}
-                      </span>
-                    </div>
-                    <div className="alert-body">
-                      {a.metric}: <b style={{ color: "var(--t-2)" }}>{a.observed.toFixed(1)}</b> against an
-                      expected {a.expected.toFixed(1)}
+              {alerts.map((a) => {
+                const r = anomalyReading(a.observed, a.expected);
+                return (
+                  <div key={a.alert_id} className={`alert sev-${a.severity}`}
+                    style={{ borderRadius: 0, border: 0, borderBottom: "1px solid var(--line)", boxShadow: "none", background: "none" }}>
+                    <span className="alert-bar" />
+                    <div className="alert-main">
+                      <div className="alert-head">
+                        <span className="alert-title">{districtName(a.district_code)}</span>
+                        <span className={`pill pill-${a.severity === "high" ? "red" : a.severity === "medium" ? "amber" : "ok"}`}>
+                          {a.severity}
+                        </span>
+                      </div>
+                      <div className="alert-body">
+                        <b style={{ color: "var(--t-2)" }}>{r.headline}</b>
+                        <div className="meta">{r.measure}</div>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
             <div className="meta" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", color: "var(--t-4)" }}>
               Decision support. Nothing here triggers an action on its own.

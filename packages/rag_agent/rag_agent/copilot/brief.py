@@ -222,8 +222,13 @@ def leads_for_case(fir_id: str, officer_role: str) -> list[str]:
             leads.append(f"{name} belongs to network community {a['CommunityID']} — review "
                          f"other members for a linked series.")
         if pagerank > 0 and pagerank * 1000 > 1.0:
+            # No raw PageRank number here — an officer reading a lead has no scale to
+            # judge "0.0016" against, and the headline already says the thing that
+            # number would only restate more confusingly (found live: a recommended-
+            # next-step lead was the third place, after the risk score and HippoRAG
+            # evidence text, this exact number leaked unexplained).
             leads.append(f"{name} ranks high for network influence "
-                         f"(PageRank {pagerank:.4f}) — likely an organiser, not a runner.")
+                         f"— likely an organiser, not a runner.")
 
         priors = len(queries.cases_for_person(a["PersonUID"]))
         if priors > 1:
