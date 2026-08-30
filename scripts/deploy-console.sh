@@ -4,6 +4,11 @@
 # The export has to land in client/ WITHOUT clobbering client-package.json — that file
 # is Catalyst's manifest, not part of the Next build, and losing it fails the deploy.
 set -euo pipefail
+# On Git-Bash/MSYS (Windows), env var VALUES that look like an absolute POSIX path get
+# silently rewritten to a Windows path when a native exe (node, via npm) is spawned —
+# NEXT_PUBLIC_ASSET_PREFIX="/app" became "C:/Program Files/Git/app" and got baked into
+# the build. No-op on Linux (the relay CI runner), so safe to set unconditionally.
+export MSYS_NO_PATHCONV=1
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT/apps/web"
