@@ -33,12 +33,22 @@ const byRank = (a: { role: string }, b: { role: string }) =>
 
 /** What each rank actually sees, in the officer's own words. A rank is not a
  *  label on this screen, it is the scope of every answer that follows, so it is
- *  worth one line each rather than an acronym to be recognised or guessed. */
+ *  worth one line each rather than an acronym to be recognised or guessed.
+ *
+ *  can_view_fir (packages/policy/policy/rules.py) only restricts ONE role —
+ *  IO, to their own station; every other role is deliberately cross-PS
+ *  (test_non_io_roles_are_cross_ps asserts this, so it is a real design
+ *  decision, not an oversight to "fix" by changing the policy). This copy
+ *  used to claim a district tier for DSP/SP and a station tier for SHO that
+ *  the code has never enforced — SHO, DSP, SP, SCRB_Analyst and IG all see
+ *  every case in the state; what actually varies below IG is mask_person_
+ *  fields (SHO ranks with IO — identity withheld) and max_traversal_depth
+ *  (SHO ranks with IO — capped at 2 hops instead of 4). */
 const ROLE_NOTE: Record<string, string> = {
   IO: "Investigating officer: cases at your own station",
-  SHO: "Station house officer: cases at your own station",
-  DSP: "Deputy superintendent: every case in the district",
-  SP: "Superintendent: every case in the district",
+  SHO: "Station house officer: every case, identity withheld",
+  DSP: "Deputy superintendent: every case in the state",
+  SP: "Superintendent: every case in the state",
   IG: "Inspector general: every case in the state",
   SCRB_Analyst: "State crime-records analyst: every case in the state",
 };

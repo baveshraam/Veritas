@@ -60,9 +60,22 @@ export type NetworkReading = {
   needsExplanation: boolean;
 };
 
-/** The display-sizing sentinel the engine puts on the root node (1.0), which is
- *  not a measured centrality — see synthesis_agent.py. */
-export const isRoot = (n: NetworkNode) => n.label === "subject" || (n.pagerank ?? 0) >= 1;
+/** The root node is identified by its label, which the engine sets to the
+ *  literal placeholder string "subject" and never to anything else
+ *  (synthesis_agent.py — every other node's label is a real name or a bare
+ *  person id, never that exact string). That check alone is authoritative.
+ *
+ *  A `pagerank >= 1` fallback used to sit here too, and it is what turned a
+ *  real bug into a much worse one: a corrupted PageRank column (a Data Store
+ *  scientific-notation defect, since fixed — see CLAUDE.md changelog v22)
+ *  pushed several real associates' pagerank above 1, so EVERY one of them
+ *  matched "is the root" and rendered with the subject's own name and size.
+ *  The label check was never the problem; a numeric heuristic standing in for
+ *  an identity check was. Removed rather than re-guarded, because the same
+ *  failure mode returns the moment anything upstream — a future data bug, a
+ *  differently-scaled centrality metric — produces one real node with
+ *  pagerank >= 1. */
+export const isRoot = (n: NetworkNode) => n.label === "subject";
 
 export function readNetwork(
   viz: Visualization,

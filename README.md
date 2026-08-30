@@ -17,7 +17,7 @@ Veritas says exactly that instead of inventing one.
 | **Live API** | `https://veritas-api-50043864344.development.catalystappsail.in` — deployed, enabled, serving |
 | **Live console** | `https://veritas-60077763394.development.catalystserverless.in/app/index.html` |
 | **Identity resolution** | **F1 0.989** (precision 0.997, recall 0.981) against the generator's answer key |
-| **Test suite** | **606 passing**, no database or Docker required — `python -m pytest` |
+| **Test suite** | **741 passing, 2 skipped**, no database or Docker required — `python -m pytest` |
 | **Live footprint** | 10,000 FIRs · ~105k rows · graph of 16,918 nodes / 87,120 edges · 13,835 indexed documents |
 | **Platform** | Zoho Catalyst — one AppSail container, Data Store, File Store, Cache, QuickML LLM, Cron |
 
@@ -326,14 +326,32 @@ the part a government panel will actually poke at, run on every single commit.
 - **PDF export is BLOCKED, honestly, not silently**: SmartBrowz's API layer requires a genuine
   Catalyst User Management identity this environment cannot drive interactively; the console
   says so and falls back to a printable HTML copy rather than pretending to produce a PDF.
-- **606 tests green** locally, with no stack required.
+- **741 tests green, 2 skipped**, locally, with no stack required.
+
+---
+
+## Screenshots
+
+The live console, driven headlessly and captured end to end — the map, the co-offending
+network, voice input, and the search palette. Full pass-by-pass sets (every UI state touched
+by every version) live under [`docs/screenshots/`](./docs/screenshots/); `.shots/` holds the
+current highlights.
+
+| | |
+|---|---|
+| ![Sparse map, light basemap](./.shots/01-map-sparse-light.png) | ![Dense clustered hotspots](./.shots/03-map-dense-clustered.png) |
+| Real MapLibre basemap (OpenFreeMap), FIR points and hotspot density | Cluster expansion on a dense district |
+| ![Co-offending network, decluttered](./.shots/09-network-graph-decluttered.png) | ![Multi-word search](./.shots/13-search-multiword.png) |
+| Co-offending network, influence scaled apart from severity | ⌘K search — every word must match something, ranked by where |
+| ![Voice recording bar](./.shots/11-voice-recording.png) | ![Live console search](./.shots/15-live-console-search.png) |
+| Push-to-talk as a recording bar — level meter, timer, discard/send | The search palette against the live deployment |
 
 ---
 
 ## Run it locally
 
 ```bash
-python -m pytest                                      # 606 tests, no stack needed
+python -m pytest                                      # 741 tests (2 skipped), no stack needed
 cd data && python -m data.generator.run --cases 10000 # generate a synthetic dataset
 cd apps/api && uvicorn api.main:app --reload          # the API (SQLite backend locally)
 cd apps/web && npm run dev                            # the Command Console
