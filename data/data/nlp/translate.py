@@ -213,10 +213,31 @@ def translate(text: str, src: str, tgt: str) -> str:
     if src not in _FLORES or tgt not in _FLORES:
         raise TranslationUnavailable(f"unsupported language pair {src}->{tgt}")
 
-    protected, mapping = _protect_spans(resolve_plural_markers(text), src)
+    # Translated one LINE at a time, never the whole text in one backend call.
+    # `synthesis_agent._extractive` joins a header, one full-narrative line PER
+    # CITATION, and a footer with "\n" — a 6-citation answer is several hundred
+    # words in one string. Sent as a single translate_batch call, that routinely
+    # needs more target tokens than the model's length budget allows (CTranslate2's
+    # own default max_decoding_length is 256, well short of a multi-citation
+    # answer), and a decoder cut off mid-sentence with no natural stopping point
+    # falls into repetition-decoding degeneracy instead of just truncating cleanly
+    # — observed live as a citation's Kannada translation trailing into
+    # "9004 ಮೇ, 9004 ಮೇ, ..." repeated a dozen times, reproducible on demand. Each
+    # line here is at most one citation's content, always well inside any
+    # reasonable length budget, so no call can run out of room. A blank line
+    # (the spacer before the footer sentence) is passed through untouched rather
+    # than spent on an empty translate_batch call.
+    resolved = resolve_plural_markers(text)
     backend = _load()
-    result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
-    return _restore_spans(result, mapping) if mapping else result
+    out_lines = []
+    for line in resolved.split("\n"):
+        if not line.strip():
+            out_lines.append(line)
+            continue
+        protected, mapping = _protect_spans(line, src)
+        result = backend.translate(protected, _FLORES[src], _FLORES[tgt])
+        out_lines.append(_restore_spans(result, mapping) if mapping else result)
+    return "\n".join(out_lines)
 
 
 # Serialises backend construction. `lru_cache` memoises a RESULT; it does not make the
@@ -331,11 +352,17 @@ class _CTranslate2Backend:
                 f"{type(e).__name__}.") from e
 
     def translate(self, text: str, src_flores: str, tgt_flores: str) -> str:
+        # ctranslate2's own default max_decoding_length is 256 — plenty for one
+        # citation line (the caller now guarantees that's all this ever sees, see
+        # translate.py's per-line loop) but raised anyway as a cheap safety margin
+        # against an unusually long single line, since a decoder cut off mid-
+        # sentence degenerates into repeated tokens rather than truncating cleanly.
         if self._hf is not None:
             self._hf.src_lang = src_flores
             source = self._hf.convert_ids_to_tokens(self._hf.encode(text))
             result = self._translator.translate_batch(
-                [source], target_prefix=[[tgt_flores]], beam_size=4)
+                [source], target_prefix=[[tgt_flores]], beam_size=4,
+                max_decoding_length=512)
             output_tokens = result[0].hypotheses[0][1:]    # drop the target-prefix token
             output_ids = self._hf.convert_tokens_to_ids(output_tokens)
             return self._hf.decode(output_ids, skip_special_tokens=True).strip()
@@ -345,7 +372,8 @@ class _CTranslate2Backend:
         enc = self._tok.encode(text, add_special_tokens=False)
         source = [src_flores] + enc.tokens + ["</s>"]
         result = self._translator.translate_batch(
-            [source], target_prefix=[[tgt_flores]], beam_size=4)
+            [source], target_prefix=[[tgt_flores]], beam_size=4,
+            max_decoding_length=512)
         hyp = result[0].hypotheses[0][1:]                  # drop the target-prefix token
         ids = [i for i in (self._tok.token_to_id(t) for t in hyp) if i is not None]
         return self._tok.decode(ids, skip_special_tokens=True).strip()

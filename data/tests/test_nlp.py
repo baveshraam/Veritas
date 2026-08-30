@@ -284,3 +284,47 @@ def test_district_and_identifier_protection_compose_without_collision():
     restored = _restore_spans(protected, mapping)
     assert restored == 'Mandyaದಲ್ಲಿ FIR 100222201202600022 ಬಗ್ಗೆ ಏನಿದೆ'
     assert '90001' not in restored and '90002' not in restored
+
+
+def test_a_multi_citation_answer_is_translated_one_line_at_a_time(monkeypatch):
+    """Found live: a real 6-citation Kannada answer degenerated into a citation's
+    translation trailing off into "9004 ಮೇ, 9004 ಮೇ, ..." repeated a dozen times —
+    the whole multi-line answer (header + one line per citation + footer) was sent
+    to the backend as ONE translate_batch call, and the model's target-length
+    budget (CTranslate2's own default is 256 tokens) ran out mid-answer, so the
+    decoder had no natural stopping point and fell into repetition. A backend that
+    counts how many separate calls it receives, and refuses to translate any input
+    longer than one short line, proves the fix: real content survives only if the
+    caller is genuinely sending it one line at a time."""
+    import importlib
+    translate_mod = importlib.import_module('data.nlp.translate')
+
+    calls = []
+
+    class _OneLineOnlyBackend:
+        def translate(self, text, src_flores, tgt_flores):
+            calls.append(text)
+            # Any single line here is under 70 chars; the whole answer joined as
+            # one blob (the bug) would be ~230 -- the gap is wide enough that this
+            # only ever catches the failure mode under test.
+            if len(text) > 100:
+                raise AssertionError(f"backend received more than one line: {text!r}")
+            return text + "_KN"
+
+    monkeypatch.setattr(translate_mod, '_load', lambda: _OneLineOnlyBackend())
+
+    answer = (
+        "Based on 3 record(s) in the system:\n"
+        "  [1] FIR one narrative line here.\n"
+        "  [2] FIR two narrative line here.\n"
+        "  [3] FIR three narrative line here.\n"
+        "\n"
+        "Every statement above is drawn directly from the cited records."
+    )
+    out = translate(answer, 'en', 'kn')
+
+    # One backend call per non-blank line, never the whole answer in one call.
+    assert len(calls) == 5
+    # Blank line preserved untouched, not spent on a translate_batch call.
+    assert out.split("\n")[4] == ""
+    assert out.split("\n")[1].endswith("_KN")

@@ -372,6 +372,81 @@ def test_a_mixed_status_result_set_raises_no_status_contradiction(dataset):
     assert "Correction from the record" not in out
 
 
+def test_a_citation_grouped_under_the_wrong_status_is_corrected(dataset):
+    """Found live: a priors answer read 'Other cases include Theft [3, 7, 9, 11] ...
+    which are Chargesheeted or Under Investigation' while citation [7] was recorded
+    Acquitted — the whole-answer status check (above) never runs here at all, because
+    the history spans several statuses. This is the narrower, citation-scoped check
+    that catches the synthesized narrative's own grouping error instead."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import EvidenceItem
+
+    def ev(i: int, status: str) -> EvidenceItem:
+        return EvidenceItem(evidence_id=f"fir:{i}", source_type="FIR_RECORD",
+                            source_id=str(i), content=f"FIR {i} — Theft, status {status}.",
+                            confidence=0.9)
+
+    evidence = [ev(1, "Chargesheeted"), ev(2, "Acquitted"), ev(3, "Under Investigation")]
+    state = _state("her priors", sql_query_results=[
+        {"fir_id": "1", "case_status": "Chargesheeted"},
+        {"fir_id": "2", "case_status": "Acquitted"},
+        {"fir_id": "3", "case_status": "Under Investigation"}])
+    out = orch._reconcile_with_records(
+        "Other cases include Theft [1, 2, 3] which are Chargesheeted or "
+        "Under Investigation.", evidence, state)
+    assert "Correction from the record" in out
+    assert "citation [2]" in out
+    assert "citation [1]" not in out and "citation [3]" not in out
+
+
+def test_a_capped_exhaustive_network_stops_claiming_the_full_count():
+    """Found live: "Who are the associates of Usha Naika?" answered with a 40-person
+    network, but node_synthesize's own [:12] citation cap trims the evidence down to
+    12 before the answer is built — and PERSON_NETWORK sets is_sample=False /
+    shown=40 at production time, before it can know a cap is coming. Left
+    uncorrected, the answer says 'Result set: EXHAUSTIVE — 40 record(s)' over 12
+    citations, and the next turn's "only these?" says 'all 40 already shown' when
+    only 12 were. _reconcile_shown_with_cap is the one place downstream of the cap
+    that can still tell the two numbers apart."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import EvidenceItem
+
+    all_ids = [str(i) for i in range(40)]
+    state = _state("who are her associates", result_context={
+        "operation": "PERSON_NETWORK", "total_matched": 40, "shown": 40,
+        "is_sample": False, "shown_ids": all_ids})
+    capped_evidence = [
+        EvidenceItem(evidence_id=f"assoc:{i}", source_type="GRAPH_RELATIONSHIP",
+                    source_id=i, content="associate", confidence=0.5)
+        for i in all_ids[:12]]
+
+    orch._reconcile_shown_with_cap(state, capped_evidence)
+
+    assert state.result_context["is_sample"] is True
+    assert state.result_context["shown"] == 12
+    assert set(state.result_context["shown_ids"]) == set(all_ids[:12])
+
+
+def test_an_uncapped_result_is_left_alone_by_the_cap_reconciler():
+    """Nothing was actually trimmed here (12 shown, 12 survived) — the reconciler
+    must not flip a genuinely exhaustive result to a false 'sample'."""
+    import rag_agent.orchestrator as orch
+    from rag_agent.state import EvidenceItem
+
+    ids = [str(i) for i in range(12)]
+    state = _state("who are his associates", result_context={
+        "operation": "PERSON_NETWORK", "total_matched": 12, "shown": 12,
+        "is_sample": False, "shown_ids": ids})
+    evidence = [EvidenceItem(evidence_id=f"assoc:{i}", source_type="GRAPH_RELATIONSHIP",
+                             source_id=i, content="associate", confidence=0.5)
+               for i in ids]
+
+    orch._reconcile_shown_with_cap(state, evidence)
+
+    assert state.result_context["is_sample"] is False
+    assert state.result_context["shown"] == 12
+
+
 def test_a_district_no_cited_record_mentions_is_flagged(dataset):
     import rag_agent.orchestrator as orch
     state = _state("theft in Mandya", sql_query_results=[

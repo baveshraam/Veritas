@@ -234,6 +234,40 @@ def test_back_reference_pair_resolves_against_the_prior_turns_own_candidates(mon
     assert sorted(req.comparison_entities) == ["501", "502"]
 
 
+def test_compare_x_and_y_with_no_coordination_keyword_resolves_as_a_comparison(monkeypatch):
+    """Found live: "Compare Usha Naika and Netrawathi Nanjappa" — both real people —
+    matched none of the original coordination phrases ("both"/"either"/"as well")
+    and fell through to single-name resolution, which refused outright with "No
+    person of that name appears in the records". "compare"/"versus"/"vs" are
+    explicit two-entity comparison verbs on their own, with no need for a
+    coordination keyword alongside them."""
+    import rag_agent.semantic_interpreter as si
+
+    monkeypatch.setattr(si.sql_agent, "person_by_name", lambda name: (
+        [{"person_id": "501", "name_en": "Usha Naika"}] if "Usha" in name else
+        [{"person_id": "502", "name_en": "Netrawathi Nanjappa"}] if "Netrawathi" in name else []
+    ))
+    req = interpret("Compare Usha Naika and Netrawathi Nanjappa", "en",
+                    SessionFocus(), prior_turn=None)
+    assert sorted(req.comparison_entities) == ["501", "502"]
+
+
+def test_did_x_and_y_appear_in_the_same_case_resolves_as_a_comparison(monkeypatch):
+    """Found live: "Did Usha Naika and Netrawathi Nanjappa ever appear in the same
+    case?" matched no coordination phrase either, and — worse than a refusal —
+    silently answered Usha Naika's priors alone, dropping the second person and the
+    actual question with nothing indicating either had happened."""
+    import rag_agent.semantic_interpreter as si
+
+    monkeypatch.setattr(si.sql_agent, "person_by_name", lambda name: (
+        [{"person_id": "501", "name_en": "Usha Naika"}] if "Usha" in name else
+        [{"person_id": "502", "name_en": "Netrawathi Nanjappa"}] if "Netrawathi" in name else []
+    ))
+    req = interpret("Did Usha Naika and Netrawathi Nanjappa ever appear in the "
+                    "same case?", "en", SessionFocus(), prior_turn=None)
+    assert sorted(req.comparison_entities) == ["501", "502"]
+
+
 def test_three_or_more_names_is_not_a_bounded_comparison(monkeypatch):
     """Explicit non-goal (design spec §3): three+ names is the open-ended planning
     case this deliberately does not attempt -- must fall through, not guess a pair."""

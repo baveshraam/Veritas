@@ -630,7 +630,22 @@ _REPEAT_CUE_BARE_RE = re.compile(r"^\s*and\s+[\w][\w\s]{0,24}\??\s*$", re.I)
 # or more names is exactly the open-ended planning this deliberately does not
 # attempt (needs the LLM path, see ENGINEERING_BRIEF.md §12).
 _COORDINATION_RE = re.compile(
-    r"\beither of\b|\beither\b.*\bor\b|\bboth of\b|\bboth\b|\band also\b|\bas well\b", re.I)
+    r"\beither of\b|\beither\b.*\bor\b|\bboth of\b|\bboth\b|\band also\b|\bas well\b"
+    # "Compare X and Y" / "X versus Y" — an explicit two-entity comparison verb,
+    # with no "both"/"either"/"as well" anywhere in it. "Did X and Y ever appear
+    # in the same case?" — a joint-occurrence question phrased as a plain "X and
+    # Y", no coordination keyword at all. Both were unreachable: found live,
+    # "Compare Usha Naika and Netrawathi Nanjappa" fell through to single-name
+    # resolution and refused outright even though both are real people, and "Did
+    # Usha Naika and Netrawathi Nanjappa ever appear in the same case?" silently
+    # answered Usha Naika's own priors alone, dropping the second person and the
+    # actual question with no error shown. Neither addition adds false-positive
+    # risk: `_resolve_comparison_pair` below still requires NER to resolve
+    # EXACTLY two named people before this branch does anything, so a match here
+    # that isn't genuinely a two-person question just falls through unchanged to
+    # the ordinary single-subject path.
+    r"|\bcompare\b|\bcompared\s+to\b|\bversus\b|\bvs\.?\b"
+    r"|\bsame\s+(?:case|fir)\b|\bappear(?:ed)?\s+together\b", re.I)
 _BACK_REFERENCE_PAIR_RE = re.compile(
     r"\b(?:those|them|these)\s+(?:people|persons|two)\b|\bboth\s+of\s+them\b", re.I)
 

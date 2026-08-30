@@ -562,13 +562,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         rows = graph_agent.aliases(pid)
         state.graph_query_results += rows
         if rows:
-            out += [EvidenceItem(
-                evidence_id=f"same_as:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
-                source_id=r["person_id"], source_query="MATCH (p)-[:SAME_AS]-(o)",
-                content=(f"Record for '{r['name_en']}' was linked to this person by "
-                         f"probabilistic record linkage (confidence {r['confidence']:.2f}) — "
-                         f"the same individual recorded under a different spelling."),
-                confidence=float(r["confidence"])) for r in rows]
+            out += [_alias_evidence(r) for r in rows]
         else:
             # A *negative* finding is the answer here, and it has to be stated. Left
             # unsaid, unrelated context (a ToG path, a semantic match) becomes the
@@ -1461,7 +1455,14 @@ def _handle_case_locations(state: InvestigationState, t0: float) -> None:
            f"{len(rows)} case(s) tallied across {len(tally)} district(s)", t0)
 
 
-def _more_result_evidence(op: str, r: dict) -> EvidenceItem:
+# The row id field "only these?" dedupes and widens on, per producing operation.
+# Everything not listed here is FIR-shaped (the original CRIME_SEARCH/SIMILAR_CASES
+# behaviour); PERSON_NETWORK/ALIAS_CHECK/OFFENDER_RANKING rows are people.
+_RESULT_ID_FIELD = {"PERSON_NETWORK": "person_id", "ALIAS_CHECK": "person_id",
+                    "OFFENDER_RANKING": "person_id"}
+
+
+def _more_result_evidence(op: str, r: dict, role: str = "") -> EvidenceItem:
     if op == "SIMILAR_CASES":
         return EvidenceItem(
             evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
@@ -1470,6 +1471,29 @@ def _more_result_evidence(op: str, r: dict) -> EvidenceItem:
                          "— continuation of a previous 'only these?' follow-up",
             content=f"{_fir_content(r)} Similar because: {r['explanation']}.",
             confidence=float(r["similarity"]), confidence_kind="similarity")
+    if op == "PERSON_NETWORK":
+        return _network_evidence(r)
+    if op == "ALIAS_CHECK":
+        return EvidenceItem(
+            evidence_id=f"same_as:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
+            source_id=str(r["person_id"]), source_query="MATCH (p)-[:SAME_AS]-(o)"
+                     " — continuation of a previous 'only these?' follow-up",
+            content=(f"Record for '{r['name_en']}' was linked to this person by "
+                     f"probabilistic record linkage (confidence {r['confidence']:.2f}) — "
+                     f"the same individual recorded under a different spelling."),
+            confidence=float(r["confidence"]))
+    if op == "OFFENDER_RANKING":
+        masked = mask_person_name(role, r["name"])
+        return EvidenceItem(
+            evidence_id=f"offender:{r['person_id']}", source_type="CRIMINAL_RECORD",
+            source_id=str(r["person_id"]),
+            source_query="COUNT(DISTINCT CaseMasterID) per resolved PersonUID"
+                         " — continuation of a previous 'only these?' follow-up",
+            content=(f"{masked} — named as accused on {r['cases']} case(s)"
+                     + (", recorded as a habitual offender" if r["habitual"] else "")
+                     + (f", network community {r['community']}"
+                        if r["community"] is not None else "") + "."),
+            confidence=0.92, authoritative=True)
     return EvidenceItem(
         evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD", source_id=r["fir_id"],
         source_query="SELECT ... continuation of a previous 'only these?' follow-up",
@@ -1526,7 +1550,19 @@ def _handle_more_results(state: InvestigationState, t0: float) -> None:
         case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
         if case_rows:
             wider = copilot_brief.similar_cases_for(case_rows[0], limit=10)
-    more_rows = [r for r in wider if str(r.get("fir_id")) not in shown_ids][:5]
+    elif op == "PERSON_NETWORK" and state.active_entities.active_person:
+        # The graph traversal itself is already bounded (person_network caps at 40)
+        # — "wider" here means "the rest of that same bounded set", not a deeper
+        # walk, so re-running it costs one graph read, not a new search.
+        wider = graph_agent.person_network(state.active_entities.active_person, role)
+    elif op == "ALIAS_CHECK" and state.active_entities.active_person:
+        wider = graph_agent.aliases(state.active_entities.active_person)
+    elif op == "OFFENDER_RANKING":
+        wider = sql_agent.ranked_offenders(
+            role, ps, district=con.get("district"), crime_type=con.get("crime_type"),
+            limit=total or 40)
+    id_field = _RESULT_ID_FIELD.get(op, "fir_id")
+    more_rows = [r for r in wider if str(r.get(id_field)) not in shown_ids][:5]
 
     if not more_rows:
         # Widening found nothing new -- effectively exhaustive now, so record it as
@@ -1543,8 +1579,9 @@ def _handle_more_results(state: InvestigationState, t0: float) -> None:
                "Widened search found nothing beyond what was already shown", t0)
         return
 
-    state.sql_query_results += more_rows
-    new_shown_ids = list(shown_ids) + [str(r.get("fir_id")) for r in more_rows]
+    if id_field == "fir_id":
+        state.sql_query_results += more_rows
+    new_shown_ids = list(shown_ids) + [str(r.get(id_field)) for r in more_rows]
     state.result_context = {
         **rc, "shown": len(new_shown_ids), "shown_ids": new_shown_ids,
         "is_sample": (total is None) or (total > len(new_shown_ids)),
@@ -1555,7 +1592,7 @@ def _handle_more_results(state: InvestigationState, t0: float) -> None:
         content=(f"{total if total is not None else f'more than {shown}'} record(s) matched "
                  f"in total; {shown} were shown before — here are {len(more_rows)} more."),
         confidence=0.9, authoritative=True)
-    state.evidence_items = [summary] + [_more_result_evidence(op, r) for r in more_rows]
+    state.evidence_items = [summary] + [_more_result_evidence(op, r, role) for r in more_rows]
     _trace(state, "Orchestrator (result-set follow-up)",
            f"{len(more_rows)} additional record(s) beyond the {shown} already shown", t0)
 
@@ -2482,6 +2519,16 @@ def _network_evidence(r: dict, siblings: list[dict] | None = None) -> EvidenceIt
         confidence=1.0 / max(1, int(r.get("hops") or 1)))
 
 
+def _alias_evidence(r: dict) -> EvidenceItem:
+    return EvidenceItem(
+        evidence_id=f"same_as:{r['person_id']}", source_type="GRAPH_RELATIONSHIP",
+        source_id=str(r["person_id"]), source_query="MATCH (p)-[:SAME_AS]-(o)",
+        content=(f"Record for '{r['name_en']}' was linked to this person by "
+                 f"probabilistic record linkage (confidence {r['confidence']:.2f}) — "
+                 f"the same individual recorded under a different spelling."),
+        confidence=float(r["confidence"]))
+
+
 def _dedupe(items: list[EvidenceItem]) -> list[EvidenceItem]:
     seen, out = set(), []
     for e in items:
@@ -2639,6 +2686,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # to answer at all, and synthesis now honours the same line instead of citing the
     # whole neighbourhood.
     evidence = supporting(_rank_evidence(state))[:12]
+    _reconcile_shown_with_cap(state, evidence)
 
     # "case(s)" is a convention for a count the producing branch does not always
     # have at the point the sentence is written. It was only ever resolved on the
@@ -2738,6 +2786,18 @@ def _status_family(status: str) -> Optional[str]:
     return None
 
 
+# "[3, 7, 9, 11]"-style citation groups inside a generated sentence. Used only by
+# check 0 below — matches "status <Name>" the same way a FIR citation's own label is
+# built (synthesis_agent._label is just the evidence content's first line).
+_CITATION_INDEX_GROUP_RE = re.compile(r"\[(\d+(?:\s*,\s*\d+)*)\]")
+_STATUS_IN_CONTENT_RE = re.compile(r"\bstatus\s+([A-Za-z][A-Za-z ]*?)(?:[.,;]|$)")
+
+
+def _status_family_from_content(content: str) -> Optional[str]:
+    m = _STATUS_IN_CONTENT_RE.search(content or "")
+    return _status_family(m.group(1)) if m else None
+
+
 def _reconcile_with_records(answer: str, evidence: list[EvidenceItem],
                             state: InvestigationState) -> str:
     """Append a correction where the prose contradicts a structured field.
@@ -2748,6 +2808,40 @@ def _reconcile_with_records(answer: str, evidence: list[EvidenceItem],
     an officer needs in order to trust the rest of the answer.
     """
     flags: list[str] = []
+
+    # 0. A citation-scoped status claim, inside a multi-status answer. Check 1 below
+    #    deliberately never runs when a history spans several statuses — but that
+    #    leaves exactly the gap a synthesized narrative's own grouping error hides
+    #    in: found live, a priors answer read "Other cases include Theft [3, 7, 9,
+    #    11] ... which are Chargesheeted or Under Investigation," while citation [7]
+    #    was recorded Acquitted. Scoped to one SENTENCE naming both a status family
+    #    and a bracketed citation index, so an ordinary sentence with neither is
+    #    never touched; every status family the sentence names is collected (an "X
+    #    or Y" grouping is not wrong about a citation matching either), and only a
+    #    citation matching NONE of them is flagged.
+    for sentence in re.split(r"(?<=[.!?])\s+", answer):
+        idx_groups = _CITATION_INDEX_GROUP_RE.findall(sentence)
+        if not idx_groups:
+            continue
+        claimed = [fam for fam, pat in _STATUS_FAMILIES.items() if pat.search(sentence)]
+        if not claimed:
+            continue
+        seen_idx: set[int] = set()
+        for group in idx_groups:
+            for tok in group.split(","):
+                tok = tok.strip()
+                if not tok.isdigit():
+                    continue
+                idx = int(tok)
+                if idx in seen_idx or not (1 <= idx <= len(evidence)):
+                    continue
+                seen_idx.add(idx)
+                recorded = _status_family_from_content(evidence[idx - 1].content)
+                if recorded and recorded not in claimed:
+                    flags.append(
+                        f"Correction from the record: citation [{idx}] is grouped above "
+                        f"with a different status than the one on file. The recorded "
+                        f"status is what governs.")
 
     # 1. Case status. Only checked when the cited records agree on ONE status — a
     #    person's history legitimately spans several, and any status phrase in the
@@ -2806,6 +2900,33 @@ def _reconcile_with_records(answer: str, evidence: list[EvidenceItem],
            f"{len(flags)} contradiction(s) between the answer and the structured "
            f"record", time.perf_counter())
     return answer + "\n\n" + "\n".join(flags)
+
+
+def _reconcile_shown_with_cap(state: InvestigationState, evidence: list[EvidenceItem]) -> None:
+    """A producer branch (PERSON_NETWORK, ALIAS_CHECK, OFFENDER_RANKING) records
+    result_context['shown']/'is_sample'/'shown_ids'] from its OWN full row count,
+    before the citation cap two lines above ever runs — so a 40-associate network
+    could claim 'EXHAUSTIVE -- 40 record(s)' and the 'only these?' follow-up could
+    then say 'all of them already shown' while only 12 actually were. Found live:
+    "Who are the associates of Usha Naika?" did exactly this.
+
+    Recomputed here, once, from the citations that actually survived the cap — the
+    one place both readers (the result-truth sentence below and the next turn's
+    'only these?' handler) get their numbers from, so they can no longer disagree.
+    """
+    rc = state.result_context
+    if not rc or not rc.get("shown_ids"):
+        return
+    recorded_ids = {str(i) for i in rc["shown_ids"]}
+    surviving = {e.evidence_id.split(":", 1)[-1] for e in evidence
+                if e.evidence_id.split(":", 1)[-1] in recorded_ids}
+    if len(surviving) >= len(recorded_ids):
+        return                          # nothing was capped away — already honest
+    total = rc.get("total_matched")
+    state.result_context = {
+        **rc, "shown": len(surviving), "shown_ids": sorted(surviving),
+        "is_sample": True if total is None else total > len(surviving),
+    }
 
 
 # The evidence type that most directly answers each intent. Confidence alone ranks a
