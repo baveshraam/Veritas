@@ -14,6 +14,7 @@ cd "$ROOT/apps/web"
 # guard below catches that; pinning it here means it never happens. An explicit
 # NEXT_PUBLIC_API_URL in the environment still wins, for a staging deploy.
 export NEXT_PUBLIC_API_URL="${NEXT_PUBLIC_API_URL:-https://veritas-api-50043864344.development.catalystappsail.in}"
+export NEXT_PUBLIC_ASSET_PREFIX="${NEXT_PUBLIC_ASSET_PREFIX:-/app}"
 npm run build
 
 cd "$ROOT"
@@ -26,6 +27,8 @@ printf '%s' "$MANIFEST" > client/client-package.json
 # /app-prefixed, and the API URL must be the deployed one, not localhost.
 grep -q 'src="/app/_next/' client/index.html \
   || { echo "FAIL: assets are not /app-prefixed — check assetPrefix in next.config.mjs"; exit 1; }
+grep -q 'src="/app/ksp-logo.svg"' client/index.html \
+  || { echo "FAIL: the KSP crest is not /app-prefixed — check NEXT_PUBLIC_ASSET_PREFIX"; exit 1; }
 ! grep -rq "localhost:8000" client/_next/static/chunks/ \
   || { echo "FAIL: localhost API URL baked into the bundle"; exit 1; }
 

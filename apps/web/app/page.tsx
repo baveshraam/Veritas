@@ -111,11 +111,18 @@ export default function Console() {
             // A new answer pulls the workspace to the view it produced. The
             // officer can always navigate back, but a fresh result must never
             // land behind a tab nobody is looking at.
-            const next = VIEW_FOR_VIZ[f.visualization?.kind ?? "none"]
+            let next = VIEW_FOR_VIZ[f.visualization?.kind ?? "none"]
               // No visualization does not mean no subject: "no outbound trail
               // was found" is the financial answer, and it belongs in Financial.
               ?? VIEW_FOR_EVIDENCE.find(([re]) =>
                    f.evidence_items.some((e) => re.test(e.evidence_id)))?.[1];
+            // Offenders and Repeat Offenders share one evidence prefix (both are
+            // OFFENDER_RANKING) — the query text is what actually says which the
+            // officer asked for, and it is the same regex the engine itself used
+            // to turn on habitual_only server-side.
+            if (next === "offenders" && /\b(repeat|habitual|chronic)\s+(offenders|criminals)\b/i.test(input.query ?? "")) {
+              next = "repeat_offenders";
+            }
             if (next) setView(next);
           },
           (audio) => playBase64Audio(audio),

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import AlertBell from "./AlertBell";
 import { getHealth, type Health } from "@/lib/api";
+import { assetUrl } from "@/lib/asset";
 import type { Officer } from "@/lib/types";
 
 /** Global chrome: identity, search, console-wide actions.
@@ -63,8 +64,14 @@ export default function TopBar({
   return (
     <header className="topbar">
       <div className="mark">
-        <h1 className="mark-name">VERITAS</h1>
-        <span className="mark-sub">Crime Intelligence</span>
+        <div className="mark-row">
+          <h1 className="mark-name">VERITAS</h1>
+          <span className="mark-sub">Crime Intelligence</span>
+        </div>
+        {/* The Karnataka State Police crest — Government of Karnataka's own seal,
+            since KSP has no dedicated badge asset published anywhere reachable
+            here. Non-stretched: intrinsic aspect ratio, height-constrained only. */}
+        <img src={assetUrl("/ksp-logo.svg")} alt="Karnataka State Police" className="mark-crest" />
       </div>
 
       <button className="omni" onClick={onSearch} aria-label="Search records and actions">

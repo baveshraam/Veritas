@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useState } from "react";
 import { listOfficers, login, setToken } from "@/lib/api";
+import { assetUrl } from "@/lib/asset";
 import type { Officer } from "@/lib/types";
 
 /** Rank selection is the point of this screen, not a formality: the whole
@@ -146,6 +147,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
     <div className="gate">
       <div className="gate-card">
         <div className="gate-head">
+          <img src={assetUrl("/ksp-logo.svg")} alt="Karnataka State Police" className="gate-crest" />
           <h1 className="mark-name">VERITAS</h1>
           <div className="gate-tag">Karnataka State Police · Crime Intelligence</div>
           <p className="gate-thesis">

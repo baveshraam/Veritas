@@ -17,6 +17,9 @@ const nextConfig = {
     NEXT_PUBLIC_API_URL:
       process.env.NEXT_PUBLIC_API_URL ??
       "https://veritas-api-50043864344.development.catalystappsail.in",
+    // Mirrors `assetPrefix` below, for the public/ images `<img src>` references
+    // directly — see lib/asset.ts. Same "production wins the default" rule.
+    NEXT_PUBLIC_ASSET_PREFIX: process.env.NEXT_PUBLIC_ASSET_PREFIX ?? "/app",
   },
 };
 export default nextConfig;

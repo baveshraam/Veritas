@@ -41,6 +41,10 @@ const mono = IBM_Plex_Mono({
 export const metadata: Metadata = {
   title: "Veritas — KSP Crime Intelligence",
   description: "Evidence-grounded investigative AI. Every answer traces to a record.",
+  // Replaces the browser's own default (grey globe) tab icon with the Karnataka
+  // State Police crest — /app-prefixed the same way every other public/ image
+  // reference in this console has to be (lib/asset.ts).
+  icons: { icon: `${process.env.NEXT_PUBLIC_ASSET_PREFIX ?? "/app"}/ksp-logo.svg` },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

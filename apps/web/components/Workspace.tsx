@@ -6,10 +6,34 @@ import CaseOverview from "./CaseOverview";
 import PersonOverview from "./PersonOverview";
 import Board from "./Board";
 import { getCaseTimeline } from "@/lib/api";
+import { PROV_LABEL, provenanceOf } from "@/lib/evidence";
 import { densityReading, forecastReading, plural, rupees, type Reading } from "@/lib/metrics";
 import { readNetwork } from "@/lib/network";
 import type { EvidenceItem, SessionFocusView, TimelineResult, Visualization } from "@/lib/types";
 import type { WorkspaceView } from "./InvestigationHeader";
+
+/** A flat readout of the evidence items an answer produced, for the views (Offenders,
+ *  Statistics) that are pure ranked/aggregated text — the engine gives no chart for
+ *  these, and the ranked rows ARE the finding. Reuses the evidence rail styling so a
+ *  record and a derived note still read apart here the way they do everywhere else. */
+function EvidenceList({ items }: { items: EvidenceItem[] }) {
+  return (
+    <div className="col-body ev-list" style={{ padding: "12px 16px" }}>
+      {items.map((e, i) => {
+        const p = provenanceOf(e);
+        return (
+          <div key={e.evidence_id} className={`ev rail-${p}`}>
+            <div className="ev-head">
+              <span className="ev-idx">{i + 1}</span>
+              <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
+            </div>
+            <div className="ev-body">{e.content}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // Charts and MapLibre touch window/canvas — keep them out of the server bundle.
 const NetworkView = dynamic(() => import("./viz/NetworkView"), { ssr: false });
@@ -100,7 +124,14 @@ export default function Workspace({
   let body: React.ReactNode = null;
   let flush = false;
 
-  if (view === "overview") {
+  if (view === "register") {
+    title = "Case register";
+    sub = "Every case your rank is cleared to see, independent of whichever case is open.";
+    body = <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} onBoard={onBoard} activeFir={firId} />;
+    flush = true;
+  }
+
+  if (view === "forecast") {
     if (kind === "trend") {
       const s: [string, number, number, number][] = d.series ?? [];
       const f = forecastReading(s);
@@ -111,7 +142,54 @@ export default function Workspace({
       figs = [{ n: String(f.days), l: "days ahead" }];
       next = { label: "Where are these concentrated?", q: "Show me crime hotspots" };
       body = <TrendView data={d} />;
-    } else if (firId && !showRegister) {
+    } else {
+      title = "Forecast";
+      body = <Prompt mark="◷" title="No forecast loaded"
+        body="Ask for a district's trend and Veritas projects case volume forward — reconciled so a district's forecast always equals the sum of its stations."
+        ask={onAsk} question="Forecast crime for the next 30 days" />;
+    }
+  }
+
+  if (view === "offenders" || view === "repeat_offenders") {
+    const habitual = view === "repeat_offenders";
+    const rows = evidence.filter((e) => e.evidence_id.startsWith("offender:")
+      && (habitual ? /habitual offender/i.test(e.content) : true));
+    const summary = evidence.find((e) => e.evidence_id.startsWith("ranking:summary"));
+    title = habitual ? "Repeat offenders" : "Most active offenders";
+    sub = "Ranked by how many cases on record name them — a fact the identity layer "
+      + "makes possible, since the raw records have no cross-case person at all.";
+    if (rows.length) {
+      lead = { headline: plural(rows.length, "person", "people"),
+        measure: "Ranked by recorded case count, within your access scope" };
+      prov = "record";
+      figs = [{ n: String(rows.length), l: "ranked" }];
+      body = <EvidenceList items={summary ? [summary, ...rows] : rows} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◈" title={habitual ? "No repeat-offender ranking loaded" : "No offender ranking loaded"}
+        body="Case count is a recorded fact, never a risk score — this never ranks by PageRank or a model output."
+        ask={onAsk}
+        question={habitual ? "Who are the repeat offenders in Bengaluru Urban?" : "Who is the most active offender in Bengaluru Urban?"} />;
+    }
+  }
+
+  if (view === "statistics") {
+    const items = evidence.filter((e) => e.evidence_id.startsWith("stats:"));
+    title = "Case statistics";
+    sub = "Rates and breakdowns over the case set — not a list of individual cases.";
+    if (items.length) {
+      prov = "record";
+      body = <EvidenceList items={items} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◈" title="No statistics loaded"
+        body="Ask for a rate or a breakdown — conviction rate, which district has the most pending cases, how cases split by status — computed over the records you can see."
+        ask={onAsk} question="What is the conviction rate?" />;
+    }
+  }
+
+  if (view === "overview") {
+    if (firId && !showRegister) {
       // A case is open. The register is the right answer when nothing is; it is
       // the wrong one the moment something is, and it was what Overview showed.
       title = "Case overview";
@@ -252,11 +330,16 @@ export default function Workspace({
           body={searched.content}
           ask={onAsk}
           question={person ? `Show me the timeline for ${person}` : null} />;
+      } else if (firId) {
+        body = <Prompt mark="◆" title="No money trail loaded"
+          body="Financial analysis follows the accounts owned by people in this case. Ask about the money trail and Veritas traces the transfers, resolving the subject from this case."
+          ask={onAsk}
+          question="Trace the money trail for this case" />;
       } else {
         body = <Prompt mark="◆" title="No money trail loaded"
-          body="Financial analysis follows a person's accounts. Name the subject and Veritas traces the transfers between the accounts they own."
+          body="Financial analysis follows a person's accounts. Pick a case from the register, or name a person, then ask about the money trail."
           ask={onAsk}
-          question={person ? `Where did ${person}'s money go?` : null} />;
+          question={null} />;
       }
     }
   }

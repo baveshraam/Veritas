@@ -1,20 +1,20 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getBoard } from "@/lib/api";
+import { assetUrl } from "@/lib/asset";
 import type { CaseBoard, SessionFocusView, VizKind } from "@/lib/types";
 
 export type WorkspaceView =
-  | "overview" | "timeline" | "network" | "geography" | "financial" | "board";
+  | "overview" | "register" | "timeline" | "network" | "geography" | "financial"
+  | "offenders" | "repeat_offenders" | "statistics" | "forecast" | "board";
 
-/** Which workspace view a given answer's visualization belongs in. Trend has no
- *  tab of its own: a district forecast is not a facet of one case, so it lands
- *  in Overview alongside the case index. */
+/** Which workspace view a given answer's visualization belongs in. */
 export const VIEW_FOR_VIZ: Partial<Record<VizKind, WorkspaceView>> = {
   network: "network",
   map: "geography",
   sankey: "financial",
   timeline: "timeline",
-  trend: "overview",
+  trend: "forecast",
 };
 
 /** Where an answer belongs when it produced NO visualization.
@@ -31,14 +31,21 @@ export const VIEW_FOR_EVIDENCE: [RegExp, WorkspaceView][] = [
   [/^(assoc|same_as):/, "network"],
   [/^timeline:/, "timeline"],
   [/^(board|lead):/, "board"],
+  [/^(offender|ranking):/, "offenders"],
+  [/^stats:/, "statistics"],
 ];
 
 const TABS: { key: WorkspaceView; label: string }[] = [
   { key: "overview", label: "Overview" },
+  { key: "register", label: "Case Register" },
   { key: "timeline", label: "Timeline" },
   { key: "network", label: "Network" },
   { key: "geography", label: "Geography" },
   { key: "financial", label: "Financial" },
+  { key: "offenders", label: "Offenders" },
+  { key: "repeat_offenders", label: "Repeat Offenders" },
+  { key: "statistics", label: "Statistics" },
+  { key: "forecast", label: "Forecast" },
   { key: "board", label: "Board" },
 ];
 
@@ -99,6 +106,7 @@ export default function InvestigationHeader({
   return (
     <div className="investigation">
       <div className="inv-main">
+        <img src={assetUrl("/ksp-logo.svg")} alt="" aria-hidden className="inv-crest" />
         <div className="inv-id">
           <div className="inv-kicker">
             <span>{kicker}</span>
