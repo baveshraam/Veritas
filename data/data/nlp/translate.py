@@ -89,6 +89,62 @@ _PROTECT = re.compile(
 )
 
 
+@lru_cache(maxsize=1)
+def _person_name_map() -> dict[str, str]:
+    """Kannada-script rendering of a known name TOKEN -> its English spelling.
+
+    Same closed-gazetteer technique as data.districts.kannada_name_map(), aimed at the
+    sibling failure it does not cover: NLLB does not just mis-romanize a place name, it
+    can translate a PERSON'S NAME by its literal meaning instead of transliterating it
+    — found live, "ಮಧು" (Madhu, a common first name) came back "honeydew", and
+    PERSON_HISTORY correctly classified at 0.9 confidence and then had no subject left
+    to resolve. No Catalyst service does transliteration (Zia's catalog has none), and
+    this is a library, not a service, so indic-transliteration is the fix rather than
+    another hand-rolled gazetteer.
+
+    Individual TOKENS (first name, surname) are protected separately, not only full
+    "First Last" strings — an officer names a person by whichever part actually caused
+    this bug, almost always just the one word, not the whole record. Rendered from
+    vx_person.CanonicalName with the `itrans` scheme on lowercased input, which is
+    close enough to how these names were generated to round-trip correctly for the
+    common case (verified directly: "madhu" -> "ಮಧು", exact). It is NOT exact for
+    every name — Kannada distinguishes dental/retroflex t/d/n/l and English spelling
+    does not, an information loss no transliteration scheme can recover — so, like the
+    district gazetteer, this is a closed, best-effort table that closes the common
+    failure rather than a natively-reviewed reference for every name in the dataset.
+
+    Tokens under 4 characters are skipped: a short Kannada rendering is both the
+    likeliest to collide with an ordinary word (raising the district gazetteer's own
+    false-positive trade-off) and the least informative to protect.
+    """
+    from data import ds
+
+    idx: dict[str, str] = {}
+    try:
+        rows = ds.query('SELECT DISTINCT "CanonicalName" FROM "vx_person" '
+                        'WHERE "CanonicalName" IS NOT NULL')
+    except Exception:                                             # noqa: BLE001
+        return idx
+
+    try:
+        from indic_transliteration.sanscript import transliterate
+    except ImportError:
+        return idx
+
+    for r in rows:
+        name = (r.get("CanonicalName") or "").strip()
+        for token in name.split():
+            if len(token) < 4 or token in idx.values():
+                continue
+            try:
+                kn = transliterate(token.lower(), "itrans", "kannada")
+            except Exception:                                     # noqa: BLE001
+                continue
+            if kn and kn not in idx:
+                idx[kn] = token
+    return idx
+
+
 def _protect_spans(text: str, src: str = "en") -> tuple[str, dict[str, str]]:
     """Replace protected spans with digit-shaped placeholders NLLB reliably copies
     through untouched, and return the mapping needed to restore them.
@@ -131,6 +187,13 @@ def _protect_spans(text: str, src: str = "en") -> tuple[str, dict[str, str]]:
             # LOCATION gazetteer match already follows.
             pattern = "|".join(re.escape(k) for k in sorted(kn_map, key=len, reverse=True))
             text = re.sub(pattern, lambda m: _placeholder(kn_map[m.group(0)]), text)
+
+        # Person names, same technique — see _person_name_map()'s own docstring for
+        # why this is scoped to individual tokens and why it cannot be exhaustive.
+        name_map = _person_name_map()
+        if name_map:
+            pattern = "|".join(re.escape(k) for k in sorted(name_map, key=len, reverse=True))
+            text = re.sub(pattern, lambda m: _placeholder(name_map[m.group(0)]), text)
     elif src == "en":
         # The reverse-direction sibling, found live this pass: a SYNTHESIZED
         # ANSWER (always in canonical English district names, e.g. "Mandya") gets

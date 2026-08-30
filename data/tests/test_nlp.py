@@ -4,7 +4,7 @@ import pytest
 from data.nlp import ner_extract, transliterate
 from data.nlp.translate import (
     TranslationUnavailable, translate, _protect_spans, _restore_spans,
-    _resolve_plural_markers,
+    _resolve_plural_markers, _person_name_map,
 )
 
 
@@ -284,6 +284,39 @@ def test_english_district_name_restores_the_canonical_kannada_spelling(monkeypat
 
     assert 'Mandya' not in out and 'garbled' not in out
     assert 'ಮಂಡ್ಯ' in out
+
+
+def test_transliterate_renders_a_common_first_name_correctly():
+    """The unit-level check, independent of any seeded dataset: a bare rule-based
+    scheme call on a known name renders correctly. Found live, the failure this
+    closes: NLLB translated "ಮಧು" (Madhu) as "honeydew" -- its literal meaning, not
+    the person's name -- because nothing removed it from the model's job the way
+    _protect_spans already removes district names and record identifiers."""
+    from indic_transliteration.sanscript import transliterate as translit_kn
+    assert translit_kn("madhu", "itrans", "kannada") == "ಮಧು"
+
+
+def test_person_name_map_is_built_from_the_live_dataset_and_protects_a_real_name(dataset):
+    """Integration-level: the gazetteer is genuinely sourced from vx_person, not a
+    fixed list, and a name it renders is what _protect_spans actually intercepts.
+    Cache cleared before AND after -- @lru_cache(maxsize=1) means an earlier test
+    that called this with no seeded dataset (returning {} on the caught exception)
+    would otherwise poison every test that runs after it, and this one must not
+    leave its own populated cache for a test that expects the pre-dataset state."""
+    _person_name_map.cache_clear()
+    try:
+        idx = _person_name_map()
+        assert idx, "a seeded dataset must produce at least one protected name token"
+        assert all(len(k) for k in idx)
+
+        # Round-trip one real entry through the actual protection path used by a
+        # live Kannada query, not just the gazetteer build.
+        kn_token, en_token = next(iter(idx.items()))
+        protected, mapping = _protect_spans(f"{kn_token} ಅವರ ಬಗ್ಗೆ ಹೇಳಿ", src="kn")
+        assert kn_token not in protected
+        assert en_token in mapping.values()
+    finally:
+        _person_name_map.cache_clear()
 
 
 def test_district_and_identifier_protection_compose_without_collision():
