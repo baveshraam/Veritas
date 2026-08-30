@@ -1608,3 +1608,18 @@ volume justifies the training cost.
     "matched crime, district"). Zero console errors; `npx tsc --noEmit` clean.
     Screenshots: `docs/screenshots/2026-08-30-voice-and-search/`.
   - **Test suite: 740 passed, 2 skipped** (70 new).
+  - **DEPLOYED and live-verified.** Console via `scripts/deploy-console.sh`; API via
+    the relay pipeline (`get-signature?name=veritas-api` → `.github/relay-upload.url`
+    → `relay-deploy.yml` → local `appsail/upsert` with the BARE base64 object key —
+    the `CLI/Orphan/` prefix is rejected as `INVALID_INPUT`, which cost a cycle to
+    find). Both live gates re-run against production: `judge_flows.py` 26/26,
+    `verify_live_deployment.py` 36/36. The new operations verified by hand on the live
+    URL — *"how many cases are pending in Mandya"* → 85 (not 263), the offender
+    ranking, the 59% conviction rate with its denominator, *"do you decide guilt"* →
+    the standing answer, *"who would you arrest"* → refused. Live console driven over
+    CDP: mic control present, ⌘K search returns real Mandya thefts captioned "matched
+    crime, district", zero console errors.
+  - **One regression the live gate caught that the corpus did not**: tightening
+    CAPABILITY to require an object verb turned *"What all can you actually answer for
+    me?"* into UNKNOWN — an adverb sits between the pronoun and the verb. Fixed,
+    added to the corpus, redeployed.
