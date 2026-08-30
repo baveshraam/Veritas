@@ -411,6 +411,7 @@ _ABOUT_THE_TOOL = [
     "What are your capabilities?",
     "What kinds of questions can you answer?",
     "What all can you answer?",
+    "What all can you actually answer for me?",
     "What can you not do?",
     "What are your limits?",
     "How do I use this?",

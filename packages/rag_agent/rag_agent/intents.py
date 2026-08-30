@@ -235,6 +235,10 @@ _CAPABILITY = re.compile(
     # were answered with a paragraph about the tool.
     r"\b(what (all )?(can|could|do|does|would) "
     r"(?:you|it|this|veritas|this system|the system|this tool|the tool)\s+"
+    # An adverb can sit between the pronoun and the verb — "what all can you ACTUALLY
+    # answer for me" is the phrasing the live officer-session gate uses, and pinning
+    # the verb to the next word turned it into UNKNOWN.
+    r"(?:\w+\s+){0,2}?"
     r"(?:do|answer|handle|help|tell\s+me|show\s+me|give\s+me|provide|support)\b"
     r"|what (kind|sort|type)s? of (question|quer)"
     # "what are you ASSUMING" / "what are you inferring" are questions about the
