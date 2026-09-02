@@ -54,32 +54,47 @@ def _run_refresh() -> None:
     from data.gds import run_all as run_gds
     from data.graph import publish_graph
 
-    try:
-        out: dict = {}
+    # Each step is isolated. These four rebuild INDEPENDENT derived layers over the
+    # same record layer — none is an input to the next — so one failing must not
+    # cancel the rest. Under a single try/except the first raise silently skipped
+    # everything after it, and that is not hypothetical: `publish_graph()` writes to
+    # Stratus, whose bucket creation is scope-blocked on this org (CLAUDE.md §2,
+    # OAUTH_SCOPE_MISMATCH — console-only). A blocked CACHE publish was therefore
+    # able to cancel the AML detector sweep, which is a RECORD-layer rebuild, and the
+    # Financial Watchlist stayed empty through a refresh that reported itself started
+    # and finished. A failed step now names itself in the log and in `out`.
+    steps = (
         # Graph metrics first: the community/PageRank values every network answer cites.
-        out["gds"] = run_gds()
-        # Then the Stratus blob, so a cold container reads one object instead of paging the
-        # whole edge list back through ZCQL's 300-row cap.
-        out["stratus_graph"] = publish_graph()
-        # And the vector index, which is derived from the same record layer. Rebuilding it
-        # here is what makes the deployment self-healing: an index that is missing or stale
-        # is the one failure a citation-grounded system hides rather than reports —
+        ("gds", run_gds),
+        # The Stratus blob, so a cold container reads one object instead of paging the
+        # whole edge list back through ZCQL's 300-row cap. A miss costs latency, never
+        # correctness — the sqlite mirror rebuilds the graph either way.
+        ("stratus_graph", publish_graph),
+        # The vector index, derived from the same record layer. Rebuilding it here is
+        # what makes the deployment self-healing: an index that is missing or stale is
+        # the one failure a citation-grounded system hides rather than reports —
         # retrieval simply returns nothing, confidently.
-        out["vector_index"] = reindex()
-        # And the AML detectors. `vx_txn.FlaggedSuspicious` is a detector OUTPUT, never
+        ("vector_index", reindex),
+        # The AML detectors. `vx_txn.FlaggedSuspicious` is a detector OUTPUT, never
         # written by the generator (data/generator/financial.py asserts that), so on a
         # freshly seeded dataset it is false on every row until something runs the
         # models — which nothing did. The Financial Watchlist therefore reported "no
         # transaction is flagged by either detector" forever, and that answer was
-        # indistinguishable from a genuine all-clear. It belongs here for the same
-        # reason the vector index does: a derived layer that is missing rather than
-        # stale is the failure a citation-grounded system hides instead of reporting.
-        out["aml"] = _rerun_detectors()
+        # indistinguishable from a genuine all-clear.
+        ("aml", _rerun_detectors),
+    )
+    out: dict = {}
+    try:
+        for name, step in steps:
+            try:
+                out[name] = step()
+            except Exception as exc:
+                # A background thread's exception has nowhere else to go — log it with
+                # the traceback, or a failed step looks identical to a slow one from
+                # the outside.
+                log.exception("scheduled refresh step %r failed", name)
+                out[name] = f"failed: {type(exc).__name__}"
         log.info("scheduled refresh complete: %s", out)
-    except Exception:
-        # A background thread's exception has nowhere else to go — log it with the
-        # traceback, or a failed refresh looks identical to a slow one from the outside.
-        log.exception("scheduled refresh failed")
     finally:
         with _refresh_lock:
             _refresh_running = False
