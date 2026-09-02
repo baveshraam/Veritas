@@ -9,6 +9,7 @@ empty or weak does not proceed to synthesis. It either widens once, or it stops 
 says so. Nothing downstream can invent an answer, because synthesis is only ever
 handed the evidence list — it has no other input.
 """
+import difflib
 import re
 import threading
 import time
@@ -792,6 +793,18 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
     elif intent == "CASE_STATS":
         _handle_case_stats(state, out, role, ps, t0)
 
+    elif intent == "AREA_PROFILE":
+        _handle_area_profile(state, out, role, ps, t0)
+
+    elif intent == "COMMUNITY_PROFILE":
+        _handle_community_profile(state, out, role, ps, t0)
+
+    elif intent == "WATCHLIST":
+        _handle_watchlist(state, out, role, ps, t0)
+
+    elif intent == "STATION_WORKLOAD":
+        _handle_station_workload(state, out, role, ps, t0)
+
     elif intent == "HOTSPOT":
         dc = _district_code(state)
         if dc:
@@ -1430,6 +1443,263 @@ def _handle_case_stats(state: InvestigationState, out: list[EvidenceItem],
            f"{grouping or 'status'} statistics — {scope}", t0)
 
 
+def _handle_area_profile(state: InvestigationState, out: list[EvidenceItem],
+                         role: str, ps: str, t0: float) -> None:
+    """'Profile of Mandya' — the recorded crime mix next to the one non-synthetic
+    table in the schema: real Census 2011 socioeconomic ground truth for the same
+    district. Deliberately puts the two side by side rather than combining them into
+    one score: CLAUDE.md §9 already commits to auditing fairness across geography
+    because that is the axis an over-policing feedback loop travels along, and a
+    profile that quietly implied "poor district -> more crime" would be the causal
+    claim this platform's own DoWhy layer refuses to make without naming its
+    confounders. This shows the two facts; it draws no line between them.
+
+    No finer area than District exists in this schema (the ER's own smallest
+    administrative unit), so "area" here means district — the real granularity, not
+    a narrower one this dataset was never given.
+    """
+    from data.districts import canonical_name
+
+    district, _ = _scope_of(state)
+    if not district:
+        code = _district_code(state)
+        district = canonical_name(code) if code else None
+    if not district:
+        out.append(EvidenceItem(
+            evidence_id="area:none", source_type="FIR_RECORD", source_id="none",
+            source_query="no district resolved", authoritative=True, confidence=0.9,
+            content="No district was named and none could be inferred, so there is "
+                    "no area to profile."))
+        _trace(state, "SQL Agent (area profile)", "no district resolved", t0)
+        return
+
+    mix = sql_agent.counts_by(role, ps, "crime_type", district=district)
+    total = sum(n for _, n in mix)
+    census = sql_agent.district_socioeconomic(district)
+
+    out.append(EvidenceItem(
+        evidence_id=f"area:mix:{district}", source_type="FIR_RECORD", source_id=district,
+        source_query="COUNT over CaseMaster grouped by CrimeSubHead, filtered to this district",
+        confidence=0.95, authoritative=True,
+        content=(f"{district}: {total} case(s) on record within your access scope. "
+                 f"Offence mix, most common first — "
+                 + "; ".join(f"{k} {v}" for k, v in mix[:6]) + ".")
+                if mix else
+                f"No cases matching {district} within your access scope."))
+
+    if census:
+        out.append(EvidenceItem(
+            evidence_id=f"area:census:{district}", source_type="FIR_RECORD", source_id=district,
+            source_query='SELECT ... FROM "vx_district_socioeconomic" WHERE DistrictID = ...',
+            confidence=1.0, authoritative=True,
+            content=(f"{district} — Census 2011: population {census['Population']:,}, "
+                     f"literacy {census['LiteracyRate']:.1f}%, urban households "
+                     f"{census['UrbanRatio']:.0%}, poverty index {census['PovertyIndex']:.0%}, "
+                     f"youth share {census['YouthRatio']:.0%}. Real ground truth, not "
+                     f"modelled — this is a socioeconomic fact ABOUT the district, not a "
+                     f"claim about why its crime count is what it is.")))
+    else:
+        out.append(EvidenceItem(
+            evidence_id=f"area:census_unavailable:{district}", source_type="FIR_RECORD",
+            source_id=district, source_query="vx_district_socioeconomic lookup",
+            confidence=0.9, authoritative=True,
+            content=f"No Census 2011 socioeconomic row is on record for {district}."))
+
+    state.result_context = {
+        "operation": "AREA_PROFILE", "total_matched": total, "shown": len(mix),
+        "is_sample": False, "shown_ids": [], "constraints": {"district": district},
+    }
+    _trace(state, "SQL Agent (area profile)", f"{district}: {total} case(s), "
+           f"census {'found' if census else 'unavailable'}", t0)
+
+
+def _handle_community_profile(state: InvestigationState, out: list[EvidenceItem],
+                              role: str, ps: str, t0: float) -> None:
+    """'Who is in community 28?' — a Louvain community as an investigative object, not
+    just a label attached to a person elsewhere. Named "community", never "gang": the
+    ER records no gang, so calling this anything else would assert a legal fact the
+    records do not state (CLAUDE.md §4).
+
+    The one thing this adds over reading a person's own GangAffiliation field is the
+    GROUP view: every member ranked by network influence (never by risk — influence is
+    a graph-position fact, not a threat score), plus what the group's cases actually
+    have in common, so an officer can act on a whole crew at once instead of pulling
+    each co-accused's record one at a time.
+    """
+    from data.gds import community_members
+
+    q = state.original_query or ""
+    cid = intents.community_id_from_query(q)
+    if cid is None and state.active_entities.active_person:
+        cid = sql_agent.person_community(state.active_entities.active_person)
+
+    if cid is None:
+        out.append(EvidenceItem(
+            evidence_id="community:none", source_type="GRAPH_RELATIONSHIP",
+            source_id="none", source_query="no community resolved", confidence=0.9,
+            authoritative=True,
+            content="No community number was named, and no person is currently in "
+                    "focus to read one off. Name a community number, or ask about a "
+                    "person first."))
+        _trace(state, "Graph Agent (community profile)", "no community resolved", t0)
+        return
+
+    members = community_members(cid, limit=25)
+    if not members:
+        out.append(EvidenceItem(
+            evidence_id=f"community:empty:{cid}", source_type="GRAPH_RELATIONSHIP",
+            source_id=str(cid), source_query="vx_person WHERE CommunityID = :cid",
+            confidence=0.9, authoritative=True,
+            content=f"No person on record belongs to community {cid}."))
+        _trace(state, "Graph Agent (community profile)", f"community {cid} is empty", t0)
+        return
+
+    profile = sql_agent.community_case_profile(
+        [str(m["PersonUID"]) for m in members], role, ps)
+    out.append(EvidenceItem(
+        evidence_id=f"community:summary:{cid}", source_type="COMMUNITY_SUMMARY",
+        source_id=str(cid), source_query="vx_person WHERE CommunityID = :cid",
+        confidence=0.85, authoritative=False,
+        content=(f"Community {cid}: {len(members)} known associate(s), derived from "
+                 f"co-offending, across {profile['case_count']} distinct case(s)"
+                 + (f", most often {profile['top_crime_type']}" if profile["top_crime_type"] else "")
+                 + ". Membership is derived by the graph, not stated by any record — "
+                   "this is not a legal designation.")))
+    for i, m2 in enumerate(members, start=1):
+        name = mask_person_name(role, m2["CanonicalName"])
+        out.append(EvidenceItem(
+            evidence_id=f"community:{m2['PersonUID']}", source_type="GRAPH_RELATIONSHIP",
+            source_id=str(m2["PersonUID"]),
+            source_query="vx_person WHERE CommunityID = :cid ORDER BY PageRank DESC",
+            confidence=0.8, authoritative=False,
+            content=f"{i}. {name} — network influence {m2['PageRank']:.3f}."))
+    state.active_entities.active_person = str(members[0]["PersonUID"])
+    state.result_context = {
+        "operation": "COMMUNITY_PROFILE", "total_matched": len(members),
+        "shown": len(members), "is_sample": False,
+        "shown_ids": [str(m2["PersonUID"]) for m2 in members],
+        "constraints": {"community": cid},
+    }
+    _trace(state, "Graph Agent (community profile)",
+           f"community {cid}: {len(members)} member(s)", t0)
+
+
+def _handle_watchlist(state: InvestigationState, out: list[EvidenceItem],
+                      role: str, ps: str, t0: float) -> None:
+    """The statewide financial watchlist — every transaction a detector has flagged,
+    ranked. Distinct from FINANCIAL (a named person's own money trail): this is the
+    database-wide readout OFFENDER_RANKING already established the pattern for, applied
+    to the AML layer instead of the accused layer.
+
+    Each row states WHICH detector flagged it, because CLAUDE.md §6 draws a hard line
+    between the two: the rule-based structuring detector is what a court can audit line
+    by line, and the GNN catches coordinated patterns the rule structurally cannot see
+    but is an investigative lead, not a court-ready finding. Collapsing that distinction
+    into one undifferentiated "flagged" list would erase the one thing that makes this
+    list trustworthy rather than merely alarming.
+    """
+    flagged = sql_agent.flagged_transactions(role, ps, limit=25)
+    if not flagged:
+        out.append(EvidenceItem(
+            evidence_id="watchlist:none", source_type="ML_PREDICTION", source_id="none",
+            source_query='SELECT ... FROM "vx_txn" WHERE FlaggedSuspicious = true',
+            confidence=0.9, authoritative=True,
+            content="No transaction is currently flagged by either detector. This is "
+                    "a checked absence, not a failed search."))
+        _trace(state, "Financial Agent (watchlist)", "no flagged transactions", t0)
+        return
+
+    rule_n = sum(1 for t in flagged if "gnn" not in (t.get("Detector") or "").lower())
+    out.append(EvidenceItem(
+        evidence_id="watchlist:summary", source_type="ML_PREDICTION", source_id="summary",
+        source_query='SELECT ... FROM "vx_txn" WHERE FlaggedSuspicious = true '
+                     'ORDER BY FlagConfidence DESC',
+        confidence=0.9, authoritative=True,
+        content=(f"{len(flagged)} flagged transaction(s) statewide, ranked by detector "
+                 f"confidence — {rule_n} from the rule-based structuring detector "
+                 f"(court-auditable), {len(flagged) - rule_n} from the GNN pattern "
+                 f"detector (an investigative lead, not a court-ready finding).")))
+    for i, t in enumerate(flagged, start=1):
+        is_gnn = "gnn" in (t.get("Detector") or "").lower()
+        out.append(EvidenceItem(
+            evidence_id=f"watchlist:{t['TxnID']}", source_type="ML_PREDICTION",
+            source_id=str(t["TxnID"]),
+            source_query="vx_txn WHERE FlaggedSuspicious = true", confidence=0.8,
+            authoritative=not is_gnn,
+            content=(f"{i}. Transaction {t['TxnID']}: account {t['SrcAccountID']} -> "
+                     f"{t['DstAccountID']}, amount {t['Amount']}, flagged as "
+                     f"{t.get('FlagType') or 'suspicious'} by "
+                     f"{'the GNN pattern detector' if is_gnn else 'the rule-based structuring detector'} "
+                     f"(confidence {t.get('FlagConfidence') or 0:.2f})"
+                     + (f", case {t['CaseMasterID']}" if t.get("CaseMasterID") else "") + ".")))
+    state.result_context = {
+        "operation": "WATCHLIST", "total_matched": len(flagged), "shown": len(flagged),
+        "is_sample": len(flagged) == 25, "shown_ids": [str(t["TxnID"]) for t in flagged],
+        "constraints": {},
+    }
+    _trace(state, "Financial Agent (watchlist)",
+           f"{len(flagged)} flagged transaction(s)", t0)
+
+
+def _handle_station_workload(state: InvestigationState, out: list[EvidenceItem],
+                             role: str, ps: str, t0: float) -> None:
+    """'Which stations are falling behind?' — the question a supervisor actually asks,
+    which is not "how many open cases" but "which specific cases has nobody touched".
+    An IO/SHO's own scoping (`_ps_scope`) makes this double as a self-check: their own
+    queue, not a statewide ranking. Every other rank sees every station, ranked by who
+    needs backup most — a genuine gap in most crime-analytics demos, which stop at
+    prediction and mapping and never surface where a human is failing to follow up.
+    This never allocates anything itself; it only says where to look, which is exactly
+    the human-in-the-loop framing CLAUDE.md §9 already commits to.
+    """
+    stations = sql_agent.station_workload(role, ps)
+    if not stations:
+        out.append(EvidenceItem(
+            evidence_id="workload:none", source_type="FIR_RECORD", source_id="none",
+            source_query='CaseMaster WHERE CaseStatusName = \'Under Investigation\'',
+            confidence=0.9, authoritative=True,
+            content="No case within your access scope is currently under investigation."))
+        _trace(state, "SQL Agent (station workload)", "no open cases in scope", t0)
+        return
+
+    total_open = sum(s["open_cases"] for s in stations)
+    total_stalled = sum(s["stalled_count"] for s in stations)
+    out.append(EvidenceItem(
+        evidence_id="workload:summary", source_type="FIR_RECORD", source_id="summary",
+        source_query="CaseMaster JOIN Unit JOIN CaseStatusMaster, grouped by station",
+        confidence=0.9, authoritative=True,
+        content=(f"{len(stations)} station(s) in scope, {total_open} case(s) under "
+                 f"investigation, {total_stalled} of them STALLED — open more than "
+                 f"{sql_agent.STALE_DAYS} days with no investigation-board activity recorded. "
+                 f"Ranked by stalled count, then average age.")))
+    for i, s in enumerate(stations, start=1):
+        out.append(EvidenceItem(
+            evidence_id=f"workload:{s['ps_code']}", source_type="FIR_RECORD",
+            source_id=s["ps_code"],
+            source_query="CaseMaster JOIN Unit JOIN CaseStatusMaster, grouped by station",
+            confidence=0.9, authoritative=True,
+            content=(f"{i}. {s['station']}: {s['open_cases']} case(s) under "
+                     f"investigation, average age {s['avg_age_days']} day(s), "
+                     f"{s['stalled_count']} stalled.")))
+        for cid in s["stalled_ids"]:
+            out.append(EvidenceItem(
+                evidence_id=f"stalled:{cid}", source_type="FIR_RECORD", source_id=cid,
+                source_query="CaseMaster LEFT anti-join vx_case_board_item, age > "
+                             f"{sql_agent.STALE_DAYS} days",
+                confidence=0.85, authoritative=True,
+                content=(f"Case {cid} at {s['station']} has been under investigation "
+                         f"for more than {sql_agent.STALE_DAYS} days with no board activity "
+                         f"recorded — nobody has pinned evidence, added a lead or left "
+                         f"a note on it.")))
+    state.result_context = {
+        "operation": "STATION_WORKLOAD", "total_matched": len(stations),
+        "shown": len(stations), "is_sample": False,
+        "shown_ids": [s["ps_code"] for s in stations], "constraints": {},
+    }
+    _trace(state, "SQL Agent (station workload)",
+           f"{len(stations)} station(s), {total_stalled} stalled case(s)", t0)
+
+
 def _handle_case_locations(state: InvestigationState, t0: float) -> None:
     """'Where are those cases concentrated?' — a district tally over the FIRs the
     conversation last put on screen, re-checked against this officer's own policy
@@ -1609,6 +1879,48 @@ def _handle_more_results(state: InvestigationState, t0: float) -> None:
            f"{len(more_rows)} additional record(s) beyond the {shown} already shown", t0)
 
 
+# Below this, two names are unrelated enough that pointing out they resolved to
+# different people would be stating the obvious rather than auditing a real judgment
+# call. Above it, an officer plausibly typed the two names BECAUSE they looked like
+# the same person, which is exactly when Veritas's own identity-resolution decision
+# is worth showing rather than leaving implicit.
+_NAME_SIMILARITY_FLOOR = 0.55
+
+
+def _comparison_identity_check(person_ids: list[str], names: list[str]) -> list[EvidenceItem]:
+    """Compare Mode's one addition beyond running the same single-subject retrieval
+    twice: when the two compared names are near-duplicates, say what Veritas's own
+    Fellegi-Sunter identity resolution (CLAUDE.md §0) DID about that. This is the
+    platform's headline claim made auditable rather than merely asserted — "did the
+    record linkage get this right?" for the exact romanisation-variant case §0 exists
+    to solve (BUG-026: 'Suma Nadkarni' on the file, 'Soom Nadkarni' everywhere derived).
+
+    Deliberately narrow: only fires for exactly two person subjects with genuinely
+    similar names, so an unrelated two-person comparison ("compare Usha Naika and
+    Ravi Kumar's case histories") is not cluttered with a resolution note that has
+    nothing to audit.
+    """
+    if len(person_ids) != 2 or person_ids[0] == person_ids[1]:
+        return []
+    a, b = names
+    if not a or not b:
+        return []
+    ratio = difflib.SequenceMatcher(None, a.lower(), b.lower()).ratio()
+    if ratio < _NAME_SIMILARITY_FLOOR:
+        return []
+    return [EvidenceItem(
+        evidence_id=f"idcheck:{person_ids[0]}:{person_ids[1]}",
+        source_type="CRIMINAL_RECORD", source_id=f"{person_ids[0]}:{person_ids[1]}",
+        source_query="vx_accused_identity — two PersonUIDs compared for name similarity",
+        confidence=round(ratio, 2), confidence_kind="similarity", authoritative=True,
+        content=(f"'{a}' and '{b}' are similarly spelled ({ratio:.0%} text match), but "
+                 f"identity resolution kept them as two SEPARATE people (PersonUID "
+                 f"{person_ids[0]} and {person_ids[1]}) — nothing in the records links "
+                 f"them as one person under two spellings. If you believe this is the "
+                 f"same individual, that is a record-linkage judgment call to raise, "
+                 f"not something these records currently support."))]
+
+
 def _handle_comparison(state: InvestigationState, widen: bool, t0: float) -> None:
     """Bounded deterministic multi-step composition (design spec §3): 'check
     whether either of those people had a prior case in Bengaluru around the same
@@ -1631,9 +1943,11 @@ def _handle_comparison(state: InvestigationState, widen: bool, t0: float) -> Non
     original_pid = state.active_entities.active_person
     all_evidence: list[EvidenceItem] = []
     labels: list[str] = []
+    ids: list[str] = []
     for pid in state.comparison_subject_ids:
         name = sql_agent.person_name(pid) or f"person {pid}"
         labels.append(name)
+        ids.append(pid)
         state.active_entities.active_person = pid
         sub_evidence: list[EvidenceItem] = []
         rows, ev = hipporag.retrieve([name], top_k=15)
@@ -1644,6 +1958,7 @@ def _handle_comparison(state: InvestigationState, widen: bool, t0: float) -> Non
             "evidence_id": f"{e.evidence_id}#cmp:{pid}",
             "content": f"[{name}] {e.content}",
         }) for e in sub_evidence]
+    all_evidence += _comparison_identity_check(ids, labels)
     state.active_entities.active_person = original_pid
     state.evidence_items = _dedupe(state.evidence_items + all_evidence)
     _trace(state, "Orchestrator (bounded comparison)",

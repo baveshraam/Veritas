@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import { loadToken, streamAlerts } from "@/lib/api";
 import { districtName } from "@/lib/districts";
+import { useT } from "@/lib/i18n";
 import { anomalyReading } from "@/lib/metrics";
 import type { AnomalyAlert } from "@/lib/types";
 
@@ -19,6 +20,7 @@ const MAX_KEPT = 12;
  *  One component owns both the trigger and the panel because there is exactly
  *  one alert stream, and two components would mean two connections. */
 export default function AlertBell() {
+  const t = useT();
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
   const [seen, setSeen] = useState(0);
   const [open, setOpen] = useState(false);
@@ -56,9 +58,9 @@ export default function AlertBell() {
         className="btn btn-quiet btn-sm"
         onClick={toggle}
         aria-expanded={open}
-        title="District anomaly alerts"
+        title={t("District anomaly alerts")}
       >
-        Alerts
+        {t("Alerts")}
         {unread > 0 && (
           <span className="pill pill-amber" style={{ padding: "0 5px" }}>{unread}</span>
         )}
@@ -69,14 +71,13 @@ export default function AlertBell() {
           <div className="scrim" style={{ background: "transparent", zIndex: 54 }} onClick={() => setOpen(false)} />
           <div className="syspop" style={{ width: 320, zIndex: 56, padding: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderBottom: "1px solid var(--line)" }}>
-              <span className="label">District anomalies</span>
-              <span className="prov prov-model" style={{ marginLeft: "auto" }}>Model</span>
+              <span className="label">{t("District anomalies")}</span>
+              <span className="prov prov-model" style={{ marginLeft: "auto" }}>{t("Model")}</span>
             </div>
             <div style={{ maxHeight: 320, overflowY: "auto" }} className="scroll">
               {!alerts.length && (
                 <div className="meta" style={{ padding: "16px 12px" }}>
-                  No anomalies since you signed in. This feed reports districts whose
-                  case volume departs from their own recent baseline.
+                  {t("No anomalies since you signed in. This feed reports districts whose case volume departs from their own recent baseline.")}
                 </div>
               )}
               {alerts.map((a) => {
@@ -93,8 +94,8 @@ export default function AlertBell() {
                         </span>
                       </div>
                       <div className="alert-body">
-                        <b style={{ color: "var(--t-2)" }}>{r.headline}</b>
-                        <div className="meta">{r.measure}</div>
+                        <b style={{ color: "var(--t-2)" }}>{t(r.headline)}</b>
+                        <div className="meta">{t(r.measure)}</div>
                       </div>
                     </div>
                   </div>
@@ -102,7 +103,7 @@ export default function AlertBell() {
               })}
             </div>
             <div className="meta" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", color: "var(--t-4)" }}>
-              Decision support. Nothing here triggers an action on its own.
+              {t("Decision support. Nothing here triggers an action on its own.")}
             </div>
           </div>
         </>

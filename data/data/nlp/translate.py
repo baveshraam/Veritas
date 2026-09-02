@@ -229,7 +229,14 @@ def _restore_spans(text: str, mapping: dict[str, str]) -> str:
 # real English singular/plural BEFORE translation removes the ambiguity structurally,
 # the same way _protect_spans removes identifiers and district names from the model's
 # job rather than hoping it renders them right.
-_PLURAL_MARKER = re.compile(r"(?:(\d[\d,]*)\s+)?\b(\w+)\(s\)")
+# The decimal part is optional but, when present, must be captured WITH the integer
+# part rather than left for the digit class to match on its own — "631.1 day(s)"
+# used to match just the "1" after the point (`\d[\d,]*` cannot cross a ".", so the
+# leftmost position where the whole optional group succeeds is the fractional
+# digit), reading a 631.1-day average as count 1 and printing "631.1 day". An
+# average is essentially never exactly 1, so this was silently wrong on every
+# non-integer marker, not just an edge case.
+_PLURAL_MARKER = re.compile(r"(?:(\d[\d,]*(?:\.\d+)?)\s+)?\b(\w+)\(s\)")
 
 
 def resolve_plural_markers(text: str) -> str:
@@ -240,10 +247,14 @@ def resolve_plural_markers(text: str) -> str:
     translation model (NLLB copies the literal "(s)" through untouched, which is
     how "73 ಪ್ರಕರಣಗಳು(s)" reached a live answer). English readers were left with
     the marker itself — a form field in the middle of a finding — so the same
-    resolution now runs on the English answer as well.""" 
+    resolution now runs on the English answer as well."""
     def repl(m: re.Match) -> str:
         num, word = m.group(1), m.group(2)
-        if num is not None and int(num.replace(",", "")) == 1:
+        # A non-integer count (a computed average, "631.1 day(s)") is never "one of
+        # something" — only an exact integer 1 is singular.
+        is_one = (num is not None and "." not in num
+                 and int(num.replace(",", "")) == 1)
+        if is_one:
             return f"{num} {word}"
         plural = word if word.endswith("s") else word + "s"
         return f"{num} {plural}" if num is not None else plural

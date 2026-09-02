@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getPerson } from "@/lib/api";
-import { plural } from "@/lib/metrics";
+import { useT } from "@/lib/i18n";
 import type { PersonDetail } from "@/lib/types";
 
 /* ============================================================================
@@ -32,6 +32,7 @@ export default function PersonOverview({
   name?: string;
   onAsk: (q: string) => void;
 }) {
+  const t = useT();
   const [p, setP] = useState<PersonDetail | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -46,22 +47,22 @@ export default function PersonOverview({
     return (
       <div className="empty">
         <span className="empty-mark" aria-hidden>!</span>
-        <h3>This person could not be opened</h3>
+        <h3>{t("This person could not be opened")}</h3>
         <p>{error}</p>
       </div>
     );
   }
-  if (!p) return <div className="empty"><span className="spinner" /><p>Opening the identity…</p></div>;
+  if (!p) return <div className="empty"><span className="spinner" /><p>{t("Opening the identity…")}</p></div>;
 
-  const displayName = p.name_en ?? name ?? "Name withheld at your rank";
+  const displayName = p.name_en ?? name ?? t("Name withheld at your rank");
   const cases = [...(p.cases ?? [])].sort((a, b) => (b.date_filed ?? "").localeCompare(a.date_filed ?? ""));
 
   return (
     <div className="overview">
       <section className="ov-block">
         <div className="ov-head">
-          <span className="label">Who this is</span>
-          <span className="prov prov-derived">Derived</span>
+          <span className="label">{t("Who this is")}</span>
+          <span className="prov prov-derived">{t("Derived")}</span>
         </div>
         <div className="ov-person-main">
           <span className="ov-person-name" style={{ fontSize: 16 }}>{displayName}</span>
@@ -70,19 +71,17 @@ export default function PersonOverview({
           )}
         </div>
         <p className="ov-narrative">
-          Identity reconstructed across case records by probabilistic record linkage —
-          the organizers&apos; schema has no person, only per-case accused rows; this is
-          the platform inferring that the same individual appears more than once.
+          {t("Identity reconstructed across case records by probabilistic record linkage — the organizers' schema has no person, only per-case accused rows; this is the platform inferring that the same individual appears more than once.")}
         </p>
         <div className="ov-facts">
-          <div><span className="ov-fact-l">Cases</span><span className="ov-fact-v">{plural(cases.length, "case")}</span></div>
+          <div><span className="ov-fact-l">{t("Cases")}</span><span className="ov-fact-v">{cases.length}</span></div>
           {p.criminal_history && (
-            <div><span className="ov-fact-l">Record</span><span className="ov-fact-v">
-              <span className="pill pill-open">Habitual offender</span>
+            <div><span className="ov-fact-l">{t("Record")}</span><span className="ov-fact-v">
+              <span className="pill pill-open">{t("Habitual offender")}</span>
             </span></div>
           )}
           {p.gang_affiliation && (
-            <div><span className="ov-fact-l">Network</span><span className="ov-fact-v">
+            <div><span className="ov-fact-l">{t("Network")}</span><span className="ov-fact-v">
               {String(p.gang_affiliation).toLowerCase()}
             </span></div>
           )}
@@ -91,10 +90,10 @@ export default function PersonOverview({
 
       <section className="ov-block">
         <div className="ov-head">
-          <span className="label">Cases naming this person</span>
-          <span className="ov-count">{plural(cases.length, "case")}</span>
+          <span className="label">{t("Cases naming this person")}</span>
+          <span className="ov-count">{cases.length}</span>
         </div>
-        {cases.length === 0 && <p className="dim">No cases on record within your access scope.</p>}
+        {cases.length === 0 && <p className="dim">{t("No cases on record within your access scope.")}</p>}
         {cases.map((c) => (
           <div className="ov-lead rail-record" key={c.fir_id}>
             <button className="btn btn-sm btn-quiet" style={{ marginRight: 8 }}
@@ -107,7 +106,7 @@ export default function PersonOverview({
       </section>
 
       <section className="ov-block">
-        <div className="ov-head"><span className="label">Ask Veritas about this person</span></div>
+        <div className="ov-head"><span className="label">{t("Ask Veritas about this person")}</span></div>
         <div className="suggests">
           {[
             `Does ${displayName} have priors?`,
@@ -115,7 +114,7 @@ export default function PersonOverview({
             `Where did ${displayName}'s money go?`,
             `Show me the timeline for ${displayName}`,
           ].map((q) => (
-            <button key={q} className="suggest" onClick={() => onAsk(q)}>{q}</button>
+            <button key={q} className="suggest" onClick={() => onAsk(q)}>{t(q)}</button>
           ))}
         </div>
       </section>

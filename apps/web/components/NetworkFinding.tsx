@@ -1,4 +1,5 @@
 "use client";
+import { useT } from "@/lib/i18n";
 import { influenceReading } from "@/lib/metrics";
 import type { Connection, NetworkReading } from "@/lib/network";
 
@@ -22,24 +23,25 @@ function Row({
   c: Connection; rank: number; subject: string | null;
   basis: NetworkReading["basis"]; onAsk?: (q: string) => void;
 }) {
+  const t = useT();
   const r = influenceReading(c.normalised, c.pagerank);
   const role = c.direct
     ? basis === "record"
-      ? "Named in the case records"
-      : `Offended alongside ${subject ?? "the subject"}`
-    : `${r.headline} · ${c.hops} steps away`;
+      ? t("Named in the case records")
+      : t("Offended alongside {name}", { name: subject ?? t("the subject") })
+    : t("{headline} · {hops} steps away", { headline: t(r.headline), hops: c.hops });
   return (
     <button
       className="entity-row conn"
       onClick={() => onAsk?.(`Does ${c.name} have priors?`)}
-      title={`Examine ${c.name}`}
+      title={t("Examine {name}", { name: c.name })}
     >
       <span className="entity-rank">{rank}</span>
       <span className="conn-main">
         <span className="conn-name">{c.name}</span>
         <span className="conn-read">
           {role}
-          <span className="conn-measure">{r.measure}</span>
+          <span className="conn-measure">{t(r.measure)}</span>
         </span>
       </span>
     </button>
@@ -49,16 +51,17 @@ function Row({
 export default function NetworkFinding({
   reading, onAsk, limit = 4,
 }: { reading: NetworkReading; onAsk?: (q: string) => void; limit?: number }) {
+  const t = useT();
   const { direct, extended, basis, subjectName } = reading;
   if (!direct.length && !extended.length) return null;
 
-  const who = subjectName ?? "this investigation";
-  const frontLabel = basis === "record" ? "Named in the records" : "Direct co-offenders";
+  const who = subjectName ?? t("this investigation");
+  const frontLabel = basis === "record" ? t("Named in the records") : t("Direct co-offenders");
 
   return (
     <div className="module">
       <div className="module-head">
-        <span className="label">Who this network shows</span>
+        <span className="label">{t("Who this network shows")}</span>
       </div>
 
       <p className="layer-note">
@@ -88,9 +91,9 @@ export default function NetworkFinding({
             <span className="label">{frontLabel}</span>
             <span className={`prov prov-${basis === "record" ? "record" : "derived"}`}
               title={basis === "record"
-                ? "Stated in the case records"
-                : "Inferred by Veritas from cases these people share"}>
-              {basis === "record" ? "Record" : "Derived"}
+                ? t("Stated in the case records")
+                : t("Inferred by Veritas from cases these people share")}>
+              {basis === "record" ? t("Record") : t("Derived")}
             </span>
           </div>
           <div className="entity-list">
@@ -100,7 +103,7 @@ export default function NetworkFinding({
           </div>
           {direct.length > limit && (
             <div className="meta conn-more">
-              and {direct.length - limit} more — the Network view has all of them.
+              {t("and {n} more — the Network view has all of them.", { n: direct.length - limit })}
             </div>
           )}
         </>
@@ -109,8 +112,8 @@ export default function NetworkFinding({
       {extended.length > 0 && (
         <>
           <div className="module-head sub">
-            <span className="label">Strongest wider connections</span>
-            <span className="prov prov-derived" title="Inferred by Veritas from shared cases">Derived</span>
+            <span className="label">{t("Strongest wider connections")}</span>
+            <span className="prov prov-derived" title={t("Inferred by Veritas from shared cases")}>{t("Derived")}</span>
           </div>
           <div className="entity-list">
             {extended.slice(0, limit).map((c, i) => (
@@ -119,7 +122,7 @@ export default function NetworkFinding({
           </div>
           {extended.length > limit && (
             <div className="meta conn-more">
-              and {extended.length - limit} more in the Network view.
+              {t("and {n} more in the Network view.", { n: extended.length - limit })}
             </div>
           )}
         </>

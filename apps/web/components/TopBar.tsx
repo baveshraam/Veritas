@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 import AlertBell from "./AlertBell";
 import { getHealth, type Health } from "@/lib/api";
-import { assetUrl } from "@/lib/asset";
+import { useT } from "@/lib/i18n";
 import type { Officer } from "@/lib/types";
 
 /** Global chrome: identity, search, console-wide actions.
@@ -27,6 +27,7 @@ export default function TopBar({
   exportNote?: string | null;
   onSignOut: () => void;
 }) {
+  const t = useT();
   const [health, setHealth] = useState<Health | null>(null);
   const [down, setDown] = useState(false);
   const [openSys, setOpenSys] = useState(false);
@@ -68,21 +69,24 @@ export default function TopBar({
           <h1 className="mark-name">VERITAS</h1>
           <span className="mark-sub">Crime Intelligence</span>
         </div>
-        {/* The Karnataka State Police crest — Government of Karnataka's own seal,
-            since KSP has no dedicated badge asset published anywhere reachable
-            here. Non-stretched: intrinsic aspect ratio, height-constrained only. */}
-        <img src={assetUrl("/ksp-logo.svg")} alt="Karnataka State Police" className="mark-crest" />
       </div>
 
-      <button className="omni" onClick={onSearch} aria-label="Search records and actions">
+      <button className="omni" onClick={onSearch} aria-label={t("Search records and actions")}>
         <span aria-hidden>⌕</span>
-        <span className="omni-text">Search cases, people, districts, actions…</span>
+        <span className="omni-text">{t("Search cases, people, districts, actions…")}</span>
         <span className="omni-hint">⌘K</span>
       </button>
 
       <div className="spacer" />
 
-      <div className="seg" role="group" aria-label="Answer language">
+      <div className="seg" role="group" aria-label={t("Appearance")}>
+        <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}
+          aria-pressed={theme === "light"} title={t("Light appearance")}>{t("Light")}</button>
+        <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}
+          aria-pressed={theme === "dark"} title={t("Dark appearance")}>{t("Dark")}</button>
+      </div>
+
+      <div className="seg" role="group" aria-label={t("Answer language")}>
         <button className={language === "en" ? "on" : ""} onClick={() => onLanguage("en")}
           aria-pressed={language === "en"}>EN</button>
         <button className={language === "kn" ? "on" : ""} onClick={() => onLanguage("kn")}
@@ -92,15 +96,15 @@ export default function TopBar({
       <button className={`btn btn-quiet btn-sm ${voiceOut ? "on" : ""}`}
         onClick={() => onVoiceOut(!voiceOut)}
         aria-pressed={voiceOut}
-        title="Read answers aloud">
-        {voiceOut ? "Voice on" : "Voice off"}
+        title={t("Read answers aloud")}>
+        {voiceOut ? t("Voice on") : t("Voice off")}
       </button>
 
       <AlertBell />
 
       <button className="btn btn-quiet btn-sm" onClick={onExport} disabled={!canExport}
-        title="Save this session as a PDF">
-        Export
+        title={t("Save this session as a PDF")}>
+        {t("Export")}
       </button>
       {exportNote && (
         <div role="status" className="toast">
@@ -111,38 +115,29 @@ export default function TopBar({
       <div ref={sysRef} style={{ position: "relative" }}>
         <button className={`sysdot ${state}`} onClick={() => setOpenSys((v) => !v)}
           aria-expanded={openSys}
-          title={down ? "The API is unreachable" : "System status"}>
+          title={down ? t("The API is unreachable") : t("System status")}>
           <i aria-hidden />
-          {down ? "Offline" : health ? "Live" : "Connecting"}
+          {down ? t("Offline") : health ? t("Live") : t("Connecting")}
         </button>
         {openSys && (
           <div className="syspop">
-            <div className="label" style={{ marginBottom: 6 }}>Records loaded</div>
+            <div className="label" style={{ marginBottom: 6 }}>{t("Records loaded")}</div>
             {health ? (
               <>
-                <div className="syspop-row"><span>Case records</span><b>{n(health.firs)}</b></div>
-                <div className="syspop-row"><span>Graph nodes</span><b>{n(health.graph_nodes)}</b></div>
-                <div className="syspop-row"><span>Graph edges</span><b>{n(health.graph_edges)}</b></div>
-                <div className="syspop-row"><span>Indexed documents</span><b>{n(health.indexed_documents)}</b></div>
-                <div className="syspop-row"><span>Record store</span><b>{health.datastore}</b></div>
-                <div className="syspop-row"><span>Language model</span><b>{health.llm}</b></div>
+                <div className="syspop-row"><span>{t("Case records")}</span><b>{n(health.firs)}</b></div>
+                <div className="syspop-row"><span>{t("Graph nodes")}</span><b>{n(health.graph_nodes)}</b></div>
+                <div className="syspop-row"><span>{t("Graph edges")}</span><b>{n(health.graph_edges)}</b></div>
+                <div className="syspop-row"><span>{t("Indexed documents")}</span><b>{n(health.indexed_documents)}</b></div>
+                <div className="syspop-row"><span>{t("Record store")}</span><b>{health.datastore}</b></div>
+                <div className="syspop-row"><span>{t("Language model")}</span><b>{health.llm}</b></div>
               </>
             ) : (
               <div className="meta">
-                {down ? "The Veritas API did not respond." : "Checking the record store…"}
+                {down ? t("The Veritas API did not respond.") : t("Checking the record store…")}
               </div>
             )}
             <div className="meta" style={{ marginTop: 8, color: "var(--t-4)" }}>
-              Every answer is drawn from this set. Nothing outside it can be cited.
-            </div>
-            <div className="syspop-foot">
-              <span className="label">Appearance</span>
-              <div className="seg" role="group" aria-label="Appearance">
-                <button className={theme === "light" ? "on" : ""} onClick={() => setTheme("light")}
-                  aria-pressed={theme === "light"}>Light</button>
-                <button className={theme === "dark" ? "on" : ""} onClick={() => setTheme("dark")}
-                  aria-pressed={theme === "dark"}>Dark</button>
-              </div>
+              {t("Every answer is drawn from this set. Nothing outside it can be cited.")}
             </div>
           </div>
         )}
@@ -151,10 +146,10 @@ export default function TopBar({
       <div className="officer">
         <span className="officer-rank">{officer.role}</span>
         <span className="officer-name">{officer.name}</span>
-        <span className="officer-ps">{officer.badge_no ? `PS ${officer.ps_code}` : "unverified"}</span>
+        <span className="officer-ps">{officer.badge_no ? `PS ${officer.ps_code}` : t("unverified")}</span>
       </div>
-      <button className="btn btn-quiet btn-sm" onClick={onSignOut} title="Sign in at another rank">
-        Switch
+      <button className="btn btn-quiet btn-sm" onClick={onSignOut} title={t("Sign in at another rank")}>
+        {t("Switch")}
       </button>
     </header>
   );

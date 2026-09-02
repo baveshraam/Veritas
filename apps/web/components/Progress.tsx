@@ -1,4 +1,5 @@
 "use client";
+import { useT } from "@/lib/i18n";
 import type { TraceEntry } from "@/lib/types";
 
 /** Named stages while an investigation runs, instead of a spinner.
@@ -34,11 +35,12 @@ function stageOf(step: string): number {
 }
 
 export default function Progress({ trace }: { trace: TraceEntry[] }) {
-  const reached = trace.length ? Math.max(...trace.map((t) => stageOf(t.step))) : 0;
+  const t = useT();
+  const reached = trace.length ? Math.max(...trace.map((tr) => stageOf(tr.step))) : 0;
 
   return (
     <div className="progress" role="status" aria-live="polite">
-      <div className="label" style={{ marginBottom: 4 }}>Investigating</div>
+      <div className="label" style={{ marginBottom: 4 }}>{t("Investigating")}</div>
       {STAGES.map((s, i) => {
         const state = i < reached ? "done" : i === reached ? "now" : "";
         return (
@@ -46,8 +48,8 @@ export default function Progress({ trace }: { trace: TraceEntry[] }) {
             <span className="progress-mark" aria-hidden>
               {i < reached ? "✓" : i === reached ? "" : "○"}
             </span>
-            <span>{s.label}</span>
-            {i === reached && <span className="progress-detail">{s.note}</span>}
+            <span>{t(s.label)}</span>
+            {i === reached && <span className="progress-detail">{t(s.note)}</span>}
           </div>
         );
       })}

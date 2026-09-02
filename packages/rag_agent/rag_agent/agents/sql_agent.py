@@ -443,6 +443,161 @@ def filter_viewable(rows: list[dict], officer_role: str, officer_ps_code: str) -
             if "ps_code" not in r or can_view_fir(officer_role, officer_ps_code, r["ps_code"])]
 
 
+def person_community(person_id: str) -> Optional[int]:
+    """The Louvain community a person was placed in, for 'this community' when the
+    question names a person already in focus rather than a community number."""
+    row = ds.one('SELECT "CommunityID" FROM "vx_person" WHERE "PersonUID" = :pid',
+                {"pid": int(person_id)})
+    return row["CommunityID"] if row and row.get("CommunityID") is not None else None
+
+
+def district_socioeconomic(district_name: str) -> Optional[dict]:
+    """The one real (non-synthetic) table in the schema, keyed to a district by name —
+    Census 2011 ground truth for an Area Profile to sit next to the recorded crime mix.
+    Two simple queries rather than one join: `District` and `vx_district_socioeconomic`
+    are both tiny reference tables, and a join buys nothing a Python dict lookup doesn't
+    already give for free."""
+    d = ds.one('SELECT "DistrictID" FROM "District" WHERE "DistrictName" LIKE :d',
+              {"d": f"%{district_name}%"})
+    if not d:
+        return None
+    row = ds.one('SELECT "Population", "LiteracyRate", "UrbanRatio", "PovertyIndex", '
+                '"MarginalWorkerRate", "YouthRatio" FROM "vx_district_socioeconomic" '
+                'WHERE "DistrictID" = :did', {"did": d["DistrictID"]})
+    return row
+
+
+def flagged_transactions(officer_role: str, officer_ps_code: str, limit: int = 25) -> list[dict]:
+    """Every transaction a detector has flagged, statewide, EXCEPT for an IO — the same
+    "never pulled into context" rule every other query in this module enforces (see the
+    module docstring). A transaction tied to a case is scoped by that case's station,
+    the same way `ranked_offenders` scopes a person's case count; a transaction with no
+    case link at all (pure account-to-account activity, not yet tied to an
+    investigation) has no station to scope by and is visible to every rank — there is
+    nothing station-specific to withhold.
+
+    `vx_txn.FlaggedSuspicious` already carries everything a detector wrote (`Detector`,
+    `FlagType`, `FlagConfidence` — CLAUDE.md §6's rule/GNN split), and it is never set
+    by the generator (`data/tests/test_financial.py` enforces that), so a row here is
+    always a real detector output, not a planted answer key.
+    """
+    scope = ""
+    params: dict = {"limit": limit}
+    if officer_role == "IO" and officer_ps_code:
+        scope = (' AND ("vx_txn"."CaseMasterID" IS NULL OR "CaseMaster"."PoliceStationID" = :ps)')
+        params["ps"] = int(officer_ps_code)
+    rows = ds.query(
+        'SELECT "vx_txn"."TxnID", "vx_txn"."SrcAccountID", "vx_txn"."DstAccountID", '
+        '       "vx_txn"."Amount", "vx_txn"."TxnDate", "vx_txn"."CaseMasterID", '
+        '       "vx_txn"."FlagType", "vx_txn"."Detector", "vx_txn"."FlagConfidence" '
+        'FROM "vx_txn" '
+        'LEFT JOIN "CaseMaster" ON "CaseMaster"."CaseMasterID" = "vx_txn"."CaseMasterID" '
+        f'WHERE "vx_txn"."FlaggedSuspicious" = true {scope} '
+        'ORDER BY "vx_txn"."FlagConfidence" DESC LIMIT :limit', params)
+    return rows
+
+
+def community_case_profile(person_ids: list[str], officer_role: str,
+                           officer_ps_code: str) -> dict:
+    """What a Louvain community's members actually have in common: their most frequent
+    offence type and the total distinct cases behind the group. `gds.community_members`
+    gives WHO is in the group; this is the one thing it doesn't — a community is a fact
+    about the co-offending graph, not about the case records, so it never joins to
+    `CaseMaster` on its own account.
+
+    `_ps_scope` applies here exactly as it does everywhere else in this module: an IO
+    asking about a community must not have another station's cases folded into the
+    "most often X" figure — a community can span the whole state, and its members'
+    OTHER stations' cases are exactly the "another station's cases in context" this
+    module's docstring already rules out for every other query.
+
+    Two joins (`vx_accused_identity`->`Accused`->`CaseMaster`), well under ZCQL's 4-join
+    cap, then `CrimeSubHead` names are resolved as a second, join-free lookup — the same
+    trade `fir_points`/`crime_counts_by_district` already make, rather than adding a
+    third join for a ~20-row static table.
+    """
+    if not person_ids:
+        return {"case_count": 0, "top_crime_type": None, "crime_mix": {}}
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    rows = ds.query(
+        'SELECT DISTINCT "CaseMaster"."CaseMasterID", "CaseMaster"."CrimeMinorHeadID" '
+        'FROM "vx_accused_identity" '
+        'JOIN "Accused" ON "Accused"."AccusedMasterID" = "vx_accused_identity"."AccusedMasterID" '
+        'JOIN "CaseMaster" ON "CaseMaster"."CaseMasterID" = "Accused"."CaseMasterID" '
+        f'WHERE "vx_accused_identity"."PersonUID" IN :ids {scope}',
+        {"ids": [int(p) for p in person_ids], **extra})
+    crime_names = {r["CrimeSubHeadID"]: r["CrimeHeadName"]
+                  for r in ds.query('SELECT "CrimeSubHeadID", "CrimeHeadName" FROM "CrimeSubHead"')}
+    mix: dict[str, int] = {}
+    for r in rows:
+        name = crime_names.get(r.get("CrimeMinorHeadID")) or "not recorded"
+        mix[name] = mix.get(name, 0) + 1
+    top = max(mix.items(), key=lambda kv: kv[1])[0] if mix else None
+    return {"case_count": len({r["CaseMasterID"] for r in rows}),
+            "top_crime_type": top, "crime_mix": mix}
+
+
+STALE_DAYS = 30  # ponytail: a fixed threshold, tune if a demo needs a different cut
+
+
+def station_workload(officer_role: str, officer_ps_code: str) -> list[dict]:
+    """Per-station: open caseload, average days a case has been open, and — the one
+    that actually matters to a supervisor — how many of those open cases have gone
+    STALE: older than `STALE_DAYS` with zero investigation-board activity. A raw open
+    count says a station is busy; a stale count says a specific case is being neglected.
+
+    `vx_case_board_item` has no per-case "last touched" summary, so staleness is a set
+    difference computed in Python: which open CaseMasterIDs never appear in a board-item
+    row at all. Two plain single-table-ish queries (CaseMaster+Unit+CaseStatusMaster is
+    2 joins; vx_case_board_item is 0) rather than a LEFT JOIN ... IS NULL, matching this
+    module's own established avoidance of ZCQL's documented live-JOIN restrictions
+    between value-related tables (CLAUDE.md v8).
+
+    RBAC via the same `_ps_scope` every other query here uses: an IO sees only their own
+    station's queue (a self-check — "am I falling behind"), every other rank sees every
+    station in scope, ranked by who needs backup most.
+    """
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    open_cases = ds.query(
+        'SELECT "CaseMaster"."CaseMasterID", "CaseMaster"."CrimeRegisteredDate", '
+        '       "CaseMaster"."PoliceStationID", "Unit"."UnitName" '
+        'FROM "CaseMaster" '
+        'JOIN "Unit" ON "CaseMaster"."PoliceStationID" = "Unit"."UnitID" '
+        'JOIN "CaseStatusMaster" ON "CaseMaster"."CaseStatusID" = "CaseStatusMaster"."CaseStatusID" '
+        f'WHERE "CaseStatusMaster"."CaseStatusName" = \'Under Investigation\' {scope}',
+        extra)
+    if not open_cases:
+        return []
+    touched = {str(r["CaseMasterID"]) for r in ds.query(
+        'SELECT DISTINCT "CaseMasterID" FROM "vx_case_board_item" WHERE "CaseMasterID" IN :ids',
+        {"ids": [int(c["CaseMasterID"]) for c in open_cases]})}
+
+    today = date.today()
+    by_station: dict[str, dict] = {}
+    for c in open_cases:
+        filed = ds.to_dt(c.get("CrimeRegisteredDate"))
+        age = (today - filed.date()).days if filed else 0
+        key = str(c["PoliceStationID"])
+        st = by_station.setdefault(key, {
+            "ps_code": key, "station": c.get("UnitName") or key,
+            "open_cases": 0, "age_total": 0, "stalled_ids": []})
+        st["open_cases"] += 1
+        st["age_total"] += age
+        if age > STALE_DAYS and str(c["CaseMasterID"]) not in touched:
+            st["stalled_ids"].append(str(c["CaseMasterID"]))
+
+    out = []
+    for st in by_station.values():
+        out.append({
+            "ps_code": st["ps_code"], "station": st["station"],
+            "open_cases": st["open_cases"],
+            "avg_age_days": round(st["age_total"] / st["open_cases"], 1),
+            "stalled_count": len(st["stalled_ids"]),
+            "stalled_ids": st["stalled_ids"][:10],
+        })
+    return sorted(out, key=lambda s: (-s["stalled_count"], -s["avg_age_days"]))
+
+
 def fir_points(district_code: str, limit: int = 600) -> list[dict]:
     """Case coordinates for the map layer. The hotspot polygons alone show WHERE the
     clusters are but not how dense the surrounding activity is — the point scatter is what

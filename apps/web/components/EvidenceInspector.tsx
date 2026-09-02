@@ -4,6 +4,7 @@ import {
   band, CONF_MEANING, CONF_NAME, PROV_LABEL, PROV_MEANING, provenanceOf,
   showsPercent, sourceLabel,
 } from "@/lib/evidence";
+import { useT } from "@/lib/i18n";
 import type { EvidenceItem } from "@/lib/types";
 import WhyChain from "./WhyChain";
 
@@ -45,6 +46,7 @@ export default function EvidenceInspector({
   onStep: (delta: number) => void;
   onAsk?: (query: string) => void;
 }) {
+  const t = useT();
   const [why, setWhy] = useState(false);
   // Collapse on navigating to a different source: the chain on screen must always
   // be the chain for the item on screen, and a stale one is worse than none.
@@ -72,22 +74,22 @@ export default function EvidenceInspector({
           <div style={{ minWidth: 0 }}>
             <div className="inspector-title mono">{item.source_id}</div>
             <div className="inspector-sub">
-              Source {index + 1} of {total} · {sourceLabel(item)}
+              {t("Source {i} of {total}", { i: index + 1, total })} · {t(sourceLabel(item))}
             </div>
           </div>
           <div style={{ marginLeft: "auto", display: "flex", gap: 5 }}>
             <button className="btn btn-sm" onClick={() => onStep(-1)} disabled={total < 2}
-              title="Previous source (↑)">↑</button>
+              title={t("Previous source (↑)")}>↑</button>
             <button className="btn btn-sm" onClick={() => onStep(1)} disabled={total < 2}
-              title="Next source (↓)">↓</button>
-            <button className="btn btn-sm" onClick={onClose} title="Close (Esc)">Close</button>
+              title={t("Next source (↓)")}>↓</button>
+            <button className="btn btn-sm" onClick={onClose} title={t("Close (Esc)")}>{t("Close")}</button>
           </div>
         </div>
 
         <div className="inspector-body">
           <div className="field-block">
             <span className="label">
-              {p === "record" ? "Record fact" : p === "derived" ? "Derived finding" : "Model output"}
+              {t(p === "record" ? "Record fact" : p === "derived" ? "Derived finding" : "Model output")}
             </span>
             <div className={`record-quote ${p === "derived" ? "is-derived" : p === "model" ? "is-model" : ""}`}>
               {item.content}
@@ -96,34 +98,33 @@ export default function EvidenceInspector({
 
           <div className="field-block">
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
-              <span className="label" style={{ margin: 0 }}>Why this is here</span>
+              <span className="label" style={{ margin: 0 }}>{t("Why this is here")}</span>
               <button className="btn btn-sm btn-quiet" style={{ marginLeft: "auto" }}
                 onClick={() => setWhy((v) => !v)}
                 aria-expanded={why}>
-                {why ? "Hide" : "Trace it"}
+                {t(why ? "Hide" : "Trace it")}
               </button>
             </div>
             {why ? (
               <WhyChain evidenceId={item.evidence_id} sessionId={sessionId} onAsk={onAsk} />
             ) : (
               <div className="meta">
-                The records this rests on, how they were combined, and what it does not
-                establish.
+                {t("The records this rests on, how they were combined, and what it does not establish.")}
               </div>
             )}
           </div>
 
           <div className="field-block">
-            <span className="label">Provenance</span>
+            <span className="label">{t("Provenance")}</span>
             <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 5 }}>
-              <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
-              <span className="field-value quiet" style={{ fontSize: 13 }}>{sourceLabel(item)}</span>
+              <span className={`prov prov-${p}`}>{t(PROV_LABEL[p])}</span>
+              <span className="field-value quiet" style={{ fontSize: 13 }}>{t(sourceLabel(item))}</span>
             </div>
-            <div className="meta">{PROV_MEANING[p]}</div>
+            <div className="meta">{t(PROV_MEANING[p])}</div>
           </div>
 
           <div className="field-block">
-            <span className="label">{CONF_NAME[item.confidence_kind]}</span>
+            <span className="label">{t(CONF_NAME[item.confidence_kind])}</span>
             {showsPercent(item.confidence_kind) ? (
               <>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 5 }}>
@@ -136,37 +137,36 @@ export default function EvidenceInspector({
                     {(item.confidence * 100).toFixed(0)}%
                   </span>
                 </div>
-                <div className="meta">{CONF_MEANING[item.confidence_kind]}</div>
+                <div className="meta">{t(CONF_MEANING[item.confidence_kind])}</div>
               </>
             ) : (
               <div className="meta">
-                {CONF_MEANING[item.confidence_kind]} Read it in the text above rather than as a
-                second percentage here.
+                {t(CONF_MEANING[item.confidence_kind])} {t("Read it in the text above rather than as a second percentage here.")}
               </div>
             )}
           </div>
 
           {item.source_query && (
             <div className="field-block">
-              <span className="label">How this was retrieved</span>
+              <span className="label">{t("How this was retrieved")}</span>
               <div className="source-query">{item.source_query}</div>
             </div>
           )}
 
           <div className="field-block">
-            <span className="label">Retrieved</span>
+            <span className="label">{t("Retrieved")}</span>
             <div className="field-value quiet mono" style={{ fontSize: 12.5 }}>{stamp(item.timestamp)}</div>
           </div>
 
           <div className="inspector-acts">
             <button className="btn" onClick={() => onPin(item.evidence_id)}
-              title="Save this to the open case's investigation board">
-              Pin to board
+              title={t("Save this to the open case's investigation board")}>
+              {t("Pin to board")}
             </button>
             {isFir && (
               <>
-                <button className="btn" onClick={() => onCopilot(item.source_id)}>Open case briefing</button>
-                <button className="btn" onClick={() => onBoard(item.source_id)}>Open case board</button>
+                <button className="btn" onClick={() => onCopilot(item.source_id)}>{t("Open case briefing")}</button>
+                <button className="btn" onClick={() => onBoard(item.source_id)}>{t("Open case board")}</button>
               </>
             )}
           </div>

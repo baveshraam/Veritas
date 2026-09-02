@@ -275,6 +275,26 @@ def test_intent_classification():
     assert classify("colourless green ideas") == "UNKNOWN"
 
 
+def test_new_analytics_intents_classify_correctly():
+    assert classify("Give me an area profile of Mandya") == "AREA_PROFILE"
+    assert classify("District overview for Bidar") == "AREA_PROFILE"
+    assert classify("Who is in community 28?") == "COMMUNITY_PROFILE"
+    assert classify("Show me the financial watchlist") == "WATCHLIST"
+    assert classify("Show me flagged transactions") == "WATCHLIST"
+    assert classify("Which stations are falling behind?") == "STATION_WORKLOAD"
+    assert classify("Show me stalled cases") == "STATION_WORKLOAD"
+
+
+def test_new_analytics_intents_do_not_lose_to_the_bare_word_they_collide_with():
+    # "area profile" contains HOTSPOT's bare "area" keyword; "this community"
+    # contains PERSON_NETWORK's bare "network" via "this network community";
+    # "flagged transactions" contains FINANCIAL's bare "transactions" keyword.
+    # Each must still win over the generic intent it overlaps with.
+    assert classify("area profile") == "AREA_PROFILE"
+    assert classify("who is in this network community") == "COMMUNITY_PROFILE"
+    assert classify("flagged transactions") == "WATCHLIST"
+
+
 def test_visualization_is_bound_to_intent():
     assert visualization_for("PERSON_NETWORK") == "network"
     assert visualization_for("FINANCIAL") == "sankey"

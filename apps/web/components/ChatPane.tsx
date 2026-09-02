@@ -5,6 +5,7 @@ import NetworkFinding from "./NetworkFinding";
 import ReasoningTrace from "./ReasoningTrace";
 import Progress from "./Progress";
 import { summarise } from "@/lib/evidence";
+import { translate, useLang, useT } from "@/lib/i18n";
 import { readNetwork } from "@/lib/network";
 import type { SessionFocusView, Turn } from "@/lib/types";
 import VoiceRecorder from "./VoiceRecorder";
@@ -44,6 +45,8 @@ export default function ChatPane({
   activeEvidence: string | null;
   onInspect: () => void;
 }) {
+  const t = useT();
+  const lang = useLang();
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
@@ -62,10 +65,10 @@ export default function ChatPane({
   return (
     <section className="col col-copilot" aria-label="Investigation copilot">
       <div className="col-head">
-        <span className="label">Copilot</span>
+        <span className="label">{t("Copilot")}</span>
         <div className="col-head-right">
           {turns.length > 0 && (
-            <span className="meta">{turns.length} {turns.length === 1 ? "question" : "questions"}</span>
+            <span className="meta">{turns.length} {t(turns.length === 1 ? "question" : "questions")}</span>
           )}
         </div>
       </div>
@@ -73,17 +76,15 @@ export default function ChatPane({
       <div className="col-body copilot-scroll">
         {!turns.length && (
           <div className="opening">
-            <h2>Ask an investigative question.</h2>
+            <h2>{t("Ask an investigative question.")}</h2>
             <p>
-              Answers are drawn from the case records you are cleared to see, and every
-              claim carries the record it came from. Where the records don&apos;t support a
-              claim, Veritas says so rather than guessing.
+              {t("Answers are drawn from the case records you are cleared to see, and every claim carries the record it came from. Where the records don't support a claim, Veritas says so rather than guessing.")}
             </p>
-            <div className="label" style={{ marginBottom: 7 }}>Start here</div>
+            <div className="label" style={{ marginBottom: 7 }}>{t("Start here")}</div>
             {OPENERS.map((o) => (
               <button key={o.q} className="opening-q" onClick={() => send(o.q)}>
-                <b>{o.label}</b>
-                {o.q}
+                <b>{t(o.label)}</b>
+                {t(o.q)}
               </button>
             ))}
           </div>
@@ -107,31 +108,29 @@ export default function ChatPane({
               {t.answer && (t.unauthenticated ? (
                 <div className="refusal">
                   <div className="refusal-head">
-                    <span aria-hidden>◇</span> Demonstration rank — not signed in
+                    <span aria-hidden>◇</span> {translate("Demonstration rank — not signed in", lang)}
                   </div>
                   <div className="refusal-body">{t.answer}</div>
                 </div>
               ) : t.refused ? (
                 <div className="refusal">
                   <div className="refusal-head">
-                    <span aria-hidden>◇</span> No supporting records
+                    <span aria-hidden>◇</span> {translate("No supporting records", lang)}
                   </div>
                   <div className="refusal-body">{t.answer}</div>
                   <div className="refusal-note">
-                    This does not mean the event did not occur — only that nothing in the
-                    records you can see establishes it. Narrow the question, name the
-                    subject, or ask at a rank with wider scope.
+                    {translate("This does not mean the event did not occur — only that nothing in the records you can see establishes it. Narrow the question, name the subject, or ask at a rank with wider scope.", lang)}
                   </div>
                 </div>
               ) : t.failed ? (
                 <div className="failure">
-                  <b>The investigation could not be completed.</b>
+                  <b>{translate("The investigation could not be completed.", lang)}</b>
                   <div style={{ marginTop: 4 }}>{t.answer}</div>
                 </div>
               ) : (
                 <>
                   <div className="finding-head">
-                    <span className="label">Finding</span>
+                    <span className="label">{translate("Finding", lang)}</span>
                   </div>
                   <Finding text={t.answer} citations={t.citations}
                     active={activeEvidence} onCite={onCite} />
@@ -141,8 +140,8 @@ export default function ChatPane({
                   {support.total > 0 && (
                     <div className="support">
                       <div className="support-head">
-                        <span className="label">Evidence support</span>
-                        <span className={`support-verdict is-${support.band}`}>{support.verdict}</span>
+                        <span className="label">{translate("Evidence support", lang)}</span>
+                        <span className={`support-verdict is-${support.band}`}>{translate(support.verdict, lang)}</span>
                       </div>
                       <div className={`support-bar support-verdict is-${support.band}`}>
                         {[0, 1, 2, 3].map((i) => (
@@ -151,17 +150,17 @@ export default function ChatPane({
                       </div>
                       <div className="support-counts">
                         {support.authoritative > 0 && (
-                          <span><span className="prov prov-record">Record</span> {support.authoritative} authoritative</span>
+                          <span><span className="prov prov-record">{translate("Record", lang)}</span> {support.authoritative} {translate("authoritative", lang)}</span>
                         )}
                         {support.corroborating > 0 && (
-                          <span><span className="prov prov-derived">Derived</span> {support.corroborating} corroborating</span>
+                          <span><span className="prov prov-derived">{translate("Derived", lang)}</span> {support.corroborating} {translate("corroborating", lang)}</span>
                         )}
                         {support.modelled > 0 && (
-                          <span><span className="prov prov-model">Model</span> {support.modelled} computed</span>
+                          <span><span className="prov prov-model">{translate("Model", lang)}</span> {support.modelled} {translate("computed", lang)}</span>
                         )}
                       </div>
                       <button className="btn btn-sm" style={{ marginTop: 9 }} onClick={onInspect}>
-                        Inspect evidence
+                        {translate("Inspect evidence", lang)}
                       </button>
                     </div>
                   )}
@@ -172,7 +171,7 @@ export default function ChatPane({
                 <div className="suggests">
                   {ups.map((q) => (
                     <button key={q} className="suggest" onClick={() => send(q)} disabled={busy}>
-                      {q}
+                      {translate(q, lang)}
                     </button>
                   ))}
                 </div>
@@ -192,8 +191,8 @@ export default function ChatPane({
             ref={taRef}
             value={text}
             rows={1}
-            placeholder="Ask about a case, a person, a district…"
-            aria-label="Ask an investigative question"
+            placeholder={t("Ask about a case, a person, a district…")}
+            aria-label={t("Ask an investigative question")}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -206,7 +205,7 @@ export default function ChatPane({
           <VoiceRecorder onCapture={onSendAudio} disabled={busy} />
           <button className="btn btn-sm btn-primary composer-ask" onClick={() => send()}
             disabled={busy || !text.trim()}>
-            {busy ? <span className="spinner" style={{ width: 11, height: 11 }} /> : "Ask"}
+            {busy ? <span className="spinner" style={{ width: 11, height: 11 }} /> : t("Ask")}
           </button>
         </div>
       </div>

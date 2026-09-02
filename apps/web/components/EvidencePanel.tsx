@@ -1,5 +1,6 @@
 "use client";
 import { band, CONF_NAME, PROV_LABEL, provenanceOf, showsPercent, summarise } from "@/lib/evidence";
+import { useT } from "@/lib/i18n";
 import { matchReading } from "@/lib/metrics";
 import type { EvidenceItem } from "@/lib/types";
 
@@ -23,17 +24,17 @@ export default function EvidencePanel({
   active: string | null;
   onOpen: (id: string) => void;
 }) {
+  const t = useT();
   if (!evidence.length) {
     return (
       <section className="col col-evidence" aria-label="Evidence">
-        <div className="col-head"><span className="label">Evidence</span></div>
+        <div className="col-head"><span className="label">{t("Evidence")}</span></div>
         <div className="col-body">
           {/* Deliberately small. An empty panel that fills a fifth of the screen
               is a fifth of the screen spent saying nothing. */}
           <div className="evidence-idle">
-            <b>Nothing cited yet</b>
-            Every claim an answer makes appears here as the record it rests on —
-            with what kind of source it is, and how well it supports the claim.
+            <b>{t("Nothing cited yet")}</b>
+            {t("Every claim an answer makes appears here as the record it rests on — with what kind of source it is, and how well it supports the claim.")}
           </div>
         </div>
       </section>
@@ -45,39 +46,39 @@ export default function EvidencePanel({
   return (
     <section className="col col-evidence" aria-label="Evidence">
       <div className="col-head">
-        <span className="label">Evidence</span>
+        <span className="label">{t("Evidence")}</span>
         <div className="col-head-right">
-          <span className="meta">{s.total} {s.total === 1 ? "source" : "sources"}</span>
+          <span className="meta">{s.total} {t(s.total === 1 ? "source" : "sources")}</span>
         </div>
       </div>
 
       <div className="evidence-summary">
         <div className="support-head">
-          <span className="label">Support</span>
-          <span className={`support-verdict is-${s.band}`}>{s.verdict}</span>
+          <span className="label">{t("Support")}</span>
+          <span className={`support-verdict is-${s.band}`}>{t(s.verdict)}</span>
         </div>
         <div className={`support-bar support-verdict is-${s.band}`}>
           {[0, 1, 2, 3].map((i) => <i key={i} className={i < s.steps ? "on" : ""} />)}
         </div>
         <div className="evidence-breakdown">
           {s.authoritative > 0 && (
-            <div className="evidence-breakdown-row" title="Stated directly in the case records">
-              <span className="prov prov-record">{PROV_LABEL.record}</span>
-              <span>authoritative records</span>
+            <div className="evidence-breakdown-row" title={t("Stated directly in the case records")}>
+              <span className="prov prov-record">{t(PROV_LABEL.record)}</span>
+              <span>{t("authoritative records")}</span>
               <span className="mono">{s.authoritative}</span>
             </div>
           )}
           {s.corroborating > 0 && (
-            <div className="evidence-breakdown-row" title="Inferred by Veritas from the records">
-              <span className="prov prov-derived">{PROV_LABEL.derived}</span>
-              <span>corroborating findings</span>
+            <div className="evidence-breakdown-row" title={t("Inferred by Veritas from the records")}>
+              <span className="prov prov-derived">{t(PROV_LABEL.derived)}</span>
+              <span>{t("corroborating findings")}</span>
               <span className="mono">{s.corroborating}</span>
             </div>
           )}
           {s.modelled > 0 && (
-            <div className="evidence-breakdown-row" title="Computed by a model — decision support">
-              <span className="prov prov-model">{PROV_LABEL.model}</span>
-              <span>model outputs</span>
+            <div className="evidence-breakdown-row" title={t("Computed by a model — decision support")}>
+              <span className="prov prov-model">{t(PROV_LABEL.model)}</span>
+              <span>{t("model outputs")}</span>
               <span className="mono">{s.modelled}</span>
             </div>
           )}
@@ -95,11 +96,11 @@ export default function EvidencePanel({
               id={`ev-${e.evidence_id}`}
               className={`ev rail-${p} ${active === e.evidence_id ? "on" : ""}`}
               onClick={() => onOpen(e.evidence_id)}
-              aria-label={`Source ${i + 1}, ${PROV_LABEL[p]}`}
+              aria-label={t("Source {i}, {label}", { i: i + 1, label: t(PROV_LABEL[p]) })}
             >
               <div className="ev-head">
                 <span className="ev-idx">{i + 1}</span>
-                <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
+                <span className={`prov prov-${p}`}>{t(PROV_LABEL[p])}</span>
                 <span className="mono" style={{ marginLeft: "auto", fontSize: 10.5, color: "var(--t-4)" }}>
                   {e.source_id}
                 </span>
@@ -111,8 +112,8 @@ export default function EvidencePanel({
                     percentage of wording similarity is worth. */}
                 <span className="meta">
                   {e.confidence_kind === "similarity"
-                    ? matchReading(e.confidence).headline
-                    : CONF_NAME[e.confidence_kind]}
+                    ? t(matchReading(e.confidence).headline)
+                    : t(CONF_NAME[e.confidence_kind])}
                 </span>
                 {showsPercent(e.confidence_kind) && (
                   <span className={`ev-strength support-verdict is-${b}`}>

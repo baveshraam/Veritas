@@ -2,6 +2,7 @@
 import { useMemo, useState } from "react";
 import ReactECharts from "echarts-for-react";
 import WhyChain from "../WhyChain";
+import { useT } from "@/lib/i18n";
 import { influenceReading } from "@/lib/metrics";
 import { isRoot, type NetworkReading } from "@/lib/network";
 import {
@@ -48,6 +49,7 @@ export default function NetworkView({
   /** Who is named in the record and who was reached through shared cases. */
   reading?: NetworkReading | null;
 }) {
+  const t = useT();
   // The engine sends node ids as numbers and edge endpoints as numbers, while
   // every id this component joins against (evidence ids, the selection, the
   // label set) is a string. Normalise once, here, rather than at each comparison
@@ -168,25 +170,25 @@ export default function NetworkView({
       data: nodes.map((n) => {
         const root = isRoot(n);
         const direct = directIds.has(n.id);
-        const t = root ? 1 : Math.min(1, (n.pagerank ?? 0) / max);
+        const frac = root ? 1 : Math.min(1, (n.pagerank ?? 0) / max);
         const isSel = n.id === selected;
         const dim = !!neighbours && !neighbours.has(n.id);
         return {
           id: n.id,
           name: displayName(n),
           value: n.pagerank ?? 0,
-          role: root ? "subject of this search"
-              : direct && named ? "named in the case records"
-              : direct ? "offended alongside the subject"
-              : `${influenceReading(t, n.pagerank ?? 0).headline} — reached through shared cases`,
+          role: root ? t("subject of this search")
+              : direct && named ? t("named in the case records")
+              : direct ? t("offended alongside the subject")
+              : t("{headline} — reached through shared cases", { headline: t(influenceReading(frac, n.pagerank ?? 0).headline) }),
           // A person the record names is a SQUARE, the same shape the console's
           // "Record" provenance glyph uses; everyone else is a circle. The
           // distinction survives colour-blindness and a greyscale printout,
           // which a hue alone would not.
           symbol: root || (direct && named) ? "rect" : "circle",
-          symbolSize: root ? 28 : direct && named ? 14 + t * 12 : 10 + t * 15,
+          symbolSize: root ? 28 : direct && named ? 14 + frac * 12 : 10 + frac * 15,
           itemStyle: {
-            color: isSel ? accent : root ? primary : direct && named ? rgba(primary, 0.85) : influence(t),
+            color: isSel ? accent : root ? primary : direct && named ? rgba(primary, 0.85) : influence(frac),
             opacity: dim ? 0.16 : 1,
             borderColor: isSel ? accent : root ? primary : rgba(TEXT(), 0.25),
             borderWidth: isSel ? 2.5 : root ? 3 : 1,
@@ -227,21 +229,21 @@ export default function NetworkView({
         <div className={`node-card${why ? " node-card-wide" : ""}`}>
           <div className="node-card-name">{displayName(sel)}</div>
           <div className="meta" style={{ marginTop: 2 }}>
-            {isRoot(sel) ? "Subject of this search"
+            {t(isRoot(sel) ? "Subject of this search"
               : directIds.has(sel.id) && named ? "Named in the case records"
               : directIds.has(sel.id) ? "Offended alongside the subject on a shared case"
-              : "Reached through a chain of shared cases — not accused in this case"}
+              : "Reached through a chain of shared cases — not accused in this case")}
           </div>
           <div className="node-card-rows">
-            <div className="node-card-row"><span>Connections in view</span><b>{selDegree}</b></div>
+            <div className="node-card-row"><span>{t("Connections in view")}</span><b>{selDegree}</b></div>
             {selHops != null && !isRoot(sel) && (
               <div className="node-card-row">
-                <span>Distance</span><b>{selHops} step{selHops === 1 ? "" : "s"}</b>
+                <span>{t("Distance")}</span><b>{t("{n} step(s)", { n: selHops })}</b>
               </div>
             )}
             {selReading && (
               <div className="node-card-row node-card-read">
-                <span>{selReading.headline}</span>
+                <span>{t(selReading.headline)}</span>
                 <b>{selReading.measure.replace("Network influence · ", "")}</b>
               </div>
             )}
@@ -270,25 +272,25 @@ export default function NetworkView({
           <div className="probe-acts">
             {!isRoot(sel) && (
               <button className="btn btn-sm" onClick={() => setWhy((v) => !v)} aria-expanded={why}>
-                {why ? "Hide chain" : "Why connected?"}
+                {t(why ? "Hide chain" : "Why connected?")}
               </button>
             )}
             {onAsk && !isRoot(sel) && (
               <>
                 <button className="btn btn-sm" onClick={() => onAsk(`Does ${sel.label} have priors?`)}>
-                  Priors
+                  {t("Priors")}
                 </button>
                 <button className="btn btn-sm"
                   onClick={() => onAsk(`Show me the timeline for ${sel.label}.`)}>
-                  Timeline
+                  {t("Timeline")}
                 </button>
                 <button className="btn btn-sm"
                   onClick={() => onAsk(`Where did ${sel.label}'s money go?`)}>
-                  Trace money
+                  {t("Trace money")}
                 </button>
               </>
             )}
-            <button className="btn btn-sm btn-quiet" onClick={() => setSelected(null)}>Clear</button>
+            <button className="btn btn-sm btn-quiet" onClick={() => setSelected(null)}>{t("Clear")}</button>
           </div>
         </div>
       )}
@@ -298,24 +300,24 @@ export default function NetworkView({
           <div className="viz-legend-row">
             <span className="viz-legend-scale"
               style={{ width: 10, height: 10, background: primary }} />
-            <span>Named in the records</span>
-            <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+            <span>{t("Named in the records")}</span>
+            <span className="prov prov-record" style={{ marginLeft: "auto" }}>{t("Record")}</span>
           </div>
         )}
         {(!named || (reading?.extended.length ?? 0) > 0) && (
           <div className="viz-legend-row">
             <span className="viz-legend-scale"
               style={{ width: 10, height: 10, borderRadius: "50%", background: influence(0.7) }} />
-            <span>{named ? "Reached through shared cases" : "Connected through shared cases"}</span>
-            <span className="prov prov-derived" style={{ marginLeft: "auto" }}>Derived</span>
+            <span>{t(named ? "Reached through shared cases" : "Connected through shared cases")}</span>
+            <span className="prov prov-derived" style={{ marginLeft: "auto" }}>{t("Derived")}</span>
           </div>
         )}
         <div className="viz-legend-row">
           <span className="viz-legend-scale" style={{ background: influenceGradient() }} />
-          <span>peripheral → central</span>
+          <span>{t("peripheral → central")}</span>
         </div>
         <span className="meta" style={{ maxWidth: 210 }}>
-          Connectedness within this graph — not a risk score, and not an accusation.
+          {t("Connectedness within this graph — not a risk score, and not an accusation.")}
         </span>
       </div>
     </div>

@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { getBoard, getCaseTimeline, getFir, getPerson } from "@/lib/api";
-import { plural } from "@/lib/metrics";
+import { useT } from "@/lib/i18n";
 import type { CaseBoard, CaseDetail, TimelineResult } from "@/lib/types";
 
 /* ============================================================================
@@ -38,6 +38,7 @@ function Accused({
   name: string | null; age: number | null;
   personId: string | number | null; onAsk: (q: string) => void;
 }) {
+  const t = useT();
   const [canonical, setCanonical] = useState<string | null>(null);
   const [priors, setPriors] = useState<number | null>(null);
 
@@ -54,7 +55,7 @@ function Accused({
     return () => { live = false; };
   }, [personId]);
 
-  const filed = name ?? "Name withheld at your rank";
+  const filed = name ?? t("Name withheld at your rank");
   // The as-filed name usually carries a patronymic the canonical one drops, so
   // compare on the leading name part before calling them different.
   const differs = !!canonical && !!name && !filed.toLowerCase().startsWith(canonical.toLowerCase());
@@ -63,14 +64,13 @@ function Accused({
     <div className="ov-person">
       <div className="ov-person-main">
         <span className="ov-person-name">{filed}</span>
-        {age ? <span className="meta">{age} years</span> : null}
-        <span className="prov prov-record">Record</span>
+        {age ? <span className="meta">{age} {t("years")}</span> : null}
+        <span className="prov prov-record">{t("Record")}</span>
       </div>
       {differs && (
         <div className="ov-person-alias">
-          <span className="prov prov-derived">Derived</span>
-          Recorded elsewhere as <b>{canonical}</b> — the same person, matched across
-          case files by identity resolution.
+          <span className="prov prov-derived">{t("Derived")}</span>
+          {t("Recorded elsewhere as")} <b>{canonical}</b> {t("— the same person, matched across case files by identity resolution.")}
         </div>
       )}
       <div className="ov-person-foot">
@@ -80,21 +80,21 @@ function Accused({
                 identity Fellegi-Sunter resolved, so the count is labelled as
                 derived. A large number here is a real property of a common
                 name in this dataset, and reporting it plainly is the point. */}
-            <span className="prov prov-derived" style={{ marginRight: 6 }}>Derived</span>
+            <span className="prov prov-derived" style={{ marginRight: 6 }}>{t("Derived")}</span>
             {priors === 0
-              ? "No other case linked to this identity"
-              : `${plural(priors, "other case")} linked to this identity`}
+              ? t("No other case linked to this identity")
+              : t("{n} other case linked to this identity", { n: priors })}
           </span>
         )}
         {name && (
           <button className="btn btn-sm" onClick={() => onAsk(`Does ${name} have priors?`)}>
-            Examine
+            {t("Examine")}
           </button>
         )}
         {name && (
           <button className="btn btn-sm btn-quiet"
             onClick={() => onAsk(`Who are the associates of ${name}?`)}>
-            Associates
+            {t("Associates")}
           </button>
         )}
       </div>
@@ -110,6 +110,7 @@ export default function CaseOverview({
   onCopilot: (firId: string) => void;
   refreshToken: number;
 }) {
+  const t = useT();
   const [fir, setFir] = useState<CaseDetail | null>(null);
   const [board, setBoard] = useState<CaseBoard | null>(null);
   const [tl, setTl] = useState<TimelineResult | null>(null);
@@ -133,12 +134,12 @@ export default function CaseOverview({
     return (
       <div className="empty">
         <span className="empty-mark" aria-hidden>!</span>
-        <h3>This case could not be opened</h3>
+        <h3>{t("This case could not be opened")}</h3>
         <p>{error}</p>
       </div>
     );
   }
-  if (!fir) return <div className="empty"><span className="spinner" /><p>Opening the case…</p></div>;
+  if (!fir) return <div className="empty"><span className="spinner" /><p>{t("Opening the case…")}</p></div>;
 
   const leads = (board?.by_type.lead ?? []).filter((l) => l.status === "open");
   const established = [
@@ -154,44 +155,44 @@ export default function CaseOverview({
     <div className="overview">
       <section className="ov-block">
         <div className="ov-head">
-          <span className="label">What happened</span>
-          <span className="prov prov-record">Record</span>
+          <span className="label">{t("What happened")}</span>
+          <span className="prov prov-record">{t("Record")}</span>
         </div>
-        <p className="ov-narrative">{fir.narrative || fir.modus_operandi || "No narrative on record."}</p>
+        <p className="ov-narrative">{fir.narrative || fir.modus_operandi || t("No narrative on record.")}</p>
         <div className="ov-facts">
-          <div><span className="ov-fact-l">Filed</span><span className="ov-fact-v">{fmt(fir.date_filed)}</span></div>
-          <div><span className="ov-fact-l">Station</span><span className="ov-fact-v">{fir.ps_name ?? `PS ${fir.ps_code}`}</span></div>
-          <div><span className="ov-fact-l">District</span><span className="ov-fact-v">{fir.district}</span></div>
-          <div><span className="ov-fact-l">Sections</span><span className="ov-fact-v mono">{sections.join(" · ") || "—"}</span></div>
+          <div><span className="ov-fact-l">{t("Filed")}</span><span className="ov-fact-v">{fmt(fir.date_filed)}</span></div>
+          <div><span className="ov-fact-l">{t("Station")}</span><span className="ov-fact-v">{fir.ps_name ?? `PS ${fir.ps_code}`}</span></div>
+          <div><span className="ov-fact-l">{t("District")}</span><span className="ov-fact-v">{fir.district}</span></div>
+          <div><span className="ov-fact-l">{t("Sections")}</span><span className="ov-fact-v mono">{sections.join(" · ") || "—"}</span></div>
           <div>
-            <span className="ov-fact-l">Status</span>
+            <span className="ov-fact-l">{t("Status")}</span>
             <span className="ov-fact-v">
               <span className={`pill ${fir.case_status === OPEN_STATUS ? "pill-open" : "pill-neutral"}`}>
-                {fir.case_status}
+                {t(fir.case_status)}
               </span>
             </span>
           </div>
-          <div><span className="ov-fact-l">FIR</span><span className="ov-fact-v mono">{fir.fir_number}</span></div>
+          <div><span className="ov-fact-l">{t("FIR")}</span><span className="ov-fact-v mono">{fir.fir_number}</span></div>
         </div>
       </section>
 
       <div className="ov-cols">
         <section className="ov-block">
           <div className="ov-head">
-            <span className="label">People in this case</span>
-            <span className="ov-count">{fir.accused?.length ?? 0} accused · {fir.victims?.length ?? 0} victim{(fir.victims?.length ?? 0) === 1 ? "" : "s"}</span>
+            <span className="label">{t("People in this case")}</span>
+            <span className="ov-count">{fir.accused?.length ?? 0} {t("accused")} · {fir.victims?.length ?? 0} {t(((fir.victims?.length ?? 0) === 1) ? "victim" : "victims")}</span>
           </div>
           {(fir.accused ?? []).map((a, i) => (
             <Accused key={i} name={a.AccusedName} age={a.AgeYear} personId={a.PersonUID} onAsk={onAsk} />
           ))}
-          {!fir.accused?.length && <p className="dim">No accused named on this FIR.</p>}
+          {!fir.accused?.length && <p className="dim">{t("No accused named on this FIR.")}</p>}
           {(fir.victims ?? []).length > 0 && (
             <div className="ov-victims">
-              <span className="label">Victims</span>
+              <span className="label">{t("Victims")}</span>
               {fir.victims.map((v, i) => (
                 <div className="ov-victim" key={i}>
-                  {v.VictimName ?? "Name withheld at your rank"}
-                  {v.AgeYear ? <span className="meta"> · {v.AgeYear} years</span> : null}
+                  {v.VictimName ?? t("Name withheld at your rank")}
+                  {v.AgeYear ? <span className="meta"> · {v.AgeYear} {t("years")}</span> : null}
                 </div>
               ))}
             </div>
@@ -200,13 +201,12 @@ export default function CaseOverview({
 
         <section className="ov-block">
           <div className="ov-head">
-            <span className="label">Still open</span>
-            <span className="ov-count">{leads.length} lead{leads.length === 1 ? "" : "s"}</span>
+            <span className="label">{t("Still open")}</span>
+            <span className="ov-count">{leads.length} {t("lead(s)")}</span>
           </div>
           {leads.length === 0 && questions.length === 0 && (
             <p className="dim">
-              Nothing is on this case&apos;s board yet. Ask a question and pin what matters,
-              or record a lead — it stays with the case for the next officer on it.
+              {t("Nothing is on this case's board yet. Ask a question and pin what matters, or record a lead — it stays with the case for the next officer on it.")}
             </p>
           )}
           {leads.map((l) => (
@@ -214,17 +214,17 @@ export default function CaseOverview({
           ))}
           {questions.map((q) => (
             <div className="ov-lead rail-human" key={q.item_id}>
-              <span className="label" style={{ marginRight: 7 }}>Question</span>{q.content}
+              <span className="label" style={{ marginRight: 7 }}>{t("Question")}</span>{q.content}
             </div>
           ))}
           {established.length > 0 && (
             <div className="ov-established">
-              <span className="label">Established</span>
-              {plural(established.length, "item")} pinned to this case&apos;s board.
+              <span className="label">{t("Established")}</span>
+              {t("{n} item(s) pinned to this case's board.", { n: established.length })}
             </div>
           )}
           <button className="btn btn-sm" style={{ marginTop: 10 }} onClick={() => onCopilot(firId)}>
-            Open the case briefing
+            {t("Open the case briefing")}
           </button>
         </section>
       </div>
@@ -232,8 +232,8 @@ export default function CaseOverview({
       {recent.length > 0 && (
         <section className="ov-block">
           <div className="ov-head">
-            <span className="label">Most recent developments</span>
-            <span className="ov-count">{tl?.events.length ?? 0} dated events in all</span>
+            <span className="label">{t("Most recent developments")}</span>
+            <span className="ov-count">{t("{n} dated events in all", { n: tl?.events.length ?? 0 })}</span>
           </div>
           {recent.map((e, i) => (
             <div className={`ov-event rail-${e.kind === "derived" ? "derived" : "record"}`} key={i}>
@@ -245,7 +245,7 @@ export default function CaseOverview({
       )}
 
       <section className="ov-block">
-        <div className="ov-head"><span className="label">Ask Veritas about this case</span></div>
+        <div className="ov-head"><span className="label">{t("Ask Veritas about this case")}</span></div>
         <div className="suggests">
           {[
             "Who is involved in this case?",
@@ -253,7 +253,7 @@ export default function CaseOverview({
             "Show me the timeline for this case",
             "Are there similar cases?",
           ].map((q) => (
-            <button key={q} className="suggest" onClick={() => onAsk(q)}>{q}</button>
+            <button key={q} className="suggest" onClick={() => onAsk(q)}>{t(q)}</button>
           ))}
         </div>
       </section>

@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listCases, loadToken } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { CaseIndex, CaseRow } from "@/lib/types";
 
 /** The case register — what the workspace shows before anything has been asked.
@@ -40,6 +41,7 @@ export default function CaseExplorer({
   onBoard: (firId: string) => void;
   activeFir?: string | null;
 }) {
+  const t = useT();
   const [q, setQ] = useState("");
   const [crimeType, setCrimeType] = useState<string | null>(null);
   const [caseStatus, setCaseStatus] = useState<string | null>(null);
@@ -98,15 +100,15 @@ export default function CaseExplorer({
           <input
             className="field"
             value={q}
-            placeholder="Search by FIR number, crime, district or method…"
-            aria-label="Search the case register"
+            placeholder={t("Search by FIR number, crime, district or method…")}
+            aria-label={t("Search the case register")}
             onChange={(e) => setQ(e.target.value)}
           />
         </div>
         {idx && (
           <>
             <div className="facet-group">
-              <span className="label">Crime</span>
+              <span className="label">{t("Crime")}</span>
               {idx.crime_types.slice(0, 7).map((f) => (
                 <button key={f.name} className={`facet ${crimeType === f.name ? "on" : ""}`}
                   aria-pressed={crimeType === f.name}
@@ -116,12 +118,12 @@ export default function CaseExplorer({
               ))}
             </div>
             <div className="facet-group">
-              <span className="label">Status</span>
+              <span className="label">{t("Status")}</span>
               {idx.statuses.map((f) => (
                 <button key={f.name} className={`facet ${caseStatus === f.name ? "on" : ""}`}
                   aria-pressed={caseStatus === f.name}
                   onClick={() => setCaseStatus((c) => toggle(c, f.name))}>
-                  {f.name}<span className="facet-n">{f.count}</span>
+                  {t(f.name)}<span className="facet-n">{f.count}</span>
                 </button>
               ))}
             </div>
@@ -132,23 +134,21 @@ export default function CaseExplorer({
       <div className={`index-rows ${anyMo ? "" : "no-mo"}`} ref={rowsRef}>
         {!loadToken() && (
           <div className="refusal" style={{ margin: 16 }}>
-            <div className="refusal-head">Demonstration rank — not signed in</div>
+            <div className="refusal-head">{t("Demonstration rank — not signed in")}</div>
             <div className="refusal-body">
-              This rank was entered without a verified badge, so no record-scoped
-              answer can be shown. Switch and sign in with a real badge to see the
-              case register.
+              {t("This rank was entered without a verified badge, so no record-scoped answer can be shown. Switch and sign in with a real badge to see the case register.")}
             </div>
           </div>
         )}
         {loadToken() && error && (
           <div className="empty">
             <span className="empty-mark" aria-hidden>!</span>
-            <h3>The case register could not be loaded</h3>
+            <h3>{t("The case register could not be loaded")}</h3>
             <p>{error}</p>
           </div>
         )}
         {loadToken() && !idx && !error && (
-          <div className="empty"><span className="spinner" /><p>Loading the register…</p></div>
+          <div className="empty"><span className="spinner" /><p>{t("Loading the register…")}</p></div>
         )}
         {idx?.cases.map((c) => (
           <div
@@ -158,7 +158,7 @@ export default function CaseExplorer({
             tabIndex={0}
             onClick={() => onAsk(askAbout(c))}
             onKeyDown={(e) => { if (e.key === "Enter") onAsk(askAbout(c)); }}
-            aria-label={`Open case ${c.fir_number}`}
+            aria-label={t("Open case {fir}", { fir: c.fir_number })}
           >
             {/* Human meaning first: an officer scans this register for the
                 crime and the place, not for an 18-digit identifier. The number
@@ -176,7 +176,7 @@ export default function CaseExplorer({
             <div className="case-end">
               <div className="case-acts">
                 <button className="btn btn-sm" onClick={(e) => { e.stopPropagation(); onCopilot(c.fir_id); }}>
-                  Briefing
+                  {t("Briefing")}
                 </button>
                 <button className="btn btn-sm" onClick={(e) => {
                   e.stopPropagation();
@@ -187,11 +187,11 @@ export default function CaseExplorer({
                   onAsk(askAbout(c));
                   onBoard(c.fir_id);
                 }}>
-                  Board
+                  {t("Board")}
                 </button>
               </div>
               <span className={`pill ${c.case_status === OPEN_STATUS ? "pill-open" : "pill-neutral"}`}>
-                {c.case_status}
+                {t(c.case_status)}
               </span>
             </div>
           </div>
@@ -199,8 +199,8 @@ export default function CaseExplorer({
         {idx && !idx.cases.length && (
           <div className="empty">
             <span className="empty-mark" aria-hidden>⌕</span>
-            <h3>No case matches that filter</h3>
-            <p>Clear a facet, or search a different FIR number, district or method.</p>
+            <h3>{t("No case matches that filter")}</h3>
+            <p>{t("Clear a facet, or search a different FIR number, district or method.")}</p>
           </div>
         )}
       </div>
@@ -213,7 +213,7 @@ export default function CaseExplorer({
               : `${idx.cases.length} ${idx.cases.length === 1 ? "case" : "cases"}`}
             {" · "}{districts} {districts === 1 ? "district" : "districts"}
           </span>
-          <span>{idx.total.toLocaleString("en-IN")} visible at your rank</span>
+          <span>{idx.total.toLocaleString("en-IN")} {t("visible at your rank")}</span>
         </div>
       )}
     </div>

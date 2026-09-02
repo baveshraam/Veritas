@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { explainEvidence } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { Derivation, DerivationBasis } from "@/lib/types";
 
 /* ============================================================================
@@ -40,18 +41,19 @@ const BASIS_WORD: Record<DerivationBasis, string> = {
 };
 
 export function WhyBody({ d, onAsk }: { d: Derivation; onAsk?: (q: string) => void }) {
+  const t = useT();
   return (
     <div className="why">
       <p className="why-claim">{d.claim}</p>
 
       <div className="why-basis">
-        <span className={`prov ${RAIL[d.basis]}`}>{BASIS_WORD[d.basis]}</span>
+        <span className={`prov ${RAIL[d.basis]}`}>{t(BASIS_WORD[d.basis])}</span>
         <span className="meta">{d.basis_meaning}</span>
       </div>
 
       {d.records.length > 0 && (
         <div className="why-sec">
-          <span className="label">Rests on</span>
+          <span className="label">{t("Rests on")}</span>
           <ul className="why-records">
             {d.records.map((r, i) => (
               <li key={`${r.evidence_id ?? r.label}-${i}`}>
@@ -65,7 +67,7 @@ export function WhyBody({ d, onAsk }: { d: Derivation; onAsk?: (q: string) => vo
 
       {d.steps.length > 0 && (
         <div className="why-sec">
-          <span className="label">How it was arrived at</span>
+          <span className="label">{t("How it was arrived at")}</span>
           <ol className="why-steps">
             {d.steps.map((s, i) => <li key={i}>{s}</li>)}
           </ol>
@@ -74,7 +76,7 @@ export function WhyBody({ d, onAsk }: { d: Derivation; onAsk?: (q: string) => vo
 
       {d.qualifies && (
         <div className="why-sec">
-          <span className="label">Why it qualifies</span>
+          <span className="label">{t("Why it qualifies")}</span>
           <p className="why-text">{d.qualifies}</p>
         </div>
       )}
@@ -83,24 +85,23 @@ export function WhyBody({ d, onAsk }: { d: Derivation; onAsk?: (q: string) => vo
           of guilt" is the system working correctly, not an error. */}
       {d.caveat && (
         <div className="why-caveat">
-          <span className="label">What it does not mean</span>
+          <span className="label">{t("What it does not mean")}</span>
           <p className="why-text">{d.caveat}</p>
         </div>
       )}
 
       {d.incomplete && (
         <p className="why-incomplete">
-          Some of this chain could not be reconstructed. What is shown is what the
-          records themselves support — nothing has been filled in.
+          {t("Some of this chain could not be reconstructed. What is shown is what the records themselves support — nothing has been filled in.")}
         </p>
       )}
 
       {onAsk && d.next_questions.length > 0 && (
         <div className="why-sec">
-          <span className="label">Ask next</span>
+          <span className="label">{t("Ask next")}</span>
           <div className="why-asks">
             {d.next_questions.map((q) => (
-              <button key={q} className="btn btn-sm" onClick={() => onAsk(q)}>{q}</button>
+              <button key={q} className="btn btn-sm" onClick={() => onAsk(q)}>{t(q)}</button>
             ))}
           </div>
         </div>
@@ -115,6 +116,7 @@ export function WhyBody({ d, onAsk }: { d: Derivation; onAsk?: (q: string) => vo
 export default function WhyChain({
   evidenceId, sessionId, onAsk,
 }: { evidenceId: string; sessionId?: string; onAsk?: (q: string) => void }) {
+  const t = useT();
   const [d, setD] = useState<Derivation | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -124,11 +126,11 @@ export default function WhyChain({
     setError(null);
     explainEvidence(evidenceId, sessionId)
       .then((r) => { if (live) setD(r); })
-      .catch((e) => { if (live) setError(e?.message ?? "Could not load this"); });
+      .catch((e) => { if (live) setError(e?.message ?? t("Could not load this")); });
     return () => { live = false; };
-  }, [evidenceId, sessionId]);
+  }, [evidenceId, sessionId, t]);
 
   if (error) return <p className="why-incomplete">{error}</p>;
-  if (!d) return <p className="meta">Tracing where this came from…</p>;
+  if (!d) return <p className="meta">{t("Tracing where this came from…")}</p>;
   return <WhyBody d={d} onAsk={onAsk} />;
 }

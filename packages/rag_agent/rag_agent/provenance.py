@@ -907,6 +907,157 @@ def _explain_stats(eid: str, item) -> Derivation:
         next_questions=["Show me crime hotspots.", "What are the crime trends?"])
 
 
+def _explain_area(eid: str, item) -> Derivation:
+    """'Why is this the profile?' — the crime mix and the Census row, kept explicitly
+    apart. Answering this well means saying what it does NOT establish just as
+    plainly as what it does: nothing here claims socioeconomic conditions CAUSE the
+    crime count next to them (see CLAUDE.md §9/DoWhy's named-confounder discipline)."""
+    kind = eid.split(":")[1] if eid.count(":") >= 1 else ""
+    if kind == "census" or kind == "census_unavailable":
+        return Derivation(
+            evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+            claim="This is real Census 2011 ground truth for this district, not a "
+                  "model estimate.",
+            steps=["Read from vx_district_socioeconomic, the one table in this schema "
+                   "loaded verbatim from the Census of India 2011 Primary Census "
+                   "Abstract rather than generated.",
+                   "Nothing here is combined with the crime count beside it — the two "
+                   "are shown side by side, not scored together."],
+            qualifies="Real, published, district-level figures. No district finer than "
+                      "this exists in the data.",
+            caveat="This is a fact ABOUT the district, not a cause of its recorded "
+                   "crime count. This platform's causal layer names its confounders "
+                   "explicitly rather than implying a link here.",
+            next_questions=["Show me crime hotspots.", "What is the conviction rate?"])
+    return Derivation(
+        evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+        claim="This is the recorded offence mix for this district.",
+        steps=["Every case matching this district was counted and grouped by offence "
+               "type, with your own rank and station applied inside the query.",
+               "Nothing is inferred: this is a count of what was recorded, not a "
+               "model's estimate of what happened."],
+        qualifies="Exhaustive within your access scope.",
+        caveat="A count of what was RECORDED is also a count of what was POLICED. It "
+               "does not by itself say where crime is worst, only where it was logged.",
+        next_questions=["Show me crime hotspots.", "What is the conviction rate?"])
+
+
+def _explain_community(eid: str, item, role: str, ps: str) -> Derivation:
+    """'Why is this person in this group?' — a Louvain community, not a legal
+    designation. The one place this platform's own naming discipline (CLAUDE.md §4:
+    'There are no gangs') has to be restated at the point an officer might act on it."""
+    rest = eid.split(":", 1)[1] if ":" in eid else ""
+    d = Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim="This grouping is derived from co-offending patterns, not stated by any "
+              "record.",
+        steps=["The co-offending graph (who has been accused alongside whom) was "
+               "partitioned by the Louvain community-detection algorithm.",
+               "Everyone in this group ended up on the same side of that partition "
+               "because of shared cases with each other — not because any record "
+               "calls them a group."],
+        qualifies="A community is a fact about the GRAPH. Membership can shift if the "
+                  "underlying case records change.",
+        caveat="This is not a gang designation. Nothing in these records asserts an "
+               "organised-crime relationship; this states only that these people have "
+               "offended together, derived, never treated as a record.",
+        next_questions=["Who are this person's associates?", "Does this person have priors?"])
+    if rest.isdigit():
+        from .agents import sql_agent
+        try:
+            cases = sql_agent.filter_viewable(sql_agent.person_record(rest), role, ps)[:3]
+        except Exception:
+            cases = []
+        d.records = [_fir_source(c) for c in cases]
+    return d
+
+
+def _explain_watchlist(eid: str, item) -> Derivation:
+    """'Why is this transaction flagged?' — and, just as important, by WHICH detector,
+    because CLAUDE.md §6 draws a hard line between the two: a rule a court can audit
+    line by line, and a GNN pattern that is a lead, never a court-ready finding."""
+    content = _get(item, "content", "") or ""
+    is_gnn = "gnn" in content.lower()
+    return Derivation(
+        evidence_id=eid, basis="model", basis_meaning=BASIS_MEANING["model"],
+        claim="This transaction was flagged by an anti-money-laundering detector, not "
+              "recorded as suspicious by any officer.",
+        steps=(["The GNN suspicious-subgraph classifier scored this transaction's "
+                "surrounding account structure and flagged it as a coordinated pattern."]
+               if is_gnn else
+               ["The rule-based structuring detector checked this account for multiple "
+                "sub-threshold deposits within a short window — the classic structuring "
+                "pattern — and this transaction matched."]),
+        qualifies=("A GNN pattern match: catches coordination the rule cannot see, but "
+                   "is decision support, not a court-ready finding on its own."
+                   if is_gnn else
+                   "A rule-based match: the exact threshold and window are fixed and "
+                   "auditable line by line, which is what makes this the one AML "
+                   "signal here safe to put in front of a court."),
+        caveat="A flag is a reason to look, not a finding of laundering. Detector "
+               "output is never written back as training data for itself.",
+        next_questions=["Show me the financial watchlist.", "What is the money trail for this case?"])
+
+
+def _explain_workload(eid: str, item) -> Derivation:
+    """'Why is this station ranked here?' — stalled count first, then age, because a
+    station with fewer open cases but more NEGLECTED ones is the one that actually
+    needs attention."""
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim="This station's position is derived from its open caseload and how much "
+              "of it has gone untouched.",
+        steps=["Every case still Under Investigation, within your access scope, was "
+               "grouped by station.",
+               "Each open case's age was computed from its registration date, and "
+               "checked against the investigation board for any activity at all.",
+               "Stations are ranked by how many of their open cases are BOTH old and "
+               "untouched, then by average age — a raw open-case count alone would "
+               "reward a quiet station over a neglected one."],
+        qualifies="Exhaustive within your access scope; the staleness threshold is a "
+                  "fixed cut (30 days), not a model's judgment.",
+        caveat="This never assigns work or flags an officer — it names where a human "
+               "should look. Nothing here is an automated trigger.",
+        next_questions=["Which cases are stalled at this station?"])
+
+
+def _explain_stalled(eid: str, item) -> Derivation:
+    return Derivation(
+        evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+        claim="This case has had no investigation-board activity recorded in over 30 "
+              "days.",
+        steps=["The case's own registration date was checked against today.",
+               "Every board-item row was checked for this case's id, and none exist."],
+        qualifies="A checked absence — no pinned evidence, lead, or note — not an "
+                  "estimate of neglect.",
+        caveat="Board silence does not prove no work has happened; it means no work "
+               "was RECORDED on the board. An officer may be investigating without "
+               "using it.",
+        next_questions=["What is the status of this case?", "Who is involved in this case?"])
+
+
+def _explain_idcheck(eid: str, item) -> Derivation:
+    """The Compare Mode identity-resolution audit note itself. What it explains is
+    the CHECK, not a claim about the two people — matching the same discipline
+    _explain_priors uses for the identity layer generally."""
+    content = _get(item, "content", "") or ""
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim="This checks whether two similarly-spelled names were resolved to the "
+              "same person.",
+        steps=["The two compared names were measured for text similarity.",
+               "Because they were close enough to plausibly be the same person "
+               "misspelled, their resolved PersonUIDs were compared directly rather "
+               "than left implicit.",
+               content or "The two PersonUIDs differ, so identity resolution treats "
+                          "them as two separate people."],
+        qualifies="A live audit of a linkage decision, not a new inference — it reports "
+                  "what identity resolution already decided, computed on demand.",
+        caveat="Text similarity is not evidence of identity by itself; it is the reason "
+               "this check ran, not the basis for its answer.",
+        next_questions=["Is this person recorded under another name?"])
+
+
 def _explain_no_accused(eid: str, item) -> Derivation:
     return Derivation(
         evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
@@ -946,6 +1097,12 @@ _PREFIX = {
     "ranking":          lambda eid, it, c: _explain_offender_ranking(eid, it, c.role, c.ps),
     "stats":            lambda eid, it, c: _explain_stats(eid, it),
     "priors":           lambda eid, it, c: _explain_priors(eid, it, c.role, c.ps),
+    "area":             lambda eid, it, c: _explain_area(eid, it),
+    "community":        lambda eid, it, c: _explain_community(eid, it, c.role, c.ps),
+    "watchlist":        lambda eid, it, c: _explain_watchlist(eid, it),
+    "workload":         lambda eid, it, c: _explain_workload(eid, it),
+    "stalled":          lambda eid, it, c: _explain_stalled(eid, it),
+    "idcheck":          lambda eid, it, c: _explain_idcheck(eid, it),
 }
 
 # Every evidence_id prefix this system produces must have a handler above. The

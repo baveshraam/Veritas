@@ -11,6 +11,7 @@ import LoginGate from "@/components/LoginGate";
 import TopBar from "@/components/TopBar";
 import Workspace from "@/components/Workspace";
 import { exportPdf, loadToken, playBase64Audio, setToken, streamChat } from "@/lib/api";
+import { LangProvider, translate } from "@/lib/i18n";
 import { readNetwork } from "@/lib/network";
 import type { Officer, Turn, Visualization } from "@/lib/types";
 
@@ -32,6 +33,10 @@ export default function Console() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [busy, setBusy] = useState(false);
   const [language, setLanguage] = useState<"en" | "kn">("en");
+  const t = useCallback(
+    (s: string, vars?: Record<string, string | number>) => translate(s, language, vars),
+    [language],
+  );
   const [voiceOut, setVoiceOut] = useState(false);
   const [activeEvidence, setActiveEvidence] = useState<string | null>(null);
   const [inspecting, setInspecting] = useState(false);
@@ -59,7 +64,7 @@ export default function Console() {
   const settled = turns.filter((t) => !t.streaming).length;
 
   const send = useCallback(
-    async (input: { query?: string; audio?: string; activeEvidenceId?: string }) => {
+    async (input: { query?: string; audio?: string; activeEvidenceId?: string; silent?: boolean }) => {
       const id = crypto.randomUUID();
       setBusy(true);
       setInspecting(false);
@@ -80,11 +85,9 @@ export default function Console() {
       // "Chat failed (401)", read as the engine breaking rather than as the
       // designed consequence of not being signed in.
       if (!loadToken()) {
-        patch((t) => ({
-          ...t, streaming: false, unauthenticated: true,
-          answer: "This rank was entered without a verified badge, so no "
-            + "record-scoped question can be answered. Switch and sign in "
-            + "with a real badge to continue.",
+        patch((tn) => ({
+          ...tn, streaming: false, unauthenticated: true,
+          answer: t("This rank was entered without a verified badge, so no record-scoped question can be answered. Switch and sign in with a real badge to continue."),
         }));
         setBusy(false);
         return;
@@ -123,7 +126,10 @@ export default function Console() {
             if (next === "offenders" && /\b(repeat|habitual|chronic)\s+(offenders|criminals)\b/i.test(input.query ?? "")) {
               next = "repeat_offenders";
             }
-            if (next) setView(next);
+            // A silent (tab-preload) query must never pull the workspace away
+            // from wherever the officer has since clicked — that fight, not
+            // any single answer, is what "stuck" meant.
+            if (next && !input.silent) setView(next);
           },
           (audio) => playBase64Audio(audio),
         );
@@ -131,17 +137,17 @@ export default function Console() {
         // Covers both a transport failure and an `error` frame from the engine.
         // Either way the turn must stop streaming and say so — never leave the
         // pane spinning — and it is a FAILURE, not a refusal.
-        patch((t) => ({
-          ...t,
+        patch((tn) => ({
+          ...tn,
           streaming: false,
           failed: true,
-          answer: e?.message ?? "The connection to the investigation engine was lost.",
+          answer: e?.message ?? t("The connection to the investigation engine was lost."),
         }));
       } finally {
         setBusy(false);
       }
     },
-    [sessionId, language, voiceOut, activeEvidence],
+    [sessionId, language, voiceOut, activeEvidence, t],
   );
 
   /** Select a citation: highlight its source and draw the thread to it. The
@@ -169,19 +175,19 @@ export default function Console() {
   }, []);
 
   const doExport = useCallback(() => {
-    setExportNote("Exporting…");
+    setExportNote(t("Exporting…"));
     exportPdf(sessionId)
       .then((isPdf) => {
         setExportNote(isPdf
-          ? "PDF downloaded."
-          : "No PDF renderer on this deployment — a printable HTML copy was downloaded.");
+          ? t("PDF downloaded.")
+          : t("No PDF renderer on this deployment — a printable HTML copy was downloaded."));
         setTimeout(() => setExportNote(null), 8000);
       })
       .catch(() => {
-        setExportNote("Export failed.");
+        setExportNote(t("Export failed."));
         setTimeout(() => setExportNote(null), 8000);
       });
-  }, [sessionId]);
+  }, [sessionId, t]);
 
   if (!officer) return <LoginGate onIn={setOfficer} />;
 
@@ -194,6 +200,7 @@ export default function Console() {
   const networkSize = net ? net.total : null;
 
   return (
+    <LangProvider value={language}>
     <div className="app">
       <TopBar
         officer={officer}
@@ -216,7 +223,7 @@ export default function Console() {
         citedCount={evidence.length}
         networkSize={networkSize}
         boardVersion={settled}
-        scopeLabel={SCOPE[officer.role] ?? "Scoped access"}
+        scopeLabel={t(SCOPE[officer.role] ?? "Scoped access")}
       />
 
       <div className={`workbench ${evidence.length ? "" : "lean"}`}>
@@ -237,6 +244,7 @@ export default function Console() {
           focus={focus}
           evidence={evidence}
           onAsk={(query) => send({ query })}
+          onPreload={(query) => send({ query, silent: true })}
           onCopilot={(fir) => { setCopilotTab("brief"); setCopilotFir(fir); }}
           onBoard={(fir) => { setCopilotTab("board"); setCopilotFir(fir); }}
           activeEvidence={activeEvidence}
@@ -297,5 +305,6 @@ export default function Console() {
         />
       )}
     </div>
+    </LangProvider>
   );
 }

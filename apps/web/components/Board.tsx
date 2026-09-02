@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { deleteBoardItem, getBoard, updateBoardItem } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { BoardItem, BoardItemType, CaseBoard } from "@/lib/types";
 import type { Provenance } from "@/lib/evidence";
 import { PROV_LABEL } from "@/lib/evidence";
@@ -52,6 +53,7 @@ function when(iso: string): string {
 export default function Board({
   firId, onAsk, refreshToken,
 }: { firId: string; onAsk: (q: string) => void; refreshToken: number }) {
+  const t = useT();
   const [board, setBoard] = useState<CaseBoard | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -90,12 +92,12 @@ export default function Board({
     return (
       <div className="empty">
         <span className="empty-mark" aria-hidden>▣</span>
-        <h3>This board is not available</h3>
+        <h3>{t("This board is not available")}</h3>
         <p>{error}</p>
       </div>
     );
   }
-  if (!board) return <div className="empty"><span className="spinner" /><p>Opening the board…</p></div>;
+  if (!board) return <div className="empty"><span className="spinner" /><p>{t("Opening the board…")}</p></div>;
 
   const openLeads = (board.by_type.lead ?? []).filter((l) => l.status === "open").length;
 
@@ -107,11 +109,9 @@ export default function Board({
         {board.total === 0 && (
           <div className="empty" style={{ paddingTop: 40 }}>
             <span className="empty-mark" aria-hidden>▣</span>
-            <h3>Nothing on this board yet</h3>
+            <h3>{t("Nothing on this board yet")}</h3>
             <p>
-              Ask a question about this case, then say &ldquo;pin this&rdquo; to keep the record,
-              or write a note or a lead below. Everything you add stays with the case —
-              across sessions, and for the next officer on it.
+              {t("Ask a question about this case, then say “pin this” to keep the record, or write a note or a lead below. Everything you add stays with the case — across sessions, and for the next officer on it.")}
             </p>
           </div>
         )}
@@ -124,14 +124,14 @@ export default function Board({
         )}
 
         {SECTIONS.map((s) => {
-          const items = s.types.flatMap((t) => board.by_type[t] ?? []);
+          const items = s.types.flatMap((ty) => board.by_type[ty] ?? []);
           if (!items.length) return null;
           return (
             <section className="board-section" key={s.title}>
               <div className="board-section-head">
-                <span className="label">{s.title}</span>
+                <span className="label">{t(s.title)}</span>
                 <span className="board-section-n">{items.length}</span>
-                <span className="meta" style={{ marginLeft: "auto", color: "var(--t-4)" }}>{s.hint}</span>
+                <span className="meta" style={{ marginLeft: "auto", color: "var(--t-4)" }}>{t(s.hint)}</span>
               </div>
               {items.map((it) => {
                 const p = PROV_OF[it.item_type] ?? "human";
@@ -139,49 +139,49 @@ export default function Board({
                 return (
                   <div key={it.item_id} className={`board-item rail-${p} ${closed ? "is-closed" : ""}`}>
                     <div className="board-item-head">
-                      <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
-                      <span className="meta">{KIND_LABEL[it.item_type]}</span>
+                      <span className={`prov prov-${p}`}>{t(PROV_LABEL[p])}</span>
+                      <span className="meta">{t(KIND_LABEL[it.item_type])}</span>
                       {it.item_type === "lead" && it.status && (
                         <span className={`pill ${it.status === "open" ? "pill-open"
                           : it.status === "pursued" ? "pill-ok" : "pill-neutral"}`}>
-                          {it.status}
+                          {t(`status:${it.status}`)}
                         </span>
                       )}
                       {it.item_type === "question" && it.status === "resolved" && (
-                        <span className="pill pill-ok">resolved</span>
+                        <span className="pill pill-ok">{t("status:resolved")}</span>
                       )}
                     </div>
                     <div className="board-item-body">{it.content}</div>
                     {it.reason && (
-                      <div className="board-reason"><b>Reason:</b> {it.reason}</div>
+                      <div className="board-reason"><b>{t("Reason:")}</b> {it.reason}</div>
                     )}
                     <div className="board-item-foot">
                       <span className="board-item-who">
                         {it.created_by ? `${it.created_by} · ` : ""}{when(it.created_at)}
-                        {it.confidence != null && ` · ${(it.confidence * 100).toFixed(0)}% support at pinning`}
+                        {it.confidence != null && ` · ${t("{pct}% support at pinning", { pct: (it.confidence * 100).toFixed(0) })}`}
                       </span>
                       <div className="board-item-acts">
                         {it.item_type === "lead" && it.status === "open" && (
                           <>
                             <button className="btn btn-sm" disabled={busy === it.item_id}
-                              onClick={() => setStatus(it, "pursued")}>Mark pursued</button>
+                              onClick={() => setStatus(it, "pursued")}>{t("Mark pursued")}</button>
                             <button className="btn btn-sm" disabled={busy === it.item_id}
-                              onClick={() => setStatus(it, "dismissed")}>Dismiss</button>
+                              onClick={() => setStatus(it, "dismissed")}>{t("Dismiss")}</button>
                           </>
                         )}
                         {it.item_type === "lead" && it.status !== "open" && (
                           <button className="btn btn-sm" disabled={busy === it.item_id}
-                            onClick={() => setStatus(it, "open")}>Reopen</button>
+                            onClick={() => setStatus(it, "open")}>{t("Reopen")}</button>
                         )}
                         {it.item_type === "question" && it.status !== "resolved" && (
                           <button className="btn btn-sm" disabled={busy === it.item_id}
-                            onClick={() => setStatus(it, "resolved")}>Mark resolved</button>
+                            onClick={() => setStatus(it, "resolved")}>{t("Mark resolved")}</button>
                         )}
                         {/* A lead cannot be removed — retiring one is a status
                             change, so the board stays auditable. */}
                         {it.item_type !== "lead" && (
                           <button className="btn btn-sm btn-danger" disabled={busy === it.item_id}
-                            onClick={() => remove(it)}>Remove</button>
+                            onClick={() => remove(it)}>{t("Remove")}</button>
                         )}
                       </div>
                     </div>
@@ -195,18 +195,18 @@ export default function Board({
 
       <div className="board-compose">
         <div className="board-compose-row">
-          <input className="field" placeholder="Write a note…" value={draftNote}
-            aria-label="Write an investigator note"
+          <input className="field" placeholder={t("Write a note…")} value={draftNote}
+            aria-label={t("Write an investigator note")}
             onChange={(e) => setDraftNote(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitNote()} />
-          <button className="btn" disabled={!draftNote.trim()} onClick={submitNote}>Add note</button>
+          <button className="btn" disabled={!draftNote.trim()} onClick={submitNote}>{t("Add note")}</button>
         </div>
         <div className="board-compose-row">
-          <input className="field" placeholder="Record a lead…" value={draftLead}
-            aria-label="Record an investigative lead"
+          <input className="field" placeholder={t("Record a lead…")} value={draftLead}
+            aria-label={t("Record an investigative lead")}
             onChange={(e) => setDraftLead(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && submitLead()} />
-          <button className="btn" disabled={!draftLead.trim()} onClick={submitLead}>Save lead</button>
+          <button className="btn" disabled={!draftLead.trim()} onClick={submitLead}>{t("Save lead")}</button>
         </div>
       </div>
     </div>

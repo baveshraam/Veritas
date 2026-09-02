@@ -2,11 +2,13 @@
 import { useEffect, useState } from "react";
 import { getBoard } from "@/lib/api";
 import { assetUrl } from "@/lib/asset";
+import { useT } from "@/lib/i18n";
 import type { CaseBoard, SessionFocusView, VizKind } from "@/lib/types";
 
 export type WorkspaceView =
   | "overview" | "register" | "timeline" | "network" | "geography" | "financial"
-  | "offenders" | "repeat_offenders" | "statistics" | "forecast" | "board";
+  | "offenders" | "repeat_offenders" | "statistics" | "forecast" | "board"
+  | "area" | "community" | "watchlist" | "workload";
 
 /** Which workspace view a given answer's visualization belongs in. */
 export const VIEW_FOR_VIZ: Partial<Record<VizKind, WorkspaceView>> = {
@@ -33,6 +35,10 @@ export const VIEW_FOR_EVIDENCE: [RegExp, WorkspaceView][] = [
   [/^(board|lead):/, "board"],
   [/^(offender|ranking):/, "offenders"],
   [/^stats:/, "statistics"],
+  [/^area:/, "area"],
+  [/^community:/, "community"],
+  [/^watchlist:/, "watchlist"],
+  [/^(workload|stalled):/, "workload"],
 ];
 
 const TABS: { key: WorkspaceView; label: string }[] = [
@@ -40,12 +46,16 @@ const TABS: { key: WorkspaceView; label: string }[] = [
   { key: "register", label: "Case Register" },
   { key: "timeline", label: "Timeline" },
   { key: "network", label: "Network" },
-  { key: "geography", label: "Geography" },
+  { key: "geography", label: "Hotspot Map" },
   { key: "financial", label: "Financial" },
   { key: "offenders", label: "Offenders" },
   { key: "repeat_offenders", label: "Repeat Offenders" },
   { key: "statistics", label: "Statistics" },
   { key: "forecast", label: "Forecast" },
+  { key: "area", label: "Area Profile" },
+  { key: "community", label: "Community" },
+  { key: "watchlist", label: "Watchlist" },
+  { key: "workload", label: "Workload" },
   { key: "board", label: "Board" },
 ];
 
@@ -76,6 +86,7 @@ export default function InvestigationHeader({
   boardVersion: number;
   scopeLabel: string;
 }) {
+  const t = useT();
   const firId = focus?.case?.fir_id ?? null;
   const [board, setBoard] = useState<CaseBoard | null>(null);
 
@@ -96,12 +107,12 @@ export default function InvestigationHeader({
   const district = board?.district ?? kase?.district;
   const status = board?.case_status;
 
-  const kicker = kase ? "Case under investigation" : person ? "Person of interest" : "Open investigation";
+  const kicker = kase ? t("Case under investigation") : person ? t("Person of interest") : t("Open investigation");
   const title = kase
     ? (board?.fir_number ?? kase.fir_number ?? `FIR ${kase.fir_id}`)
     : person
-      ? (person.name ?? `Person ${person.person_id}`)
-      : "Karnataka State Police — case register";
+      ? (person.name ?? t("Person {id}", { id: person.person_id }))
+      : t("Karnataka State Police — case register");
 
   return (
     <div className="investigation">
@@ -110,7 +121,7 @@ export default function InvestigationHeader({
         <div className="inv-id">
           <div className="inv-kicker">
             <span>{kicker}</span>
-            <span className="pill pill-neutral" title="Records visible at your rank">{scopeLabel}</span>
+            <span className="pill pill-neutral" title={t("Records visible at your rank")}>{scopeLabel}</span>
           </div>
           <h2 className={`inv-title ${kase ? "mono" : ""}`} title={title}>{title}</h2>
           <div className="inv-sub">
@@ -119,12 +130,12 @@ export default function InvestigationHeader({
                 {crime && <b>{crime}</b>}
                 {crime && district ? " · " : ""}
                 {district}
-                {person && <> · also examining <b>{person.name ?? `person ${person.person_id}`}</b></>}
+                {person && <>{t(" · also examining ")}<b>{person.name ?? t("person {id}", { id: person.person_id })}</b></>}
               </>
             ) : person ? (
-              <>Identity reconstructed from the case records by probabilistic record linkage.</>
+              <>{t("Identity reconstructed from the case records by probabilistic record linkage.")}</>
             ) : (
-              <>Ask a question, or open a case from the register to begin.</>
+              <>{t("Ask a question, or open a case from the register to begin.")}</>
             )}
           </div>
         </div>
@@ -133,48 +144,48 @@ export default function InvestigationHeader({
           {status && (
             <div className="inv-metric">
               <div className="inv-metric-n" style={{ fontSize: 13, paddingTop: 3 }}>
-                <span className={`pill ${status === OPEN_STATUS ? "pill-open" : "pill-neutral"}`}>{status}</span>
+                <span className={`pill ${status === OPEN_STATUS ? "pill-open" : "pill-neutral"}`}>{t(status)}</span>
               </div>
-              <div className="inv-metric-l">Status</div>
+              <div className="inv-metric-l">{t("Status")}</div>
             </div>
           )}
           {networkSize != null && (
             <div className="inv-metric">
               <div className="inv-metric-n">{networkSize}</div>
-              <div className="inv-metric-l">In network</div>
+              <div className="inv-metric-l">{t("In network")}</div>
             </div>
           )}
           {citedCount > 0 && (
             <div className="inv-metric">
               <div className="inv-metric-n">{citedCount}</div>
-              <div className="inv-metric-l">Cited now</div>
+              <div className="inv-metric-l">{t("Cited now")}</div>
             </div>
           )}
           {board && (
             <div className="inv-metric">
               <div className="inv-metric-n">{board.total}</div>
-              <div className="inv-metric-l">On board</div>
+              <div className="inv-metric-l">{t("On board")}</div>
             </div>
           )}
         </div>
       </div>
 
-      <nav className="inv-tabs" aria-label="Investigation views">
-        {TABS.map((t) => {
-          const n = t.key === "board" ? board?.total ?? null : null;
+      <nav className="inv-tabs" aria-label={t("Investigation views")}>
+        {TABS.map((tab) => {
+          const n = tab.key === "board" ? board?.total ?? null : null;
           return (
             <button
-              key={t.key}
-              className={`inv-tab ${view === t.key ? "on" : ""}`}
-              onClick={() => onView(t.key)}
-              aria-current={view === t.key ? "page" : undefined}
+              key={tab.key}
+              className={`inv-tab ${view === tab.key ? "on" : ""}`}
+              onClick={() => onView(tab.key)}
+              aria-current={view === tab.key ? "page" : undefined}
             >
-              {t.label}
+              {t(tab.label)}
               {n ? <span className="inv-tab-n">{n}</span> : null}
               {/* A dot marks the view the current answer actually produced —
                   colour is never the only signal, so it is a shape, not a tint. */}
-              {liveView === t.key && view !== t.key && (
-                <span className="inv-tab-live" title="This view holds the current answer" />
+              {liveView === tab.key && view !== tab.key && (
+                <span className="inv-tab-live" title={t("This view holds the current answer")} />
               )}
             </button>
           );

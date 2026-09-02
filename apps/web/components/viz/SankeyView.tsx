@@ -1,5 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
+import { useT } from "@/lib/i18n";
 import { PRIMARY, TEXT_DIM, TEXT_FAINT, chartBase, ramp, rgba, sevGradient } from "./palette";
 
 /** The money trail.
@@ -21,6 +22,7 @@ const LABEL_ALL_BELOW = 25;
 const MAX_LABELS_WHEN_CROWDED = 20;
 
 export default function SankeyView({ data }: { data: { nodes: { name: string }[]; links: any[] } }) {
+  const t = useT();
   const links = data.links ?? [];
   const nodes = data.nodes ?? [];
   const max = Math.max(1e-6, ...links.map((l) => l.value ?? 0));
@@ -77,13 +79,13 @@ export default function SankeyView({ data }: { data: { nodes: { name: string }[]
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge />
       <div className="viz-legend">
-        <span className="label">Transfer size</span>
+        <span className="label">{t("Transfer size")}</span>
         <div className="viz-legend-row">
           <span className="viz-legend-scale"
             style={{ background: sevGradient() }} />
-          <span>smaller → larger</span>
+          <span>{t("smaller → larger")}</span>
         </div>
-        <span className="meta">Left to right is the direction of payment.</span>
+        <span className="meta">{t("Left to right is the direction of payment.")}</span>
       </div>
     </div>
   );

@@ -314,8 +314,6 @@ body {
 
 .mark { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; flex: 0 0 auto; }
 .mark-row { display: flex; align-items: baseline; gap: 8px; }
-/* Non-stretched: intrinsic aspect ratio, only the height is constrained. */
-.mark-crest { height: 22px; width: auto; object-fit: contain; }
 .mark-name {
   font-family: var(--font-label);
   font-size: 16px;
@@ -467,7 +465,7 @@ body {
   padding: 11px 14px 9px;
 }
 
-.inv-crest { height: 34px; width: auto; object-fit: contain; flex: 0 0 auto; margin-top: 1px; }
+.inv-crest { height: 52px; width: auto; object-fit: contain; flex: 0 0 auto; }
 .inv-id { min-width: 0; flex: 0 1 auto; }
 .inv-kicker {
   display: flex; align-items: center; gap: 7px;
@@ -1608,6 +1606,46 @@ body {
 @media (max-width: 1240px) {
   .case-row, .index-rows.no-mo .case-row { grid-template-columns: minmax(0, 1fr) auto; }
   .case-mo, .case-no { display: none; }
+}
+
+/* Offenders / Repeat Offenders — a ranked table, not a wall of sentences.
+ * Grid mirrors .case-row's proportions so the workspace's row language stays
+ * one language rather than reinventing it per view. */
+.off-table { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.off-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.off-row {
+  display: grid;
+  grid-template-columns: 30px minmax(150px, 1.4fr) 150px 110px 56px auto;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.off-head {
+  flex: 0 0 auto;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--t-4);
+  border-bottom: 1px solid var(--line-2);
+  position: sticky; top: 0; background: var(--n-1); z-index: 1;
+}
+.off-body .off-row:hover { background: var(--n-2); }
+.off-rank {
+  display: grid; place-items: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  background: var(--n-3); color: var(--t-3);
+  font-family: var(--font-rec); font-size: 10.5px;
+}
+.off-who { min-width: 0; }
+.off-name { font-size: 13px; font-weight: 500; color: var(--t-1); }
+.off-id { font-size: 10.5px; color: var(--t-4); margin-top: 1px; }
+.off-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+.off-community { font-size: 12px; color: var(--t-3); }
+.off-cases { font-family: var(--font-rec); font-size: 14px; font-weight: 600; color: var(--t-1); text-align: right; }
+.off-ask { justify-self: end; opacity: 0; transition: opacity var(--dur) var(--ease); }
+.off-body .off-row:hover .off-ask, .off-body .off-row:focus-within .off-ask { opacity: 1; }
+@media (max-width: 1240px) {
+  .off-row { grid-template-columns: 26px minmax(0, 1fr) auto; }
+  .off-community, .off-ask { display: none; }
 }
 
 .index-foot {

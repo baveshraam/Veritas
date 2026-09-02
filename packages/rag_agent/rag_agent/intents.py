@@ -796,6 +796,51 @@ _CASE_STATS = re.compile(
     r"|\bhow are (?:the )?cases (?:split|distributed|broken down)\b",
     re.I)
 
+# Checked as shapes (like OFFENDER_RANKING/CASE_STATS above) rather than added as plain
+# keywords, because each one collides with an existing bare word — "area profile" with
+# HOTSPOT's "area", "this community" with PERSON_NETWORK's "network", "flagged
+# transactions" with FINANCIAL's "transactions" — and a keyword-score tie is decided by
+# dict registration order, which is a much easier property to break by accident later
+# than a phrase these three never say at all.
+_AREA_PROFILE_SHAPE = re.compile(
+    r"\b(?:area|district)\s+profile\b|\bprofile\s+of\s+(?:the\s+)?(?:district|area)\b"
+    r"|\bdistrict\s+overview\b|\bsocioeconomic\s+profile\b"
+    r"|\btell\s+me\s+about\s+(?:this\s+)?district\b", re.I)
+
+_COMMUNITY_PROFILE_SHAPE = re.compile(
+    r"\bcommunity\s+#?\d+\b"
+    r"|\bwho(?:'s|\s+is)\s+in\s+(?:this\s+)?(?:community|crew)\b"
+    r"|\bmembers?\s+of\s+(?:this\s+)?community\b"
+    r"|\bthis\s+(?:network\s+)?community\b", re.I)
+
+# The trailing number, extracted separately from the routing shape above: "who is in
+# community 0" matches THAT shape's own "who is in ... community" alternative first
+# (re.search takes the leftmost successful alternative, and "who is in" starts earlier
+# in the string than the bare "community 0" the number lives in), which never
+# populates a capture group from a different alternative — so a single combined regex
+# silently dropped the number on exactly this phrasing. A second, independent regex
+# means the number is found regardless of which alternative above matched.
+_COMMUNITY_ID_RE = re.compile(r"\bcommunity\s+#?(\d+)\b", re.I)
+
+_WATCHLIST_SHAPE = re.compile(
+    r"\bwatchlist\b|\bflagged\s+(?:transactions?|accounts?)\b"
+    r"|\bsuspicious\s+transactions?\s+(?:across|statewide|in the state)\b"
+    r"|\bstructuring\s+alerts?\b|\baml\s+(?:alerts?|watchlist)\b", re.I)
+
+def community_id_from_query(query: str) -> Optional[int]:
+    """The community number a COMMUNITY_PROFILE question names, if it names one at
+    all ('this community'/'who is in this community' resolve against session focus
+    instead — the orchestrator's job, not this module's)."""
+    m = _COMMUNITY_ID_RE.search(query or "")
+    return int(m.group(1)) if m else None
+
+
+_WORKLOAD_SHAPE = re.compile(
+    r"\bstation\s+workload\b|\bworkload\s+by\s+station\b|\bfalling\s+behind\b"
+    r"|\bstalled\s+cases?\b|\bcases?\s+(?:going|gone)\s+cold\b|\bbacklog\b"
+    r"|\buntouched\s+cases?\b|\bwhich\s+stations?\s+need", re.I)
+
+
 # "Add this event to the investigation board" contains "investigation board" —
 # a bare BOARD_VIEW keyword — so without this pre-check it misroutes to a board
 # summary instead of pinning, the same collision class BOARD_VIEW's own keyword
@@ -938,6 +983,14 @@ def classify(query: str) -> str:
         return "CASE_CONTEXT"
     if _PERSON_CONVICTION.search(query or "") and not _ALIAS_CONTEXT.search(query or ""):
         return "PERSON_HISTORY"
+    if _WATCHLIST_SHAPE.search(query or ""):
+        return "WATCHLIST"
+    if _WORKLOAD_SHAPE.search(query or ""):
+        return "STATION_WORKLOAD"
+    if _COMMUNITY_PROFILE_SHAPE.search(query or ""):
+        return "COMMUNITY_PROFILE"
+    if _AREA_PROFILE_SHAPE.search(query or ""):
+        return "AREA_PROFILE"
     if _OFFENDER_RANKING.search(query or ""):
         return "OFFENDER_RANKING"
     if _CASE_STATS.search(query or ""):
@@ -1004,7 +1057,9 @@ _EXTRA_VISUALIZATION = {"CASE_LOCATIONS": "map", "TIMELINE": "timeline",
                         # A ranking over people IS a network question once the
                         # names are on screen; a ranking over districts is not a
                         # map until someone asks where.
-                        "OFFENDER_RANKING": "none", "CASE_STATS": "none"}
+                        "OFFENDER_RANKING": "none", "CASE_STATS": "none",
+                        "AREA_PROFILE": "none", "COMMUNITY_PROFILE": "none",
+                        "WATCHLIST": "none", "STATION_WORKLOAD": "none"}
 
 # The complete set of operations classify() can ever return, plus the ones matched
 # by regex shape (never in INTENTS, since they carry no keyword tuple) and the two
@@ -1017,6 +1072,7 @@ ALL_OPERATIONS: frozenset[str] = frozenset(INTENTS) | {
     "CAPABILITY", "NOT_INFERABLE", "EXPLAIN_REASONING", "EVIDENCE_FOR",
     "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "TIMELINE", "TIMELINE_CONNECTION",
     "OFFENDER_RANKING", "CASE_STATS",
+    "AREA_PROFILE", "COMMUNITY_PROFILE", "WATCHLIST", "STATION_WORKLOAD",
     "RESULT_SET_FOLLOWUP", "UNKNOWN",
 }
 

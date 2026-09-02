@@ -3,6 +3,7 @@ import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 import Board from "./Board";
 import { getCaseTimeline, getCopilotBrief } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { CopilotBrief, TimelineResult } from "@/lib/types";
 
 const TimelineView = dynamic(() => import("./viz/TimelineView"), { ssr: false });
@@ -22,6 +23,7 @@ export default function Copilot({
   turnsVersion: number;
   initialTab?: "brief" | "board" | "timeline";
 }) {
+  const t = useT();
   const [tab, setTab] = useState<"brief" | "board" | "timeline">(initialTab);
   const [brief, setBrief] = useState<CopilotBrief | null>(null);
   const [tl, setTl] = useState<TimelineResult | null>(null);
@@ -68,16 +70,16 @@ export default function Copilot({
         aria-label="Case briefing">
         <div className="overlay-head">
           <div className="overlay-title">
-            Case <span className="mono" style={{ color: "var(--t-2)" }}>{firId}</span>
+            {t("Case")} <span className="mono" style={{ color: "var(--t-2)" }}>{firId}</span>
           </div>
           <nav className="overlay-tabs">
-            {TABS.map((t) => (
-              <button key={t.k} className={`inv-tab ${tab === t.k ? "on" : ""}`}
-                onClick={() => setTab(t.k)}>{t.label}</button>
+            {TABS.map((tab_) => (
+              <button key={tab_.k} className={`inv-tab ${tab === tab_.k ? "on" : ""}`}
+                onClick={() => setTab(tab_.k)}>{t(tab_.label)}</button>
             ))}
           </nav>
           <button className="btn btn-sm" style={{ alignSelf: "center", marginBottom: 12 }}
-            onClick={onClose}>Close</button>
+            onClick={onClose}>{t("Close")}</button>
         </div>
 
         <div className="overlay-body">
@@ -89,27 +91,26 @@ export default function Copilot({
 
           {tab === "timeline" && (
             <div style={{ padding: 16, height: "100%" }}>
-              {tlError && <div className="failure"><b>Timeline unavailable.</b> {tlError}</div>}
-              {!tl && !tlError && <div className="empty"><span className="spinner" /><p>Building the chronology…</p></div>}
+              {tlError && <div className="failure"><b>{t("Timeline unavailable.")}</b> {tlError}</div>}
+              {!tl && !tlError && <div className="empty"><span className="spinner" /><p>{t("Building the chronology…")}</p></div>}
               {tl && <TimelineView data={tl} onPin={onPin} />}
             </div>
           )}
 
           {tab === "brief" && (
             <div style={{ padding: 18 }}>
-              {error && <div className="failure"><b>The briefing could not be prepared.</b> {error}</div>}
+              {error && <div className="failure"><b>{t("The briefing could not be prepared.")}</b> {error}</div>}
 
               {!brief && !error && (
                 <div className="empty" style={{ paddingTop: 50 }}>
                   <span className="spinner" />
-                  <h3>Preparing the briefing</h3>
+                  <h3>{t("Preparing the briefing")}</h3>
                   {/* The diary paragraph is the one Copilot output that calls the
                       reasoning model unconditionally, and the first such call on a
                       cold container pays real inference latency. Saying so is more
                       useful than a spinner that looks stuck. */}
                   <p>
-                    The case-diary paragraph is written by the reasoning model. On a cold
-                    start this takes up to 30 seconds.
+                    {t("The case-diary paragraph is written by the reasoning model. On a cold start this takes up to 30 seconds.")}
                   </p>
                 </div>
               )}
@@ -118,10 +119,10 @@ export default function Copilot({
                 <>
                   <section className="section">
                     <div className="section-head">
-                      <span className="label">Chronology</span>
-                      <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+                      <span className="label">{t("Chronology")}</span>
+                      <span className="prov prov-record" style={{ marginLeft: "auto" }}>{t("Record")}</span>
                     </div>
-                    {brief.timeline.length === 0 && <p className="dim">No dated events on record.</p>}
+                    {brief.timeline.length === 0 && <p className="dim">{t("No dated events on record.")}</p>}
                     {brief.timeline.map((ev, i) => (
                       <div key={i} className="brief-row">
                         <span className="brief-date">{ev.date}</span>
@@ -132,17 +133,17 @@ export default function Copilot({
 
                   <section className="section">
                     <div className="section-head">
-                      <span className="label">Cases with a similar method</span>
-                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>Derived</span>
+                      <span className="label">{t("Cases with a similar method")}</span>
+                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>{t("Derived")}</span>
                     </div>
-                    {brief.similar_cases.length === 0 && <p className="dim">No comparable case found.</p>}
+                    {brief.similar_cases.length === 0 && <p className="dim">{t("No comparable case found.")}</p>}
                     {brief.similar_cases.map((c, i) => (
                       <div key={i} className="brief-row">
                         <span className="brief-date">{c.fir_number}</span>
                         <span className="brief-main">
                           <div>
                             {c.crime_type} · {c.district}
-                            {c.outcome && <span className="pill pill-neutral" style={{ marginLeft: 8 }}>{c.outcome}</span>}
+                            {c.outcome && <span className="pill pill-neutral" style={{ marginLeft: 8 }}>{t(c.outcome)}</span>}
                           </div>
                           {/* WHY these two line up, not a bare embedding score. A raw
                               percentage cannot tell an officer whether it was the
@@ -150,7 +151,7 @@ export default function Copilot({
                           <div className="brief-why">
                             {c.explanation}
                             {typeof c.similarity === "number" &&
-                              ` · ${Math.round(c.similarity * 100)}% text match`}
+                              ` · ${t("{pct}% text match", { pct: Math.round(c.similarity * 100) })}`}
                           </div>
                         </span>
                       </div>
@@ -159,10 +160,10 @@ export default function Copilot({
 
                   <section className="section">
                     <div className="section-head">
-                      <span className="label">Recommended next steps</span>
-                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>Derived</span>
+                      <span className="label">{t("Recommended next steps")}</span>
+                      <span className="prov prov-derived" style={{ marginLeft: "auto" }}>{t("Derived")}</span>
                     </div>
-                    {brief.leads.length === 0 && <p className="dim">No lead could be drawn from the records.</p>}
+                    {brief.leads.length === 0 && <p className="dim">{t("No lead could be drawn from the records.")}</p>}
                     <div className="lead-list">
                       {brief.leads.map((l, i) => <div className="lead-item" key={i}><span>{l}</span></div>)}
                     </div>
@@ -170,14 +171,13 @@ export default function Copilot({
 
                   <section className="section" style={{ marginBottom: 0 }}>
                     <div className="section-head">
-                      <span className="label">Draft case-diary entry</span>
-                      <span className="prov prov-model" style={{ marginLeft: "auto" }}>Model</span>
-                      <button className="btn btn-sm" onClick={copy}>{copied ? "Copied" : "Copy"}</button>
+                      <span className="label">{t("Draft case-diary entry")}</span>
+                      <span className="prov prov-model" style={{ marginLeft: "auto" }}>{t("Model")}</span>
+                      <button className="btn btn-sm" onClick={copy}>{t(copied ? "Copied" : "Copy")}</button>
                     </div>
                     <p className="brief-draft">{brief.draft_summary}</p>
                     <div className="meta" style={{ marginTop: 8 }}>
-                      Written by the reasoning model from the records above. Read it before
-                      it goes in the diary.
+                      {t("Written by the reasoning model from the records above. Read it before it goes in the diary.")}
                     </div>
                   </section>
                 </>

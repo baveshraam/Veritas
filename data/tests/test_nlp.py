@@ -199,6 +199,12 @@ def test_resolve_plural_markers_picks_singular_or_plural_from_the_real_count():
     assert _resolve_plural_markers("own account(s)") == 'own accounts'
     assert _resolve_plural_markers('12,345 record(s)') == '12,345 records'
     assert 'case(s)' not in _resolve_plural_markers('7 case(s) found, 1 case(s) open')
+    # A decimal average is never exactly one of something. Found live: "average age
+    # 631.1 day(s)" resolved to "631.1 day" — the digit class stops at ".", so the
+    # leftmost place the whole (number + whitespace) group could match was the lone
+    # fractional digit "1", read as count 1.
+    assert _resolve_plural_markers('631.1 day(s)') == '631.1 days'
+    assert _resolve_plural_markers('1.0 day(s)') == '1.0 days'
 
 
 def test_translate_sends_the_backend_a_placeholder_not_the_raw_identifier(monkeypatch):

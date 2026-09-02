@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { searchRecords } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { SearchHit, SessionFocusView } from "@/lib/types";
 
 type Row = {
@@ -48,6 +49,7 @@ export default function CommandPalette({
   language: "en" | "kn";
   focus?: SessionFocusView;
 }) {
+  const t = useT();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -84,7 +86,7 @@ export default function CommandPalette({
       where: h.subtitle,
       ident: h.ident,
       why: h.why,
-      sub: h.kind === "person" ? "Person" : "Case",
+      sub: h.kind === "person" ? t("Person") : t("Case"),
       // Opening a hit asks the question that hit answers — a case by its number,
       // a person by their history — rather than dumping the row somewhere.
       run: go(() => onAsk(h.kind === "person"
@@ -93,25 +95,25 @@ export default function CommandPalette({
     }));
 
     const actions: Row[] = [
-      { kind: "action", id: "hotspots", title: "Show crime hotspots", sub: "Geography", run: go(() => onAsk("Show me crime hotspots")) },
-      { kind: "action", id: "trend", title: "Show crime trends", sub: "Forecast", run: go(() => onAsk("What are the crime trends?")) },
+      { kind: "action", id: "hotspots", title: t("Show crime hotspots"), sub: t("Geography"), run: go(() => onAsk("Show me crime hotspots")) },
+      { kind: "action", id: "trend", title: t("Show crime trends"), sub: t("Forecast"), run: go(() => onAsk("What are the crime trends?")) },
       ...(person ? [
-        { kind: "action" as const, id: "assoc", title: `Show the network around ${person}`, sub: "Network",
+        { kind: "action" as const, id: "assoc", title: t("Show the network around {name}", { name: person }), sub: t("Network"),
           run: go(() => onAsk(`Who are the associates of ${person}?`)) },
-        { kind: "action" as const, id: "priors", title: `Check whether ${person} has priors`, sub: "Person history",
+        { kind: "action" as const, id: "priors", title: t("Check whether {name} has priors", { name: person }), sub: t("Person history"),
           run: go(() => onAsk(`Does ${person} have priors?`)) },
       ] : []),
       ...(firId ? [
-        { kind: "action" as const, id: "board", title: "Open this case's investigation board", sub: "Board",
+        { kind: "action" as const, id: "board", title: t("Open this case's investigation board"), sub: t("Board"),
           run: go(() => onBoard(firId)) },
-        { kind: "action" as const, id: "brief", title: "Open this case's briefing", sub: "Briefing",
+        { kind: "action" as const, id: "brief", title: t("Open this case's briefing"), sub: t("Briefing"),
           run: go(() => onCopilot(firId)) },
-        { kind: "action" as const, id: "next", title: "What should I investigate next?", sub: "Next steps",
+        { kind: "action" as const, id: "next", title: t("What should I investigate next?"), sub: t("Next steps"),
           run: go(() => onAsk("What should I investigate next?")) },
       ] : []),
-      { kind: "action", id: "lang", title: language === "en" ? "Answer in Kannada" : "Answer in English",
-        sub: "Language", run: go(() => onLanguage(language === "en" ? "kn" : "en")) },
-      ...(canExport ? [{ kind: "action" as const, id: "export", title: "Export this session", sub: "PDF", run: go(onExport) }] : []),
+      { kind: "action", id: "lang", title: t(language === "en" ? "Answer in Kannada" : "Answer in English"),
+        sub: t("Language"), run: go(() => onLanguage(language === "en" ? "kn" : "en")) },
+      ...(canExport ? [{ kind: "action" as const, id: "export", title: t("Export this session"), sub: t("PDF"), run: go(onExport) }] : []),
     ];
 
     const needle = q.trim().toLowerCase();
@@ -120,7 +122,7 @@ export default function CommandPalette({
       : actions;
 
     return [...hitRows, ...matched];
-  }, [hits, q, firId, person, language, canExport, onAsk, onBoard, onCopilot, onExport, onLanguage, onClose]);
+  }, [hits, q, firId, person, language, canExport, onAsk, onBoard, onCopilot, onExport, onLanguage, onClose, t]);
 
   useEffect(() => { setSel((s) => Math.min(s, Math.max(0, rows.length - 1))); }, [rows.length]);
 
@@ -141,30 +143,29 @@ export default function CommandPalette({
 
   return (
     <div className="palette-scrim" onClick={onClose}>
-      <div className="palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-label="Command palette">
+      <div className="palette" onClick={(e) => e.stopPropagation()} role="dialog" aria-label={t("Command palette")}>
         <input
           ref={inputRef}
           className="palette-input"
           value={q}
-          placeholder="FIR number, crime, district, station, section, MO, or a name…"
+          placeholder={t("FIR number, crime, district, station, section, MO, or a name…")}
           onChange={(e) => setQ(e.target.value)}
           onKeyDown={key}
-          aria-label="Search records and actions"
+          aria-label={t("Search records and actions")}
         />
         <div className="palette-list">
           {searching && rows.length === 0 && (
-            <div className="palette-empty">Searching the register…</div>
+            <div className="palette-empty">{t("Searching the register…")}</div>
           )}
           {!searching && rows.length === 0 && (
             <div className="palette-empty">
-              No record matches every word of &ldquo;{q.trim()}&rdquo;. Press Enter to
-              ask it as a question instead.
+              {t("No record matches every word of “{q}”. Press Enter to ask it as a question instead.", { q: q.trim() })}
             </div>
           )}
           {rows.map((r, i) => (
             <div key={r.kind + r.id}>
-              {i === 0 && r.kind !== "action" && <div className="palette-group label">Records</div>}
-              {i === firstAction && <div className="palette-group label">Actions</div>}
+              {i === 0 && r.kind !== "action" && <div className="palette-group label">{t("Records")}</div>}
+              {i === firstAction && <div className="palette-group label">{t("Actions")}</div>}
               <button
                 className={`palette-item ${i === sel ? "on" : ""}`}
                 onMouseEnter={() => setSel(i)}
@@ -176,7 +177,7 @@ export default function CommandPalette({
                     {r.where}
                     {r.why && r.why.length > 0 && (
                       <>{r.where ? " · " : ""}
-                        <span className="palette-why">matched {r.why.join(", ")}</span>
+                        <span className="palette-why">{t("matched")} {r.why.join(", ")}</span>
                       </>
                     )}
                   </span>
@@ -188,9 +189,9 @@ export default function CommandPalette({
           ))}
         </div>
         <div className="palette-foot">
-          <span><kbd>↑↓</kbd>navigate</span>
-          <span><kbd>⏎</kbd>open</span>
-          <span><kbd>esc</kbd>close</span>
+          <span><kbd>↑↓</kbd>{t("navigate")}</span>
+          <span><kbd>⏎</kbd>{t("open")}</span>
+          <span><kbd>esc</kbd>{t("close")}</span>
         </div>
       </div>
     </div>

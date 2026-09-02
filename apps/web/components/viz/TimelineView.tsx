@@ -1,5 +1,6 @@
 "use client";
 import { timelineEvidenceId } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 import type { TimelineEvent, TimelineResult } from "@/lib/types";
 
 function fmtDate(iso: string): { d: string; y: string } {
@@ -26,6 +27,7 @@ const KEY = /\b(arrest|charge|charg|convict|acquit|filed|registered|seiz|surrend
 function Row({
   e, onSelect, onPin, active,
 }: { e: TimelineEvent; onSelect?: (id: string) => void; onPin?: (id: string) => void; active?: boolean }) {
+  const t = useT();
   const id = timelineEvidenceId(e);
   const derived = e.kind === "derived";
   const { d, y } = fmtDate(e.date);
@@ -39,7 +41,7 @@ function Row({
       <span className="tl-dot" aria-hidden />
       <span className="tl-head">
         <span className={`prov prov-${derived ? "derived" : "record"}`}>
-          {derived ? "Derived" : "Record"}
+          {derived ? t("Derived") : t("Record")}
         </span>
         {e.entity_name && <span className="meta">{e.entity_name}</span>}
         {onPin && (
@@ -50,9 +52,9 @@ function Row({
               className="btn btn-sm"
               onClick={(ev) => { ev.stopPropagation(); onPin(id); }}
               onKeyDown={(ev) => { if (ev.key === "Enter") { ev.stopPropagation(); onPin(id); } }}
-              title="Save this event to the case's investigation board"
+              title={t("Save this event to the case's investigation board")}
             >
-              Pin
+              {t("Pin")}
             </span>
           </span>
         )}
@@ -74,6 +76,7 @@ export default function TimelineView({
   onPin?: (id: string) => void;
   activeEvidenceId?: string | null;
 }) {
+  const t = useT();
   const events = data?.events ?? [];
 
   return (
@@ -84,9 +87,8 @@ export default function TimelineView({
             ? data.connection.direct.map((c, i) => <div key={i}>{c.description}</div>)
             : (
               <div>
-                No recorded connection between <b>{data.connection.person_a.name}</b> and{" "}
-                <b>{data.connection.person_b.name}</b>. Events close together in time are
-                not, on that basis alone, reported as connected.
+                {t("No recorded connection between")} <b>{data.connection.person_a.name}</b> {t("and")}{" "}
+                <b>{data.connection.person_b.name}</b>. {t("Events close together in time are not, on that basis alone, reported as connected.")}
               </div>
             )}
         </div>
@@ -95,8 +97,8 @@ export default function TimelineView({
       {events.length === 0 ? (
         <div className="empty">
           <span className="empty-mark" aria-hidden>◷</span>
-          <h3>No dated events</h3>
-          <p>Nothing in these records carries a date that could be placed on a chronology.</p>
+          <h3>{t("No dated events")}</h3>
+          <p>{t("Nothing in these records carries a date that could be placed on a chronology.")}</p>
         </div>
       ) : (
         <div className="timeline-rail">

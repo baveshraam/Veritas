@@ -1,5 +1,6 @@
 "use client";
 import ReactECharts from "echarts-for-react";
+import { useT } from "@/lib/i18n";
 import { GRID, LINE, TEXT_FAINT, VIOLET, chartBase, rgba } from "./palette";
 
 type Point = [string, number, number, number]; // date, point, lower, upper
@@ -11,6 +12,7 @@ type Point = [string, number, number, number]; // date, point, lower, upper
  *  in the console's MODEL colour, the same violet the evidence column uses for a
  *  model output, so a forecast never reads as something that was recorded. */
 export default function TrendView({ data }: { data: { series: Point[] } }) {
+  const t = useT();
   const s = data.series ?? [];
   const dates = s.map((p) => p[0]);
   const point = s.map((p) => p[1]);
@@ -44,7 +46,7 @@ export default function TrendView({ data }: { data: { series: Point[] } }) {
     },
     yAxis: {
       type: "value",
-      name: "cases / day",
+      name: t("cases / day"),
       nameTextStyle: { color: faint, fontSize: 10, align: "left" },
       splitLine: { lineStyle: { color: grid } },
       axisLabel: { color: faint, fontSize: 10 },
@@ -73,17 +75,17 @@ export default function TrendView({ data }: { data: { series: Point[] } }) {
     <div style={{ position: "relative", height: "100%", width: "100%" }}>
       <ReactECharts option={option} style={{ height: "100%", width: "100%" }} notMerge />
       <div className="viz-legend" style={{ left: "auto", right: 12, bottom: "auto", top: 12 }}>
-        <span className="prov prov-model">Model</span>
+        <span className="prov prov-model">{t("Model")}</span>
         <div className="viz-legend-row">
           <span className="viz-legend-scale" style={{ height: 2, background: violet }} />
-          <span>projected daily volume</span>
+          <span>{t("projected daily volume")}</span>
         </div>
         <div className="viz-legend-row">
           <span className="viz-legend-scale"
             style={{ height: 12, background: rgba(violet, 0.11),
                      borderTop: `1px dashed ${rgba(violet, 0.5)}`,
                      borderBottom: `1px dashed ${rgba(violet, 0.5)}` }} />
-          <span>likely range</span>
+          <span>{t("likely range")}</span>
         </div>
       </div>
     </div>

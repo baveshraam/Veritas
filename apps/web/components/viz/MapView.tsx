@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import maplibregl from "maplibre-gl";
 import WhyChain from "../WhyChain";
 import { caseIdOf } from "@/lib/evidence";
+import { useT } from "@/lib/i18n";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { ACCENT, MAP_POINT, ramp, rgba } from "./palette";
 
@@ -110,6 +111,7 @@ export default function MapView({
   onAsk?: (q: string) => void;
   sessionId?: string;
 }) {
+  const t = useT();
   const ref = useRef<HTMLDivElement>(null);
   const map = useRef<maplibregl.Map | null>(null);
   const [showHotspots, setShowHotspots] = useState(true);
@@ -118,6 +120,11 @@ export default function MapView({
   // interactions are wired up ONCE (see addInteractions below).
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  // Same reason: the popup handlers below are wired up once, in a useEffect
+  // that never re-runs, so they must read the CURRENT translator through a
+  // ref rather than closing over the one captured at mount.
+  const tRef = useRef(t);
+  tRef.current = t;
 
   useEffect(() => {
     if (!ref.current || map.current) return;
@@ -196,9 +203,9 @@ export default function MapView({
         const meta = metaBits.length
           ? `<div class="veritas-map-popup-sub">${metaBits.join(" · ")}</div>` : "";
         const filed = p.filed
-          ? `<div class="veritas-map-popup-sub">Filed ${escapeHtml(fmtDate(p.filed))}</div>` : "";
+          ? `<div class="veritas-map-popup-sub">${escapeHtml(tRef.current("Filed {date}", { date: fmtDate(p.filed) }))}</div>` : "";
         show(e, `<div class="veritas-map-popup-title mono">${crimeNo}</div>${meta}${filed}` +
-          `<div class="veritas-map-popup-hint">Click to select</div>`);
+          `<div class="veritas-map-popup-hint">${escapeHtml(tRef.current("Click to select"))}</div>`);
       });
       m.on("mouseleave", "fir-pts", hide);
       m.on("click", "fir-pts", (e) => {
@@ -208,8 +215,8 @@ export default function MapView({
 
       m.on("mouseenter", "clusters", (e) => {
         const n = e.features?.[0]?.properties?.point_count;
-        show(e, `<div class="veritas-map-popup-title">${n} case${n === 1 ? "" : "s"} here</div>` +
-          `<div class="veritas-map-popup-hint">Click to zoom in</div>`);
+        show(e, `<div class="veritas-map-popup-title">${escapeHtml(tRef.current("{n} case(s) here", { n }))}</div>` +
+          `<div class="veritas-map-popup-hint">${escapeHtml(tRef.current("Click to zoom in"))}</div>`);
       });
       m.on("mouseleave", "clusters", hide);
       m.on("click", "clusters", (e) => {
@@ -456,14 +463,14 @@ export default function MapView({
         <div className="map-probe probe">
           <div className="probe-head">
             <span className="probe-what mono">{selectedPoint.crime_no ?? `FIR ${selectedPoint.fir_id}`}</span>
-            <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+            <span className="prov prov-record" style={{ marginLeft: "auto" }}>{t("Record")}</span>
           </div>
           <div className="meta">
             {[selectedPoint.crime_type, selectedPoint.district,
-              selectedPoint.filed ? `filed ${fmtDate(selectedPoint.filed)}` : null]
+              selectedPoint.filed ? t("filed {date}", { date: fmtDate(selectedPoint.filed) }) : null]
               .filter(Boolean).join(" · ")}
             <br />
-            Plotted here because the case file records these coordinates.
+            {t("Plotted here because the case file records these coordinates.")}
           </div>
 
           {why && (
@@ -475,30 +482,30 @@ export default function MapView({
 
           <div className="probe-acts">
             <button className="btn btn-sm" onClick={() => setWhy((v) => !v)} aria-expanded={why}>
-              {why ? "Hide chain" : "Why is this here?"}
+              {t(why ? "Hide chain" : "Why is this here?")}
             </button>
             {onAsk && (
               <>
                 <button className="btn btn-sm"
                   onClick={() => onAsk(`What is the status of FIR ${selectedPoint.crime_no ?? selectedPoint.fir_id}?`)}>
-                  What happened here?
+                  {t("What happened here?")}
                 </button>
                 <button className="btn btn-sm" onClick={() => onAsk("Who are all involved?")}>
-                  Who was involved?
+                  {t("Who was involved?")}
                 </button>
                 <button className="btn btn-sm" onClick={() => onAsk("Show me the timeline.")}>
-                  Timeline
+                  {t("Timeline")}
                 </button>
                 <button className="btn btn-sm" onClick={() => onAsk("Find similar cases.")}>
-                  Related cases
+                  {t("Related cases")}
                 </button>
                 <button className="btn btn-sm"
                   onClick={() => onAsk("Pin this to the case board")}>
-                  Add to board
+                  {t("Add to board")}
                 </button>
               </>
             )}
-            <button className="btn btn-sm btn-quiet" onClick={() => onSelect?.("")}>Clear</button>
+            <button className="btn btn-sm btn-quiet" onClick={() => onSelect?.("")}>{t("Clear")}</button>
           </div>
         </div>
       )}
@@ -511,7 +518,7 @@ export default function MapView({
             aria-pressed={showHotspots}
             style={{ background: "var(--float)" }}
           >
-            {showHotspots ? "Hide density" : "Show density"}
+            {t(showHotspots ? "Hide density" : "Show density")}
           </button>
         </div>
       )}
@@ -519,22 +526,22 @@ export default function MapView({
       <div className="map-legend">
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--case" />
-          <span>Case</span>
-          <span className="prov prov-record" style={{ marginLeft: "auto" }}>Record</span>
+          <span>{t("Case")}</span>
+          <span className="prov prov-record" style={{ marginLeft: "auto" }}>{t("Record")}</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--cluster">N</span>
-          <span>Cases here — click to expand</span>
+          <span>{t("Cases here — click to expand")}</span>
         </div>
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--selected"><i /></span>
-          <span>Selected</span>
+          <span>{t("Selected")}</span>
         </div>
         {hasHotspots && (
           <div className="map-legend-row">
             <span className="map-legend-ramp" />
-            <span>Hotspot density</span>
-            <span className="prov prov-model" style={{ marginLeft: "auto" }}>Model</span>
+            <span>{t("Hotspot density")}</span>
+            <span className="prov prov-model" style={{ marginLeft: "auto" }}>{t("Model")}</span>
           </div>
         )}
       </div>

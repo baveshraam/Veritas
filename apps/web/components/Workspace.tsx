@@ -1,12 +1,13 @@
 "use client";
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import CaseExplorer from "./CaseExplorer";
 import CaseOverview from "./CaseOverview";
 import PersonOverview from "./PersonOverview";
 import Board from "./Board";
-import { getCaseTimeline } from "@/lib/api";
+import { getCaseTimeline, getFir } from "@/lib/api";
 import { PROV_LABEL, provenanceOf } from "@/lib/evidence";
+import { useT } from "@/lib/i18n";
 import { densityReading, forecastReading, plural, rupees, type Reading } from "@/lib/metrics";
 import { readNetwork } from "@/lib/network";
 import type { EvidenceItem, SessionFocusView, TimelineResult, Visualization } from "@/lib/types";
@@ -17,6 +18,7 @@ import type { WorkspaceView } from "./InvestigationHeader";
  *  these, and the ranked rows ARE the finding. Reuses the evidence rail styling so a
  *  record and a derived note still read apart here the way they do everywhere else. */
 function EvidenceList({ items }: { items: EvidenceItem[] }) {
+  const t = useT();
   return (
     <div className="col-body ev-list" style={{ padding: "12px 16px" }}>
       {items.map((e, i) => {
@@ -25,12 +27,69 @@ function EvidenceList({ items }: { items: EvidenceItem[] }) {
           <div key={e.evidence_id} className={`ev rail-${p}`}>
             <div className="ev-head">
               <span className="ev-idx">{i + 1}</span>
-              <span className={`prov prov-${p}`}>{PROV_LABEL[p]}</span>
+              <span className={`prov prov-${p}`}>{t(PROV_LABEL[p])}</span>
             </div>
             <div className="ev-body">{e.content}</div>
           </div>
         );
       })}
+    </div>
+  );
+}
+
+type OffenderRow = { id: string; name: string; cases: number; habitual: boolean; community: string | null };
+
+// The engine gives each offender as one authoritative sentence ("named as
+// accused on 7 case(s) matching…, recorded as a habitual offender, network
+// community 3."), not a JSON row — this reads the same fields a table needs
+// back out of it rather than asking the backend for a second, parallel shape.
+function parseOffender(e: EvidenceItem): OffenderRow {
+  const name = /^\d+\.\s*(.+?)\s+—\s+named as accused/i.exec(e.content)?.[1] ?? e.content;
+  const cases = Number(/named as accused on (\d+)\s*case/i.exec(e.content)?.[1] ?? 0);
+  return {
+    id: e.evidence_id.replace(/^offender:/, ""),
+    name,
+    cases,
+    habitual: /habitual offender/i.test(e.content),
+    community: /network community (\d+)/i.exec(e.content)?.[1] ?? null,
+  };
+}
+
+/** The Offenders / Repeat Offenders ranking as an actual table — rank, who,
+ *  what's recorded about them, how many cases name them — instead of the same
+ *  facts read out as full sentences one after another. Every column is a real
+ *  recorded fact (case count, habitual flag, community) with nothing invented
+ *  to fill a column the record layer doesn't have (age, area, an offence
+ *  profile, a risk score) — CLAUDE.md §6/§8: a model estimate must never be
+ *  able to look like a record, and this view is a record view. */
+function OffenderTable({ items, onAsk }: { items: EvidenceItem[]; onAsk: (q: string) => void }) {
+  const t = useT();
+  const rows = items.map(parseOffender);
+  return (
+    <div className="off-table">
+      <div className="off-row off-head" aria-hidden>
+        <span>#</span><span>{t("Offender")}</span><span>{t("Recorded as")}</span><span>{t("Community")}</span><span>{t("Cases")}</span><span />
+      </div>
+      <div className="off-body">
+        {rows.map((r, i) => (
+          <div key={r.id} className="off-row">
+            <span className="off-rank">{i + 1}</span>
+            <div className="off-who">
+              <div className="off-name">{r.name}</div>
+              <div className="off-id mono">{t("Person {id}", { id: r.id })}</div>
+            </div>
+            <div className="off-badges">
+              <span className="pill pill-red">{t("Accused")}</span>
+              {r.habitual && <span className="pill pill-amber">{t("Habitual")}</span>}
+            </div>
+            <span className="off-community">{r.community ? t("Community {n}", { n: r.community }) : "—"}</span>
+            <span className="off-cases mono">{r.cases}</span>
+            <button className="btn btn-sm off-ask" onClick={() => onAsk(`Does ${r.name} have priors?`)}>
+              {t("Priors")}
+            </button>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -51,13 +110,14 @@ function Prompt({
   mark: string; title: string; body: string;
   ask: (q: string) => void; question: string | null;
 }) {
+  const t = useT();
   return (
     <div className="empty">
       <span className="empty-mark" aria-hidden>{mark}</span>
-      <h3>{title}</h3>
-      <p>{body}</p>
+      <h3>{t(title)}</h3>
+      <p>{t(body)}</p>
       {question && (
-        <button className="btn" onClick={() => ask(question)}>{question}</button>
+        <button className="btn" onClick={() => ask(question)}>{t(question)}</button>
       )}
     </div>
   );
@@ -72,7 +132,7 @@ function Prompt({
  *  "1.00"; "≈74 cases projected" over "2.5 mean FIRs/day". Nothing is hidden —
  *  a band is a reading of a number that is still printed beside it. */
 export default function Workspace({
-  view, viz, focus, evidence, onAsk, onCopilot, onBoard, activeEvidence, onSelectEvidence,
+  view, viz, focus, evidence, onAsk, onPreload, onCopilot, onBoard, activeEvidence, onSelectEvidence,
   onPinEvidence, boardVersion, sessionId,
 }: {
   view: WorkspaceView;
@@ -80,6 +140,9 @@ export default function Workspace({
   focus?: SessionFocusView;
   evidence: EvidenceItem[];
   onAsk: (q: string) => void;
+  /** Same as onAsk, but for a tab's own background preload — must never pull
+   *  the workspace away from wherever the officer has since navigated. */
+  onPreload: (q: string) => void;
   onCopilot: (firId: string) => void;
   onBoard: (firId: string) => void;
   activeEvidence: string | null;
@@ -90,6 +153,7 @@ export default function Workspace({
    *  on screen, with the session's own operation and focus as context. */
   sessionId?: string;
 }) {
+  const t = useT();
   const kind = viz?.kind ?? "none";
   const d = viz?.data ?? {};
   const firId = focus?.case?.fir_id ?? null;
@@ -103,6 +167,69 @@ export default function Workspace({
   const [showRegister, setShowRegister] = useState(false);
   useEffect(() => { setShowRegister(false); }, [firId, focus?.person?.person_id]);
 
+  // Offenders / Repeat Offenders / Statistics / Geography / Forecast are
+  // database-wide readouts, not a per-turn answer — an officer opening the tab
+  // shouldn't have to know a phrasing to ask for it. Auto-fires a canned
+  // question via onPreload — never onAsk, whose completion pulls the
+  // workspace to whatever view the ANSWER belongs in. A background preload
+  // firing that would snap an officer back to this tab after they had already
+  // clicked away is exactly the "stuck page" bug: every tab click looked like
+  // it did nothing, because a few seconds later the still-running preload
+  // yanked the view back. Keyed by a `fired` string (below) so a tab whose
+  // canned question depends on the open case (Network) can re-fire per case,
+  // while the case-independent tabs fire exactly once per session.
+  const offenderRows = evidence.filter((e) => e.evidence_id.startsWith("offender:"));
+  const hasOffenderRanking = offenderRows.length > 0;
+  const hasHabitualRanking = offenderRows.some((e) => /habitual offender/i.test(e.content));
+  const hasStats = evidence.some((e) => e.evidence_id.startsWith("stats:"));
+  const hasGeography = evidence.some((e) => e.evidence_id.startsWith("hotspot:")) || kind === "map";
+  const hasForecast = kind === "trend";
+  const hasWatchlist = evidence.some((e) => e.evidence_id.startsWith("watchlist:"));
+  const hasWorkload = evidence.some((e) => e.evidence_id.startsWith("workload:"));
+  const onPreloadRef = useRef(onPreload);
+  useEffect(() => { onPreloadRef.current = onPreload; }, [onPreload]);
+
+  // Network's own person to ask about: with a case open, that case's lead
+  // accused wins — otherwise a person focus left over from a DIFFERENT
+  // question asked before this case was opened would keep showing on this
+  // tab regardless of which case is now open. Only with no case open does an
+  // explicit person focus (from a person-scoped question) apply. Fetched once
+  // per case.
+  const [caseLead, setCaseLead] = useState<string | null>(null);
+  useEffect(() => {
+    if (!firId) { setCaseLead(null); return; }
+    let live = true;
+    getFir(firId).then((f) => live && setCaseLead(f.accused?.[0]?.AccusedName ?? null)).catch(() => live && setCaseLead(null));
+    return () => { live = false; };
+  }, [firId]);
+  const networkSubject = firId ? (caseLead ?? person) : person;
+
+  const autoFired = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const AUTO_ASK: Partial<Record<WorkspaceView, { q: string; already: boolean; fired: string }>> = {
+      offenders: { q: "Who are the top 20 most active offenders?", already: hasOffenderRanking, fired: "offenders" },
+      // Loading first must not stop Repeat Offenders from ever auto-firing its
+      // own (habitual-filtered) query.
+      repeat_offenders: { q: "Who are the top 20 repeat offenders?", already: hasHabitualRanking, fired: "repeat_offenders" },
+      statistics: { q: "What is the conviction rate?", already: hasStats, fired: "statistics" },
+      geography: { q: "Show me crime hotspots", already: hasGeography, fired: "geography" },
+      forecast: { q: "Forecast crime for the next 30 days", already: hasForecast, fired: "forecast" },
+      watchlist: { q: "Show me the financial watchlist", already: hasWatchlist, fired: "watchlist" },
+      workload: { q: "Which stations are falling behind?", already: hasWorkload, fired: "workload" },
+      ...(networkSubject ? { network: {
+        q: `Who are the associates of ${networkSubject}?`,
+        already: kind === "network",
+        fired: `network:${firId ?? networkSubject}`,
+      } } : {}),
+    };
+    const entry = AUTO_ASK[view];
+    if (entry && !entry.already && !autoFired.current.has(entry.fired)) {
+      autoFired.current.add(entry.fired);
+      onPreloadRef.current(entry.q);
+    }
+  }, [view, hasOffenderRanking, hasHabitualRanking, hasStats, hasGeography, hasForecast,
+      hasWatchlist, hasWorkload, networkSubject, firId]);
+
   const [caseTl, setCaseTl] = useState<TimelineResult | null>(null);
   const [tlError, setTlError] = useState<string | null>(null);
   useEffect(() => {
@@ -115,7 +242,7 @@ export default function Workspace({
     return () => { live = false; };
   }, [view, firId, kind]);
 
-  let title = "Case register";
+  let title = t("Case register");
   let sub = "";
   let lead: Reading | null = null;
   let prov: "record" | "derived" | "model" | null = null;
@@ -125,8 +252,8 @@ export default function Workspace({
   let flush = false;
 
   if (view === "register") {
-    title = "Case register";
-    sub = "Every case your rank is cleared to see, independent of whichever case is open.";
+    title = t("Case register");
+    sub = t("Every case your rank is cleared to see, independent of whichever case is open.");
     body = <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} onBoard={onBoard} activeFir={firId} />;
     flush = true;
   }
@@ -135,18 +262,18 @@ export default function Workspace({
     if (kind === "trend") {
       const s: [string, number, number, number][] = d.series ?? [];
       const f = forecastReading(s);
-      title = `${f.days}-day outlook`;
-      sub = "Projected case volume, with the daily range the model considers likely.";
+      title = t("{days}-day outlook", { days: f.days });
+      sub = t("Projected case volume, with the daily range the model considers likely.");
       lead = f;
       prov = "model";
-      figs = [{ n: String(f.days), l: "days ahead" }];
-      next = { label: "Where are these concentrated?", q: "Show me crime hotspots" };
+      figs = [{ n: String(f.days), l: t("days ahead") }];
+      next = { label: t("Where are these concentrated?"), q: "Show me crime hotspots" };
       body = <TrendView data={d} />;
     } else {
-      title = "Forecast";
-      body = <Prompt mark="◷" title="No forecast loaded"
-        body="Ask for a district's trend and Veritas projects case volume forward — reconciled so a district's forecast always equals the sum of its stations."
-        ask={onAsk} question="Forecast crime for the next 30 days" />;
+      // Auto-preload (above) already asks for the statewide 30-day forecast
+      // the instant this tab opens.
+      title = t("Forecast");
+      body = <Prompt mark="◷" title="Loading forecast…" body="" ask={onAsk} question={null} />;
     }
   }
 
@@ -154,16 +281,14 @@ export default function Workspace({
     const habitual = view === "repeat_offenders";
     const rows = evidence.filter((e) => e.evidence_id.startsWith("offender:")
       && (habitual ? /habitual offender/i.test(e.content) : true));
-    const summary = evidence.find((e) => e.evidence_id.startsWith("ranking:summary"));
-    title = habitual ? "Repeat offenders" : "Most active offenders";
-    sub = "Ranked by how many cases on record name them — a fact the identity layer "
-      + "makes possible, since the raw records have no cross-case person at all.";
+    title = habitual ? t("Repeat offenders") : t("Most active offenders");
+    sub = t("Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.");
     if (rows.length) {
       lead = { headline: plural(rows.length, "person", "people"),
-        measure: "Ranked by recorded case count, within your access scope" };
+        measure: t("Ranked by recorded case count, within your access scope") };
       prov = "record";
-      figs = [{ n: String(rows.length), l: "ranked" }];
-      body = <EvidenceList items={summary ? [summary, ...rows] : rows} />;
+      figs = [{ n: String(rows.length), l: t("ranked") }];
+      body = <OffenderTable items={rows} onAsk={onAsk} />;
       flush = true;
     } else {
       body = <Prompt mark="◈" title={habitual ? "No repeat-offender ranking loaded" : "No offender ranking loaded"}
@@ -175,8 +300,8 @@ export default function Workspace({
 
   if (view === "statistics") {
     const items = evidence.filter((e) => e.evidence_id.startsWith("stats:"));
-    title = "Case statistics";
-    sub = "Rates and breakdowns over the case set — not a list of individual cases.";
+    title = t("Case statistics");
+    sub = t("Rates and breakdowns over the case set — not a list of individual cases.");
     if (items.length) {
       prov = "record";
       body = <EvidenceList items={items} />;
@@ -188,15 +313,81 @@ export default function Workspace({
     }
   }
 
+  if (view === "area") {
+    const items = evidence.filter((e) => e.evidence_id.startsWith("area:"));
+    title = t("Area profile");
+    sub = t("Recorded crime mix alongside real Census 2011 ground truth for the same district — shown side by side, never combined into one score.");
+    if (items.length) {
+      prov = "record";
+      figs = [{ n: String(items.length), l: t("facts") }];
+      body = <EvidenceList items={items} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◈" title="No area loaded"
+        body="Name a district and Veritas profiles it: recorded offence mix next to real Census 2011 socioeconomic ground truth. No district finer than this exists in the data."
+        ask={onAsk} question="Give me an area profile of Bengaluru Urban" />;
+    }
+  }
+
+  if (view === "community") {
+    const items = evidence.filter((e) => e.evidence_id.startsWith("community:"));
+    const summary = items.find((e) => e.evidence_id.startsWith("community:summary:"));
+    const members = items.filter((e) => e !== summary);
+    title = t("Known associates group");
+    sub = t("A Louvain community over co-offending — derived from shared cases, never a legal or gang designation.");
+    if (members.length) {
+      lead = { headline: plural(members.length, "known associate"),
+        measure: t("Ranked by network influence — not a risk score") };
+      prov = "derived";
+      figs = [{ n: String(members.length), l: t("members") }];
+      body = <EvidenceList items={summary ? [summary, ...members] : members} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◇" title="No community loaded"
+        body="Name a community number, or ask about a person already in focus, and Veritas shows who else the graph places alongside them."
+        ask={onAsk} question="Who is in community 1?" />;
+    }
+  }
+
+  if (view === "watchlist") {
+    const items = evidence.filter((e) => e.evidence_id.startsWith("watchlist:"));
+    title = t("Financial watchlist");
+    sub = t("Every transaction a detector has flagged, statewide — each labelled by which one: the rule-based detector is court-auditable, the GNN is an investigative lead only.");
+    if (items.length) {
+      prov = "model";
+      figs = [{ n: String(items.length), l: t("flagged") }];
+      body = <EvidenceList items={items} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◈" title="Loading watchlist…" body="" ask={onAsk} question={null} />;
+    }
+  }
+
+  if (view === "workload") {
+    const items = evidence.filter((e) => e.evidence_id.startsWith("workload:")
+      || e.evidence_id.startsWith("stalled:"));
+    title = t("Station workload");
+    sub = t("Open caseload and how much of it has gone stale — untouched on the investigation board for over 30 days. Never allocates work; only says where to look.");
+    if (items.length) {
+      prov = "derived";
+      figs = [{ n: String(items.filter((e) => e.evidence_id.startsWith("workload:")).length), l: t("stations") },
+              { n: String(items.filter((e) => e.evidence_id.startsWith("stalled:")).length), l: t("stalled cases") }];
+      body = <EvidenceList items={items} />;
+      flush = true;
+    } else {
+      body = <Prompt mark="◈" title="Loading workload…" body="" ask={onAsk} question={null} />;
+    }
+  }
+
   if (view === "overview") {
     if (firId && !showRegister) {
       // A case is open. The register is the right answer when nothing is; it is
       // the wrong one the moment something is, and it was what Overview showed.
-      title = "Case overview";
-      sub = "What this case is, who is in it, what is still open, and what changed most recently.";
+      title = t("Case overview");
+      sub = t("What this case is, who is in it, what is still open, and what changed most recently.");
       body = <CaseOverview firId={firId} onAsk={onAsk} onCopilot={onCopilot}
         refreshToken={boardVersion} />;
-      next = { label: "Case register", q: "" };
+      next = { label: t("Case register"), q: "" };
       flush = true;
     } else if (focus?.person?.person_id && !showRegister) {
       // A person is the subject and no case is open — the identity-resolution
@@ -204,17 +395,17 @@ export default function Workspace({
       // financial and timeline all worked one question at a time, but Overview
       // fell back to the unfiltered case register regardless of who was asked
       // about.
-      title = "Person overview";
-      sub = "Who this is, the cases naming them, and what to ask next.";
+      title = t("Person overview");
+      sub = t("Who this is, the cases naming them, and what to ask next.");
       body = <PersonOverview personId={focus.person.person_id} name={person} onAsk={onAsk} />;
-      next = { label: "Case register", q: "" };
+      next = { label: t("Case register"), q: "" };
       flush = true;
     } else {
-      title = "Case register";
+      title = t("Case register");
       sub = firId
-        ? "Every case your rank is cleared to see. The case you are working stays open."
-        : "Every case your rank is cleared to see. Open one to start an investigation.";
-      if (firId) next = { label: "Back to this case", q: "" };
+        ? t("Every case your rank is cleared to see. The case you are working stays open.")
+        : t("Every case your rank is cleared to see. Open one to start an investigation.");
+      if (firId) next = { label: t("Back to this case"), q: "" };
       body = <CaseExplorer onAsk={onAsk} onCopilot={onCopilot} onBoard={onBoard}
         activeFir={firId} />;
       flush = true;
@@ -229,30 +420,31 @@ export default function Workspace({
       const peak = polys.length ? Math.max(...polys.map((h) => h.intensity ?? 0)) : 0;
       const biggest = polys.length ? Math.max(...polys.map((h) => h.crime_count ?? 0)) : 0;
       const main = [...districts][0];
-      title = "Crime concentration";
+      title = t("Crime concentration");
       sub = districts.size === 1 && main
-        ? `${main} — cases as recorded, with modelled hotspot density drawn over them.`
-        : `${districts.size} districts — cases as recorded, with modelled hotspot density drawn over them.`;
+        ? t("{main} — cases as recorded, with modelled hotspot density drawn over them.", { main })
+        : t("{n} districts — cases as recorded, with modelled hotspot density drawn over them.", { n: districts.size });
       if (polys.length) {
         lead = densityReading(peak);
         prov = "model";
       }
       figs = [
-        { n: String(pts.length), l: "cases located" },
+        { n: String(pts.length), l: t("cases located") },
         ...(polys.length ? [
-          { n: String(polys.length), l: "hotspots" },
-          { n: String(biggest), l: "in the strongest" },
+          { n: String(polys.length), l: t("hotspots") },
+          { n: String(biggest), l: t("in the strongest") },
         ] : []),
       ];
-      if (main) next = { label: `Cases in ${main}`, q: `Show me theft cases in ${main}` };
+      if (main) next = { label: t("Cases in {main}", { main }), q: `Show me theft cases in ${main}` };
       body = <MapView data={d} activeEvidenceId={activeEvidence} onSelect={onSelectEvidence}
                onAsk={onAsk} sessionId={sessionId} />;
       flush = true;
     } else {
-      title = "Geography";
-      body = <Prompt mark="◈" title="No geography loaded"
-        body="Locations for a case, or hotspot density for a district, appear here. Cases are records; hotspot regions are model output."
-        ask={onAsk} question="Show me crime hotspots" />;
+      // Auto-preload (above) already asks for the statewide hotspot map the
+      // instant this tab opens — this frame is only what shows while that
+      // request is in flight, never a prompt the officer has to act on.
+      title = t("Hotspot Map");
+      body = <Prompt mark="◈" title="Loading hotspots…" body="" ask={onAsk} question={null} />;
     }
   }
 
@@ -260,7 +452,7 @@ export default function Workspace({
 
   if (view === "network") {
     if (kind === "network" && net) {
-      title = "People and connections";
+      title = t("People and connections");
       // The layering, stated where the graph is. The copilot says the same
       // thing beside the answer — an officer arriving by tab never read that.
       const front = net.basis === "record" ? "named in these records" : "who offended alongside them";
@@ -269,7 +461,7 @@ export default function Workspace({
         : "";
       sub = net.direct.length
         ? `${plural(net.direct.length, "person", "people")} ${front}${wider}.`
-        : "People reconstructed from accused records by probabilistic linkage, connected by the cases they share.";
+        : t("People reconstructed from accused records by probabilistic linkage, connected by the cases they share.");
       lead = {
         headline: net.direct.length
           ? `${net.direct.length} ${net.basis === "record" ? "directly involved" : "direct co-offenders"}`
@@ -278,22 +470,26 @@ export default function Workspace({
       };
       prov = net.basis === "record" ? "record" : "derived";
       figs = [
-        { n: String(net.direct.length), l: net.basis === "record" ? "named in record" : "direct" },
-        { n: String(net.extended.length), l: "wider network" },
-        ...(net.communities ? [{ n: String(net.communities), l: "communities" }] : []),
+        { n: String(net.direct.length), l: net.basis === "record" ? t("named in record") : t("direct") },
+        { n: String(net.extended.length), l: t("wider network") },
+        ...(net.communities ? [{ n: String(net.communities), l: t("communities") }] : []),
       ];
       if (net.extended[0]) {
-        next = { label: `Examine ${net.extended[0].name}`, q: `Does ${net.extended[0].name} have priors?` };
+        next = { label: t("Examine {name}", { name: net.extended[0].name }), q: `Does ${net.extended[0].name} have priors?` };
       }
       body = <NetworkView data={d} onAsk={onAsk} subjectLabel={person} reading={net}
                sessionId={sessionId} />;
       flush = true;
+    } else if (networkSubject) {
+      // Auto-preload (above) is already asking this; this is only the frame
+      // shown while that request is in flight.
+      title = t("Network");
+      body = <Prompt mark="◇" title="Loading network…" body="" ask={onAsk} question={null} />;
     } else {
-      title = "Network";
+      title = t("Network");
       body = <Prompt mark="◇" title="No network loaded"
-        body="Name a person and Veritas traces who they offend with. Without a named subject there is nothing to traverse from, and picking one would be a guess."
-        ask={onAsk}
-        question={person ? `Who are the associates of ${person}?` : "Who are the associates of Usha Naika?"} />;
+        body="Open a case or name a person and Veritas traces who they offend with. Without a named subject there is nothing to traverse from, and picking one would be a guess."
+        ask={onAsk} question={null} />;
     }
   }
 
@@ -304,16 +500,16 @@ export default function Workspace({
       const traced = links.reduce((a, l) => a + (l.value ?? 0), 0);
       const sources = new Set(links.map((l) => l.source)).size;
       const dests = new Set(links.map((l) => l.target)).size;
-      title = "Financial trail";
-      sub = "Transfers between accounts owned by people in this investigation. Direction is preserved — money moves one way.";
+      title = t("Financial trail");
+      sub = t("Transfers between accounts owned by people in this investigation. Direction is preserved — money moves one way.");
       lead = {
         headline: `${rupees(traced)} traced`,
         measure: `${plural(sources, "source account")} · ${plural(dests, "destination account")}`,
       };
       prov = "record";
       figs = [
-        { n: String(links.length), l: "transfers" },
-        { n: String(nodes.length), l: "accounts" },
+        { n: String(links.length), l: t("transfers") },
+        { n: String(nodes.length), l: t("accounts") },
       ];
       body = <SankeyView data={d} />;
       flush = true;
@@ -321,11 +517,11 @@ export default function Workspace({
       // A trail that was LOOKED FOR and not found is a finding, and must not
       // render as "nothing has been asked yet". The engine says which happened.
       const searched = evidence.find((e) => e.evidence_id.startsWith("flow:none:"));
-      title = "Financial";
+      title = t("Financial");
       if (searched) {
-        lead = { headline: "No outbound trail", measure: "Within your access scope" };
+        lead = { headline: t("No outbound trail"), measure: t("Within your access scope") };
         prov = "record";
-        sub = "The accounts were traced. Nothing moved out of them in the records you can see.";
+        sub = t("The accounts were traced. Nothing moved out of them in the records you can see.");
         body = <Prompt mark="◆" title="No outbound transfer trail"
           body={searched.content}
           ask={onAsk}
@@ -347,8 +543,8 @@ export default function Workspace({
   if (view === "timeline") {
     const data = kind === "timeline" ? d : caseTl;
     const events: any[] = data?.events ?? [];
-    title = "Investigation timeline";
-    sub = "One chronology across the case, the people accused in it, and money through their accounts.";
+    title = t("Investigation timeline");
+    sub = t("One chronology across the case, the people accused in it, and money through their accounts.");
     if (events.length) {
       const derived = events.filter((e) => e.kind === "derived").length;
       lead = {
@@ -357,15 +553,15 @@ export default function Workspace({
       };
       prov = derived ? "derived" : "record";
       figs = [
-        { n: String(events.length - derived), l: "from records" },
-        ...(derived ? [{ n: String(derived), l: "derived" }] : []),
+        { n: String(events.length - derived), l: t("from records") },
+        ...(derived ? [{ n: String(derived), l: t("derived") }] : []),
       ];
       body = <TimelineView data={data} activeEvidenceId={activeEvidence}
         onSelect={onSelectEvidence} onPin={onPinEvidence} />;
     } else if (tlError) {
       body = <Prompt mark="◷" title="Timeline unavailable" body={tlError} ask={onAsk} question={null} />;
     } else if (firId && !caseTl) {
-      body = <div className="empty"><span className="spinner" /><p>Building the case chronology…</p></div>;
+      body = <div className="empty"><span className="spinner" /><p>{t("Building the case chronology…")}</p></div>;
     } else {
       body = <Prompt mark="◷" title="No timeline loaded"
         body="Open a case and its chronology appears here — its own dates, its accused persons' other cases, and any money that moved."
@@ -374,8 +570,8 @@ export default function Workspace({
   }
 
   if (view === "board") {
-    title = "Investigation board";
-    sub = "What this investigation has established, what is still open, and what you noted. It persists across sessions and officers.";
+    title = t("Investigation board");
+    sub = t("What this investigation has established, what is still open, and what you noted. It persists across sessions and officers.");
     body = firId
       ? <Board firId={firId} onAsk={onAsk} refreshToken={boardVersion} />
       : <Prompt mark="▣" title="No case open"
@@ -384,7 +580,7 @@ export default function Workspace({
     flush = true;
   }
 
-  const PROV_WORD = { record: "Record", derived: "Derived", model: "Model" } as const;
+  const PROV_WORD = { record: t("Record"), derived: t("Derived"), model: t("Model") } as const;
 
   return (
     <section className="col col-workspace" aria-label="Workspace">
@@ -398,8 +594,8 @@ export default function Workspace({
           {lead && (
             <div className="analysis-lead">
               {prov && <span className={`prov prov-${prov}`}>{PROV_WORD[prov]}</span>}
-              <div className="analysis-lead-n">{lead.headline}</div>
-              <div className="analysis-lead-m">{lead.measure}</div>
+              <div className="analysis-lead-n">{t(lead.headline)}</div>
+              <div className="analysis-lead-m">{t(lead.measure)}</div>
             </div>
           )}
 

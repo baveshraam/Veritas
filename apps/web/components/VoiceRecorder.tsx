@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 import { blobToBase64 } from "@/lib/api";
+import { useT } from "@/lib/i18n";
 
 /* ============================================================================
  * PUSH-TO-TALK
@@ -61,6 +62,7 @@ export default function VoiceRecorder({
   onCapture: (base64: string) => void;
   disabled?: boolean;
 }) {
+  const t = useT();
   const [phase, setPhase] = useState<Phase>("idle");
   const [seconds, setSeconds] = useState(0);
   const [level, setLevel] = useState(0);
@@ -185,7 +187,7 @@ export default function VoiceRecorder({
   if (phase === "recording" || phase === "asking") {
     const near = seconds >= WARN_AT;
     return (
-      <div className="rec" role="group" aria-label="Recording a question">
+      <div className="rec" role="group" aria-label={t("Recording a question")}>
         <span className={`rec-dot${level > 0.06 ? " is-live" : ""}`} aria-hidden />
         <canvas ref={canvasRef} width={180} height={26} className="rec-wave" />
         <span className={`rec-time mono${near ? " is-near" : ""}`}>
@@ -193,16 +195,15 @@ export default function VoiceRecorder({
         </span>
         {/* Politely announced once per state, not on every tick. */}
         <span className="sr-only" role="status" aria-live="polite">
-          {phase === "asking" ? "Waiting for microphone permission"
-            : "Recording. Choose send or discard."}
+          {t(phase === "asking" ? "Waiting for microphone permission" : "Recording. Choose send or discard.")}
         </span>
         <button className="btn btn-sm btn-quiet" onClick={() => finish(false)}
-          title="Discard this recording">
-          Discard
+          title={t("Discard this recording")}>
+          {t("Discard")}
         </button>
         <button className="btn btn-sm btn-primary" onClick={() => finish(true)}
-          title="Stop recording and ask">
-          Send
+          title={t("Stop recording and ask")}>
+          {t("Send")}
         </button>
       </div>
     );
@@ -212,12 +213,12 @@ export default function VoiceRecorder({
     return (
       <div className="rec rec-off" role="status">
         <span className="meta">
-          {phase === "denied"
+          {t(phase === "denied"
             ? "Microphone blocked. Allow it in your browser's site settings, then try again."
-            : "This browser cannot record audio. Type the question instead."}
+            : "This browser cannot record audio. Type the question instead.")}
         </span>
         <button className="btn btn-sm btn-quiet" onClick={() => setPhase("idle")}>
-          Dismiss
+          {t("Dismiss")}
         </button>
       </div>
     );
@@ -225,9 +226,9 @@ export default function VoiceRecorder({
 
   return (
     <button className="btn btn-sm btn-mic" onClick={start} disabled={disabled}
-      title="Ask by voice, in English or Kannada" aria-label="Ask by voice">
+      title={t("Ask by voice, in English or Kannada")} aria-label={t("Ask by voice")}>
       <Mic />
-      <span>Speak</span>
+      <span>{t("Speak")}</span>
     </button>
   );
 }
