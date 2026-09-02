@@ -48,7 +48,7 @@ def _authorise(token: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad job token")
 
 
-def _run_refresh() -> None:
+def _run_refresh() -> dict:
     global _refresh_running
     from data.embeddings.index_job import run_all as reindex
     from data.gds import run_all as run_gds
@@ -95,6 +95,7 @@ def _run_refresh() -> None:
                 log.exception("scheduled refresh step %r failed", name)
                 out[name] = f"failed: {type(exc).__name__}"
         log.info("scheduled refresh complete: %s", out)
+        return out
     finally:
         with _refresh_lock:
             _refresh_running = False
@@ -126,10 +127,21 @@ def _rerun_detectors() -> dict:
 
 
 @router.post("/jobs/refresh")
-async def refresh(x_veritas_job_token: str | None = Header(default=None)):
+async def refresh(sync: bool = False,
+                  x_veritas_job_token: str | None = Header(default=None)):
     """Kick off the recompute and return immediately. Idempotent, and safe to run while
     the API serves — but not safe to run twice at once against the same rows, so a
-    second trigger while one is still in flight is reported rather than started."""
+    second trigger while one is still in flight is reported rather than started.
+
+    `sync=true` waits and returns the per-step summary instead. Cron must never use it —
+    the recompute takes minutes and Cron abandons the request long before that, which is
+    exactly the failure BUG-027 fixed for /jobs/audit-verify. It exists because on this
+    platform a background thread's log is not reachable: AppSail exposes bundle-creator
+    logs and no runtime logs, so a step that fails inside the thread is invisible from
+    outside, and "started" is the only thing the caller ever learns. That is how a
+    blocked Stratus publish silently cancelled the AML sweep for a whole deployment.
+    An operator running this by hand can now see which step failed and why.
+    """
     _authorise(x_veritas_job_token)
 
     global _refresh_running
@@ -139,6 +151,14 @@ async def refresh(x_veritas_job_token: str | None = Header(default=None)):
         _refresh_running = True
 
     from data import ds
+
+    if sync:
+        # Already inside the lock's protection (set above), so this cannot race a
+        # background run. Runs on the request's OWN thread, which the middleware has
+        # already bound to the Catalyst context — so there is nothing to capture, and
+        # asking for the SDK app here would import zcatalyst_sdk on the sqlite backend
+        # where it is deliberately absent.
+        return {"status": "complete", "steps": _run_refresh()}
 
     # Capture the current request's Catalyst context for the background thread — it has
     # no request of its own to bind. Guarded exactly like bind_catalyst_request: on the

@@ -13,7 +13,11 @@ The lock release is tested for the same reason: a step that raises on the way ou
 `finally` that never runs leaves `_refresh_running` stuck True, and every later trigger
 answers "already_running" forever with nothing actually running.
 """
+import os
+
 import pytest
+
+os.environ.setdefault("VERITAS_JOB_TOKEN", "test-job-token")
 
 from api.routers import jobs
 
@@ -111,3 +115,25 @@ def test_one_bad_account_does_not_cost_the_whole_sweep(monkeypatch):
 
     out = jobs._rerun_detectors()
     assert out == {"accounts": 5, "flagged": 4, "failed": 1}
+
+
+def test_sync_returns_the_per_step_summary_rather_than_just_started(client, steps):
+    """The whole point of the escape hatch: on this platform AppSail exposes
+    bundle-creator logs and no RUNTIME logs, so a step that fails inside the background
+    thread is invisible from outside and "started" is all the caller ever learns. That
+    is how a blocked Stratus publish cancelled the AML sweep for a whole deployment
+    without anyone being able to see it."""
+    import os
+
+    jobs._refresh_running = False
+    r = client.post("/jobs/refresh?sync=true",
+                    headers={"X-Veritas-Job-Token": os.environ["VERITAS_JOB_TOKEN"]})
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "complete"
+    # Every step is reported, and the one that blew up says so by name instead of
+    # vanishing into a log nobody can read.
+    assert set(body["steps"]) == {"gds", "stratus_graph", "vector_index", "aml"}
+    assert body["steps"]["stratus_graph"].startswith("failed: RuntimeError")
+    assert body["steps"]["aml"] == "aml-done"
+    assert jobs._refresh_running is False
