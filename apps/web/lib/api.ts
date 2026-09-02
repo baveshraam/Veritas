@@ -1,7 +1,7 @@
 import type {
   BoardItem, BoardItemType, CaseBoard, CaseDetail, CaseIndex, CopilotBrief, Derivation,
-  EvidenceItem, FinalEvent, Officer, PersonDetail, SearchHit, TimelineEvent,
-  TimelineResult, TraceEntry,
+  EvidenceItem, FinalEvent, Officer, PersonDetail, SearchHit, SessionSummary, TimelineEvent,
+  TimelineResult, TraceEntry, Turn,
 } from "./types";
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -350,6 +350,46 @@ export async function exportPdf(sessionId: string): Promise<boolean> {
   return isPdf;
 }
 
+/** GET /sessions — chat history, pooled by rank+station rather than by the
+ *  individual officer signed in right now (see lib/types.ts's Officer). */
+export async function listSessions(): Promise<SessionSummary[]> {
+  const r = await fetch(`${BASE}/sessions`, { headers: authHeaders() });
+  if (!r.ok) throw new Error("Could not load chat history");
+  return r.json();
+}
+
+/** GET /sessions/{id} — the full turn history of one past session, reconstructed
+ *  into the same `Turn[]` shape the console renders live. Whether a turn was a
+ *  refusal isn't persisted server-side, so a reloaded turn always renders as a
+ *  plain finding rather than reconstructing that exact banner. */
+export async function loadSession(sessionId: string): Promise<Turn[]> {
+  const r = await fetch(`${BASE}/sessions/${sessionId}`, { headers: authHeaders() });
+  if (!r.ok) throw new Error(
+    r.status === 403 ? "That session belongs to a different rank or station"
+    : r.status === 404 ? "That session no longer exists"
+    : "Could not load that session");
+  const turns: any[] = await r.json();
+  return turns.map((t) => ({
+    id: `${sessionId}-${t.turn_index}`,
+    query: t.query,
+    answer: t.final_answer,
+    streaming: false,
+    refused: false,
+    trace: t.agent_trace ?? [],
+    citations: t.citations ?? [],
+    evidence: (t.evidence_items ?? []).filter((e: any) => e.content),
+    visualization: t.visualization?.kind ? t.visualization : { kind: "none", data: {} },
+  }));
+}
+
+export async function attachFile(file: File): Promise<{ filename: string; text: string; truncated: boolean }> {
+  const form = new FormData();
+  form.append("file", file);
+  const r = await fetch(`${BASE}/attach`, { method: "POST", headers: authHeaders(), body: form });
+  if (!r.ok) throw new Error((await r.json().catch(() => null))?.detail ?? "Could not read this file");
+  return r.json();
+}
+
 /** How well corroborated a piece of evidence is.
  *
  *  This used to route confidence through the SEVERITY ramp, which inverted its
@@ -479,9 +519,9 @@ async function analytics<T>(path: string, params: Record<string, string | number
 export const getStatistics = (district?: string | null, crimeType?: string | null) =>
   analytics<Statistics>("statistics", { district, crime_type: crimeType });
 
-export const getOffenders = (opts: { district?: string | null; habitual?: boolean; limit?: number } = {}) =>
+export const getOffenders = (opts: { district?: string | null; habitual?: boolean; limit?: number; q?: string | null } = {}) =>
   analytics<{ offenders: OffenderRow[] }>("offenders",
-    { district: opts.district, habitual: opts.habitual, limit: opts.limit ?? 20 });
+    { district: opts.district, habitual: opts.habitual, limit: opts.q ? Math.max(opts.limit ?? 20, 50) : (opts.limit ?? 20), q: opts.q });
 
 export const getHotspots = (district?: string | null) =>
   analytics<HotspotPayload>("hotspots", { district });

@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import ChatPane from "@/components/ChatPane";
 import CommandPalette from "@/components/CommandPalette";
 import Copilot from "@/components/Copilot";
@@ -47,8 +47,18 @@ export default function Console() {
   const [palette, setPalette] = useState(false);
 
   // One session for the whole conversation — this is what makes "does he have
-  // priors" resolve against the previous turn on the server.
-  const sessionId = useMemo(() => crypto.randomUUID(), []);
+  // priors" resolve against the previous turn on the server. Switchable: loading
+  // a past session from history (pooled by rank+station, see SessionHistory)
+  // replaces both the id and the turns it resolves against.
+  const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
+
+  const loadHistorySession = useCallback((loaded: Turn[], sid: string) => {
+    setSessionId(sid);
+    setTurns(loaded);
+    setActiveEvidence(null);
+    setInspecting(false);
+    setView("overview");
+  }, []);
 
   const latest = turns[turns.length - 1];
   const viz: Visualization = latest?.visualization ?? { kind: "none", data: {} };
@@ -236,6 +246,7 @@ export default function Console() {
           onCite={revealEvidence}
           activeEvidence={activeEvidence}
           onInspect={() => openInspector(activeEvidence ?? evidence[0]?.evidence_id ?? "")}
+          onLoadSession={loadHistorySession}
         />
 
         <Workspace

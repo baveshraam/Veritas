@@ -236,6 +236,16 @@ export default function Workspace({
   const [showRegister, setShowRegister] = useState(false);
   useEffect(() => { setShowRegister(false); }, [firId, focus?.person?.person_id]);
 
+  // Offenders/Repeat Offenders search — a name search over EVERY offender in the
+  // officer's scope, not just the top-ranked page a chat question or the tab's own
+  // default view shows. Debounced so typing doesn't fire a scan per keystroke.
+  const [offenderQuery, setOffenderQuery] = useState("");
+  const [offenderQueryLive, setOffenderQueryLive] = useState("");
+  useEffect(() => {
+    const id = setTimeout(() => setOffenderQueryLive(offenderQuery.trim()), 300);
+    return () => clearTimeout(id);
+  }, [offenderQuery]);
+
   // Every analytical tab loads its own data DIRECTLY FROM THE RECORDS the moment it
   // is opened, and keeps it. It used to fill itself by firing a canned English
   // question at the conversational engine and reading the answer's evidence back
@@ -292,10 +302,10 @@ export default function Workspace({
   }, [view, kind, networkSubject, firId]);
 
   const stats = useAnalytics(view === "statistics", "all", () => getStatistics());
-  const topOffenders = useAnalytics(view === "offenders" && !hasOffenderRanking, "all",
-    () => getOffenders({ limit: 20 }));
-  const repeatOffenders = useAnalytics(view === "repeat_offenders" && !hasHabitualRanking, "all",
-    () => getOffenders({ limit: 20, habitual: true }));
+  const topOffenders = useAnalytics(view === "offenders" && !(hasOffenderRanking && !offenderQueryLive),
+    `all:${offenderQueryLive}`, () => getOffenders({ limit: 20, q: offenderQueryLive || null }));
+  const repeatOffenders = useAnalytics(view === "repeat_offenders" && !(hasHabitualRanking && !offenderQueryLive),
+    `all:${offenderQueryLive}`, () => getOffenders({ limit: 20, habitual: true, q: offenderQueryLive || null }));
   const geo = useAnalytics(view === "geography" && !hasGeography, "default",
     () => getHotspots());
   const fc = useAnalytics(view === "forecast" && !hasForecast, "default",
@@ -333,6 +343,7 @@ export default function Workspace({
   let next: { label: string; q: string } | null = null;
   let body: React.ReactNode = null;
   let flush = false;
+  let searchBar: React.ReactNode = null;
 
   if (view === "register") {
     title = t("Case register");
@@ -380,25 +391,46 @@ export default function Workspace({
       && (habitual ? /habitual offender/i.test(e.content) : true));
     title = habitual ? t("Repeat offenders") : t("Most active offenders");
     sub = t("Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.");
-    // A chat answer's ranking wins — it carries the question's own scope ("in
-    // Mandya", "theft") and its citations. Otherwise the tab's own statewide
-    // ranking, loaded directly from the records.
+    // A chat answer's ranking wins when there is one AND nobody is searching — it
+    // carries the question's own scope ("in Mandya", "theft") and its citations.
+    // A search always overrides it: typing a name is an explicit request to look
+    // past whatever ranking is currently on screen, statewide, across everyone in
+    // scope — not just the ranked top page a chat answer or the tab's own default
+    // view shows.
     const loaded = habitual ? repeatOffenders : topOffenders;
     const direct = loaded.data?.offenders ?? [];
-    const n = rows.length || direct.length;
+    const searching = offenderQueryLive.length > 0;
+    const useDirect = searching || !rows.length;
+    const n = useDirect ? direct.length : rows.length;
+    searchBar = (
+      <input
+        className="offender-search"
+        type="search"
+        value={offenderQuery}
+        onChange={(e) => setOffenderQuery(e.target.value)}
+        placeholder={t("Search every offender in your scope by name…")}
+        aria-label={t("Search offenders by name")}
+      />
+    );
     if (n) {
       lead = { headline: plural(n, "person", "people"),
-        measure: t("Ranked by recorded case count, within your access scope") };
+        measure: searching
+          ? t("Matching “{q}”, within your access scope", { q: offenderQueryLive })
+          : t("Ranked by recorded case count, within your access scope") };
       prov = "record";
-      figs = [{ n: String(n), l: t("ranked") }];
-      body = rows.length
-        ? <OffenderTable items={rows} onAsk={onAsk} />
-        : <OffenderRows rows={direct} onAsk={onAsk} />;
+      figs = [{ n: String(n), l: searching ? t("matched") : t("ranked") }];
+      body = useDirect
+        ? <OffenderRows rows={direct} onAsk={onAsk} />
+        : <OffenderTable items={rows} onAsk={onAsk} />;
       flush = true;
     } else if (loaded.error) {
       body = <Failed error={loaded.error} />;
     } else if (loaded.loading || !loaded.data) {
       body = <Loading label="Counting the cases that name each person…" />;
+    } else if (searching) {
+      body = <Prompt mark="◈" title={t("No offender named “{q}” is on record in your scope", { q: offenderQueryLive })}
+        body={t("The search covers every offender in your access scope, not only the ranked page — this name simply isn't in the records you can see.")}
+        ask={onAsk} question={habitual ? "Who are the repeat offenders in Bengaluru Urban?" : "Who is the most active offender in Bengaluru Urban?"} />;
     } else {
       body = <Prompt mark="◈" title={habitual ? "No repeat offender is on record in your scope" : "No offender ranking is available in your scope"}
         body="Case count is a recorded fact, never a risk score — this never ranks by PageRank or a model output."
@@ -787,6 +819,8 @@ export default function Workspace({
             <div className="analysis-title">{title}</div>
             {sub && <div className="analysis-sub">{sub}</div>}
           </div>
+
+          {searchBar && <div className="analysis-search">{searchBar}</div>}
 
           {lead && (
             <div className="analysis-lead">

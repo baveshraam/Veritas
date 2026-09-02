@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Veritas — alternate UI: command deck</title>
+<style>
+  :root{
+    --n-0:#f1f0ec; --n-1:#fff; --n-2:#f6f7f8; --n-3:#eceff2;
+    --line:#e5e8ec; --line-2:#d2d8df;
+    --t-1:#16202b; --t-2:#41505f; --t-3:#6a7787; --t-4:#97a2ad;
+    --gold:#96701c; --gold-hi:#74560f; --gold-dim:rgba(150,112,28,.11); --gold-line:rgba(150,112,28,.40);
+    --pri:#1f6ed0; --pri-dim:rgba(31,110,208,.09);
+    --ok:#1c7a4c; --ok-dim:rgba(28,122,76,.11);
+    --amber:#9c6410; --amber-dim:rgba(156,100,16,.12);
+    --violet:#574bb0; --violet-dim:rgba(87,75,176,.11);
+    --red:#b8362e; --red-dim:rgba(184,54,46,.10);
+    --r:6px; --r-lg:10px; --shadow:0 8px 24px rgba(20,30,42,.12);
+    --font: -apple-system, "Segoe UI", "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    --font-label: "Segoe UI Semibold", var(--font);
+    --font-rec: "IBM Plex Mono", ui-monospace, Consolas, Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:var(--font);background:var(--n-0);color:var(--t-1);-webkit-font-smoothing:antialiased}
+  .label{font-family:var(--font-label);font-size:9.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;color:var(--t-3)}
+  .meta{font-size:11px;color:var(--t-4)}
+  .banner{padding:9px 20px;background:var(--gold-dim);color:var(--gold-hi);font-size:12.5px;border-bottom:1px solid var(--gold-line)}
+  .banner b{font-weight:700}
+
+  header{display:flex;align-items:center;gap:14px;padding:0 20px;height:52px;background:var(--n-1);border-bottom:1px solid var(--line)}
+  .crest{width:28px;height:28px;border-radius:50%;background:var(--gold-dim);border:1.5px solid var(--gold-line);display:flex;align-items:center;justify-content:center;font-family:var(--font-label);font-size:9.5px;color:var(--gold);font-weight:800}
+  header h1{font-size:14px;margin:0;letter-spacing:.02em}
+  .spacer{flex:1}
+  .rankchip{display:flex;align-items:center;gap:8px;padding:5px 11px;border:1px solid var(--line-2);border-radius:18px;font-size:11.5px}
+  .rankchip b{font-family:var(--font-label);font-weight:700;color:var(--gold)}
+  .rankchip span{color:var(--t-3);font-family:var(--font-rec);font-size:10.5px}
+
+  .deck{
+    display:grid;
+    grid-template-columns: 1.15fr 1fr 1fr;
+    grid-template-rows: 1.35fr 1fr;
+    grid-template-areas:
+      "chat map graph"
+      "chat alerts board";
+    gap:1px;background:var(--line);
+    height:calc(100vh - 52px - 33px);
+  }
+  .panel{background:var(--n-1);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .ph{display:flex;align-items:center;gap:8px;padding:10px 15px;border-bottom:1px solid var(--line)}
+  .ph b{font-size:12.5px;font-weight:600}
+  .ph .tag{margin-left:auto;font-size:10.5px;color:var(--t-4);font-family:var(--font-rec)}
+  .pb{flex:1;overflow-y:auto;padding:13px 15px}
+
+  #chat{grid-area:chat}
+  #map{grid-area:map}
+  #graph{grid-area:graph}
+  #alerts{grid-area:alerts}
+  #board{grid-area:board}
+
+  .turn{margin-bottom:16px}
+  .q{font-size:12px;color:var(--t-3);margin-bottom:6px}
+  .q b{color:var(--t-1);font-weight:600}
+  .finding{font-size:12.5px;line-height:1.6;background:var(--n-0);border:1px solid var(--line);border-radius:var(--r);padding:11px 13px}
+  .cite{font-size:9.5px;font-family:var(--font-rec);color:var(--pri);border:1px solid var(--pri);border-radius:3px;padding:0 3px;margin-left:2px;font-weight:600}
+  .composer{border-top:1px solid var(--line);padding:11px 13px;display:flex;gap:7px}
+  .composer input{flex:1;border:1px solid var(--line-2);border-radius:18px;padding:8px 13px;font-size:12px;font-family:var(--font)}
+  .composer button{border:0;border-radius:18px;padding:8px 15px;font-size:12px;font-weight:600;background:var(--pri);color:#fff;cursor:pointer}
+
+  .map-box,.graph-box{height:100%;min-height:150px;border-radius:var(--r);position:relative;overflow:hidden;border:1px solid var(--line)}
+  .map-box{background:radial-gradient(circle at 35% 30%, rgba(184,54,46,.14), transparent 40%), linear-gradient(135deg,#e4e0d3,#cdd9cd 60%,#b9cdc7)}
+  .graph-box{background:linear-gradient(135deg,#f1e9d4,#e8dcc0)}
+  .dot{position:absolute;width:8px;height:8px;border-radius:50%;border:1.5px solid #fff;box-shadow:0 1px 3px rgba(0,0,0,.25)}
+
+  .alert-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line);font-size:12px}
+  .alert-row .bar{width:3px;align-self:stretch;border-radius:2px}
+  .sev{margin-left:auto;font-family:var(--font-label);font-size:9px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border-radius:10px;padding:2px 8px}
+  .sev.high{background:var(--red-dim);color:var(--red)}
+  .sev.med{background:var(--amber-dim);color:var(--amber)}
+  .sev.ok{background:var(--ok-dim);color:var(--ok)}
+
+  .board-item{font-size:12px;padding:8px 0;border-bottom:1px solid var(--line);display:flex;gap:9px;align-items:flex-start}
+  .k{font-family:var(--font-label);font-size:8.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--t-4);width:44px;flex:0 0 auto;padding-top:2px}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="crest">KSP</div>
+  <h1>VERITAS — Command Deck</h1>
+  <div class="spacer"></div>
+  <div class="rankchip"><b>SP</b><span>Mandya district</span></div>
+</header>
+<div class="banner"><b>Alternate direction B — Command deck.</b> Everything an operator watches stays on screen at once: chat, map, network, live alerts and the case board as five permanent panels — for someone monitoring a district, not holding one conversation.</div>
+
+<div class="deck">
+  <div class="panel" id="chat">
+    <div class="ph"><b>Copilot</b></div>
+    <div class="pb">
+      <div class="turn">
+        <div class="q">You asked · <b>Show me crime hotspots</b></div>
+        <div class="finding">4 hotspots identified across Mandya district<span class="cite">1</span><span class="cite">2</span>. Peak density near Maddur.</div>
+      </div>
+      <div class="turn">
+        <div class="q">You asked · <b>Who are the associates of Usha Naika?</b></div>
+        <div class="finding">12 people reached through shared cases<span class="cite">3</span>. Network panel updated →</div>
+      </div>
+    </div>
+    <div class="composer"><input placeholder="Ask a question…" value="Trace this account's transfers"><button>Ask</button></div>
+  </div>
+
+  <div class="panel" id="map">
+    <div class="ph"><b>Geography</b><span class="tag">600 pts · 4 hotspots</span></div>
+    <div class="pb">
+      <div class="map-box">
+        <div class="dot" style="left:28%;top:35%;background:var(--red)"></div>
+        <div class="dot" style="left:52%;top:22%;background:var(--amber)"></div>
+        <div class="dot" style="left:64%;top:58%;background:var(--red)"></div>
+        <div class="dot" style="left:40%;top:68%;background:var(--gold)"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="graph">
+    <div class="ph"><b>Network</b><span class="tag">12 nodes</span></div>
+    <div class="pb">
+      <div class="graph-box">
+        <div class="dot" style="left:48%;top:44%;width:13px;height:13px;background:var(--gold)"></div>
+        <div class="dot" style="left:28%;top:28%;background:var(--pri)"></div>
+        <div class="dot" style="left:68%;top:30%;background:var(--pri)"></div>
+        <div class="dot" style="left:24%;top:64%;background:var(--pri)"></div>
+        <div class="dot" style="left:72%;top:66%;background:var(--pri)"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel" id="alerts">
+    <div class="ph"><b>District alerts</b></div>
+    <div class="pb">
+      <div class="alert-row"><span class="bar" style="background:var(--red)"></span><span>Mandya — case volume spike</span><span class="sev high">High</span></div>
+      <div class="alert-row"><span class="bar" style="background:var(--amber)"></span><span>Maddur — unusual transfer pattern</span><span class="sev med">Medium</span></div>
+      <div class="alert-row"><span class="bar" style="background:var(--ok)"></span><span>Srirangapatna — normal range</span><span class="sev ok">OK</span></div>
+    </div>
+  </div>
+
+  <div class="panel" id="board">
+    <div class="ph"><b>Case board</b><span class="tag">FIR 1003030022024…</span></div>
+    <div class="pb">
+      <div class="board-item"><span class="k">Lead</span><span>Trace account ending 4471 — open</span></div>
+      <div class="board-item"><span class="k">Note</span><span>Witness statement pending re-interview</span></div>
+      <div class="board-item"><span class="k">Pinned</span><span>FIR 1003030022024… — theft, Yadgir</span></div>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>

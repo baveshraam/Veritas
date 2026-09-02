@@ -4,6 +4,8 @@ import Finding from "./Finding";
 import NetworkFinding from "./NetworkFinding";
 import ReasoningTrace from "./ReasoningTrace";
 import Progress from "./Progress";
+import SessionHistory from "./SessionHistory";
+import { attachFile } from "@/lib/api";
 import { summarise } from "@/lib/evidence";
 import { translate, useLang, useT } from "@/lib/i18n";
 import { readNetwork } from "@/lib/network";
@@ -34,7 +36,7 @@ function followUps(focus: SessionFocusView | undefined, t: Turn): string[] {
 }
 
 export default function ChatPane({
-  turns, busy, focus, onSend, onSendAudio, onCite, activeEvidence, onInspect,
+  turns, busy, focus, onSend, onSendAudio, onCite, activeEvidence, onInspect, onLoadSession,
 }: {
   turns: Turn[];
   busy: boolean;
@@ -44,12 +46,19 @@ export default function ChatPane({
   onCite: (evidenceId: string) => void;
   activeEvidence: string | null;
   onInspect: () => void;
+  onLoadSession: (turns: Turn[], sessionId: string) => void;
 }) {
   const t = useT();
   const lang = useLang();
   const [text, setText] = useState("");
   const endRef = useRef<HTMLDivElement>(null);
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+  // Read-only PDF/Word text staged for the NEXT question only — never persisted,
+  // never embedded, never cited: an attachment is context, not a record.
+  const [attachment, setAttachment] = useState<{ filename: string; text: string } | null>(null);
+  const [attaching, setAttaching] = useState(false);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [turns, busy]);
 
@@ -57,7 +66,26 @@ export default function ChatPane({
     const value = (q ?? text).trim();
     if (!value || busy) return;
     if (!q) setText("");
-    onSend(value);
+    const withAttachment = attachment
+      ? `Attached document "${attachment.filename}":\n"""\n${attachment.text}\n"""\n\n${value}`
+      : value;
+    setAttachment(null);
+    onSend(withAttachment);
+  };
+
+  const pickFile = async (file: File | undefined) => {
+    if (!file) return;
+    setAttachError(null);
+    setAttaching(true);
+    try {
+      const r = await attachFile(file);
+      setAttachment({ filename: r.filename, text: r.text });
+    } catch (e: any) {
+      setAttachError(e?.message ?? t("Could not read this file"));
+    } finally {
+      setAttaching(false);
+      if (fileRef.current) fileRef.current.value = "";
+    }
   };
 
   const last = turns[turns.length - 1];
@@ -70,6 +98,7 @@ export default function ChatPane({
           {turns.length > 0 && (
             <span className="meta">{turns.length} {t(turns.length === 1 ? "question" : "questions")}</span>
           )}
+          <SessionHistory onLoad={onLoadSession} />
         </div>
       </div>
 
@@ -183,6 +212,19 @@ export default function ChatPane({
       </div>
 
       <div className="composer">
+        {(attachment || attaching || attachError) && (
+          <div className="meta" style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 6 }}>
+            {attaching && <span>{t("Reading file…")}</span>}
+            {attachment && (
+              <>
+                <span>📎 {attachment.filename}</span>
+                <button className="btn btn-quiet btn-sm" style={{ padding: "0 6px" }}
+                  onClick={() => setAttachment(null)}>{t("Remove")}</button>
+              </>
+            )}
+            {attachError && <span style={{ color: "var(--red)" }}>{attachError}</span>}
+          </div>
+        )}
         <div className="composer-box">
           {/* The question field STAYS while recording. Replacing it with a canvas
               made anything already typed vanish, which is a thing an officer does
@@ -203,6 +245,13 @@ export default function ChatPane({
               globals.css). Nested inside the cluster it overflowed a 390px column
               and pushed the Ask button off the edge of the panel. */}
           <VoiceRecorder onCapture={onSendAudio} disabled={busy} />
+          <input ref={fileRef} type="file" accept=".pdf,.docx" style={{ display: "none" }}
+            onChange={(e) => pickFile(e.target.files?.[0])} />
+          <button className="btn btn-quiet btn-sm" type="button" disabled={busy || attaching}
+            title={t("Attach a PDF or Word document as context")}
+            onClick={() => fileRef.current?.click()}>
+            📎
+          </button>
           <button className="btn btn-sm btn-primary composer-ask" onClick={() => send()}
             disabled={busy || !text.trim()}>
             {busy ? <span className="spinner" style={{ width: 11, height: 11 }} /> : t("Ask")}

@@ -145,7 +145,6 @@ export default function TopBar({
 
       <div className="officer">
         <span className="officer-rank">{officer.role}</span>
-        <span className="officer-name">{officer.name}</span>
         <span className="officer-ps">{officer.badge_no ? `PS ${officer.ps_code}` : t("unverified")}</span>
       </div>
       <button className="btn btn-quiet btn-sm" onClick={onSignOut} title={t("Sign in at another rank")}>

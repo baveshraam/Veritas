@@ -117,7 +117,12 @@ export type Turn = {
   focus?: SessionFocusView;
 };
 
-export type Officer = { badge_no: string; name: string; role: string; ps_code: string };
+// No personal name — the console identifies an officer by rank and station only.
+export type Officer = { badge_no: string; role: string; ps_code: string };
+
+/** One entry in the pooled chat-history list — GET /sessions. Pooled by
+ *  rank+station, never by individual officer (see lib/types.ts's Officer). */
+export type SessionSummary = { session_id: string; updated_at: string; label: string };
 
 export type CopilotBrief = {
   fir_id: string;

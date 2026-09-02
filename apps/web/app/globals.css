@@ -182,6 +182,7 @@ body {
   color: var(--t-1);
   font-family: var(--font-body);
   font-size: 14px;
+  font-weight: 500;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -228,7 +229,7 @@ body {
 
 .workbench {
   display: grid;
-  grid-template-columns: minmax(330px, 25%) minmax(0, 1fr) minmax(300px, 22%);
+  grid-template-columns: minmax(380px, 32%) minmax(0, 1fr) minmax(280px, 18%);
   min-height: 0;
   border-top: 1px solid var(--line);
   transition: grid-template-columns 260ms var(--ease);
@@ -237,7 +238,7 @@ body {
  * keeps a narrow strip — enough to say what it is for and to stay in the same
  * place once a source arrives — instead of spending a fifth of the workstation
  * on the words "no sources yet". */
-.workbench.lean { grid-template-columns: minmax(330px, 26%) minmax(0, 1fr) 210px; }
+.workbench.lean { grid-template-columns: minmax(380px, 33%) minmax(0, 1fr) 210px; }
 
 .col {
   display: flex;
@@ -282,13 +283,13 @@ body {
 .col-body::-webkit-scrollbar-thumb:hover, .scroll::-webkit-scrollbar-thumb:hover { background: var(--line-3); background-clip: content-box; }
 
 @media (max-width: 1400px) {
-  .workbench { grid-template-columns: 320px minmax(0, 1fr) 300px; }
-  .workbench.lean { grid-template-columns: 320px minmax(0, 1fr) 190px; }
+  .workbench { grid-template-columns: 380px minmax(0, 1fr) 260px; }
+  .workbench.lean { grid-template-columns: 380px minmax(0, 1fr) 190px; }
 }
 @media (max-width: 1180px) {
   /* Evidence becomes contextual — reachable through the inspector, which is a
    * full overlay at this width. The workspace keeps the room. */
-  .workbench, .workbench.lean { grid-template-columns: 310px minmax(0, 1fr); }
+  .workbench, .workbench.lean { grid-template-columns: 360px minmax(0, 1fr); }
   .col-evidence { display: none; }
 }
 @media (max-width: 860px) {
@@ -389,9 +390,8 @@ body {
   letter-spacing: 0.07em;
   color: var(--gold);
 }
-.officer-name { font-size: 12.5px; color: var(--t-2); white-space: nowrap; }
 .officer-ps { font-family: var(--font-rec); font-size: 10.5px; color: var(--t-4); }
-@media (max-width: 1240px) { .officer-name, .officer-ps { display: none; } }
+@media (max-width: 1240px) { .officer-ps { display: none; } }
 
 /* System state: a dot, and the diagnostics only on demand. The record counts
  * are admin facts, not investigator context — they do not get the top bar's
@@ -465,7 +465,7 @@ body {
   padding: 11px 14px 9px;
 }
 
-.inv-crest { height: 52px; width: auto; object-fit: contain; flex: 0 0 auto; }
+.inv-crest { height: 72px; width: auto; object-fit: contain; flex: 0 0 auto; }
 .inv-id { min-width: 0; flex: 0 1 auto; }
 .inv-kicker {
   display: flex; align-items: center; gap: 7px;
@@ -608,6 +608,7 @@ body {
   color: var(--t-2);
   font: inherit;
   font-size: 12.5px;
+  font-weight: 700;
   cursor: pointer;
   white-space: nowrap;
   transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease), color var(--dur) var(--ease);
@@ -628,6 +629,21 @@ body {
 .btn-quiet:hover:not(:disabled) { background: var(--n-2); border-color: var(--line-2); }
 
 .btn-sm { height: 24px; padding: 0 8px; font-size: 11.5px; }
+
+/* History — the pooled rank+station chat log. A quiet button here reads as
+ * decoration and gets skipped; this is a real navigation feature, so it gets
+ * a translucent identity-accent block (the same ochre used for identity
+ * elsewhere) rather than blending into the rest of the header row. */
+.history-trigger {
+  background: var(--gold-dim);
+  border-color: var(--gold-line);
+  color: var(--gold-hi);
+}
+.history-trigger:hover:not(:disabled) {
+  background: var(--gold-line);
+  border-color: var(--gold);
+  color: var(--gold-hi);
+}
 .btn-danger:hover:not(:disabled) { color: var(--red); border-color: var(--red-dim); background: var(--red-dim); }
 
 /* Segmented control — language, and any other two/three-way switch. */
@@ -1399,6 +1415,21 @@ body {
 .analysis-title { font-size: 15px; font-weight: 600; color: var(--t-1); line-height: 1.25; }
 .analysis-sub { font-size: 12.5px; color: var(--t-3); margin-top: 3px; line-height: 1.45; }
 
+.analysis-search { flex: 0 0 240px; }
+.offender-search {
+  width: 100%;
+  font-family: var(--font-body);
+  font-size: 12.5px;
+  padding: 7px 12px;
+  border: 1px solid var(--line-2);
+  border-radius: 16px;
+  background: var(--n-2);
+  color: var(--t-1);
+  outline: none;
+}
+.offender-search::placeholder { color: var(--t-4); }
+.offender-search:focus { border-color: var(--gold-line); background: var(--n-1); }
+
 .analysis-lead {
   flex: 0 0 auto;
   padding-left: 22px;
@@ -2007,7 +2038,7 @@ body {
   overflow: hidden;
 }
 .gate-head { padding: 26px 26px 20px; border-bottom: 1px solid var(--line); }
-.gate-crest { height: 40px; width: auto; object-fit: contain; display: block; margin-bottom: 12px; }
+.gate-crest { height: 64px; width: auto; object-fit: contain; display: block; margin-bottom: 12px; }
 .gate-head .mark-name { font-size: 21px; }
 .gate-head .mark-name::after { width: 46px; }
 .gate-tag {

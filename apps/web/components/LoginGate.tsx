@@ -110,7 +110,7 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
    *  API answered at another. Unverified has to mean unauthenticated. */
   const enterUnverified = (role: string) => {
     setToken(null);
-    onIn({ badge_no: "", name: "Demonstration", role, ps_code: "N/A" } as Officer);
+    onIn({ badge_no: "", role, ps_code: "N/A" } as Officer);
   };
 
   const signIn = useCallback(async (o: Officer) => {
@@ -174,7 +174,6 @@ export default function LoginGate({ onIn }: { onIn: (o: Officer) => void }) {
               disabled={busy !== null}>
               <span className="officer-rank">{roleLabel(o.role)}</span>
               <span className="who">
-                {o.name}
                 <span className="who-note">{ROLE_NOTE[o.role] ?? "Scoped access"}</span>
               </span>
               <span className="ps">
