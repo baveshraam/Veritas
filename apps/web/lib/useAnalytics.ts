@@ -18,38 +18,59 @@ import { useEffect, useRef, useState } from "react";
  *  keeps the request from firing at all until the officer actually opens the tab —
  *  every one of these is a real scan of the case set, and loading seven of them on
  *  sign-in to show one would be paying for six nobody asked for.
+ *
+ *  THE PART THAT IS EASY TO GET WRONG, and which this got wrong first: there is no
+ *  cleanup that cancels the in-flight request. The obvious `let live = true; return
+ *  () => { live = false; }` reintroduces the exact bug this hook exists to remove.
+ *  `enabled` flips to false the moment the officer clicks another tab, which re-runs
+ *  the effect and fires that cleanup — so the response, when it arrives, is thrown
+ *  away, while the "already started" marker stays set and blocks any re-fetch. The
+ *  tab then spins forever on every later visit. Found live on Forecast, whose Prophet
+ *  fit is slow enough to still be in flight when someone clicks away.
+ *
+ *  A result is therefore accepted whenever it still matches the key that asked for
+ *  it. That is the condition that actually matters — a stale ANSWER is one for a
+ *  scope nobody is looking at any more, not one that arrived while the officer was
+ *  glancing at another tab. The hook lives in Workspace, which stays mounted across
+ *  tab changes, so there is no unmounted-setState hazard here either.
  */
 export function useAnalytics<T>(enabled: boolean, key: string, load: () => Promise<T>) {
-  const [data, setData] = useState<T | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [state, setState] = useState<{ key: string; data: T | null; error: string | null }>(
+    { key: "", data: null, error: null },
+  );
   const [loading, setLoading] = useState(false);
-  // The key we have already started loading. A ref, not state: putting it in the
-  // dependency array would re-run this effect the moment the fetch starts, and the
-  // cleanup from that re-run would discard the response that was already in flight.
-  const loaded = useRef("");
+  // The key we have already STARTED loading — a ref, not state, because putting it in
+  // the dependency array would re-run this effect the moment the fetch begins.
+  const started = useRef("");
   const loadRef = useRef(load);
   loadRef.current = load;
 
   useEffect(() => {
-    if (!enabled || loaded.current === key) return;
-    loaded.current = key;
-    let live = true;
-    setData(null);
-    setError(null);
+    if (!enabled || started.current === key) return;
+    started.current = key;
     setLoading(true);
     loadRef.current()
-      .then((d) => { if (live) { setData(d); setLoading(false); } })
-      .catch((e) => {
-        if (!live) return;
-        setError(e?.message ?? "This analysis could not be loaded");
+      .then((d) => {
+        if (started.current !== key) return;   // the scope moved on; this answer is stale
+        setState({ key, data: d, error: null });
         setLoading(false);
-        // Clear the marker so revisiting the tab retries rather than showing the
-        // same failure forever — a transient 401 during token refresh should not
+      })
+      .catch((e) => {
+        if (started.current !== key) return;
+        setState({ key, data: null, error: e?.message ?? "This analysis could not be loaded" });
+        setLoading(false);
+        // Clear the marker so revisiting the tab retries rather than showing the same
+        // failure forever — a transient 401 during token refresh should not
         // permanently blank a view.
-        loaded.current = "";
+        started.current = "";
       });
-    return () => { live = false; };
   }, [enabled, key]);
 
-  return { data, error, loading };
+  // Only ever hand back data that belongs to the key being asked about now.
+  const fresh = state.key === key;
+  return {
+    data: fresh ? state.data : null,
+    error: fresh ? state.error : null,
+    loading: loading && !fresh,
+  };
 }

@@ -14,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 741 green, 2 skipped (`python -m pytest` prints the current
+- **Tests**: `python -m pytest` — 802 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -1742,3 +1742,98 @@ volume justifies the training cost.
     small JSON number yet corrupts a scientific-notation string was established with
     high confidence from the pattern across every case checked, not from Zoho's own
     source or documentation.
+
+- **v23 (the analytical tabs stop asking a question to fill themselves) — every
+  workspace tab preloads from the records, Statistics becomes a real dashboard, and
+  three defects the pass found by driving it rather than reading it.**
+  - **A tab was filling itself by firing a canned English question at the
+    orchestrator.** `Workspace.tsx` held an `AUTO_ASK` table — "Show me crime
+    hotspots", "What is the conviction rate?" — pushed through `/chat` as a silent
+    turn. That is the right mechanism for a QUESTION and the wrong one for a TAB,
+    and it was wrong three ways at once: a turn's evidence is the LAST turn's
+    evidence, so opening a second tab destroyed the first one's contents, and the
+    `autoFired` guard that stopped the preload re-firing then left the revisited tab
+    loading forever; the preload appeared in the officer's own transcript and
+    evidence column, so the console showed questions nobody had asked and citations
+    for them; and an intent classification, a retrieval pass and a CRAG evaluation
+    are real work, none of which is needed to answer "count these rows".
+  - **`GET /analytics/*`** (new router, 8 endpoints) calls exactly the same
+    policy-scoped functions the corresponding orchestrator handlers call —
+    `ranked_offenders`, `status_breakdown`, `counts_by`, `district_socioeconomic`,
+    `flagged_transactions`, `station_workload`, `community_case_profile`,
+    `fir_points`, `gds.community_members`, `prediction_agent.hotspots/forecast` — and
+    returns the STRUCTURED rows instead of sentences built from them. No new query
+    logic and no widened scope: RBAC is the officer's own role and station passed
+    into those same functions, so the filter stays inside the query exactly as it is
+    for `/chat`. Verified live at IO rank (81 cases, 1 district, 1 station, masked
+    names) and 401 unauthenticated on all eight.
+  - **The conversational path is untouched and still WINS.** Where a chat answer has
+    produced a view's result — with its own scope, citations and refusals — that is
+    what renders; the fetched data is only the default the tab opens on. On
+    Statistics the two are shown APART ("From your last question" above the
+    dashboard) rather than merged, because the answer is usually district-scoped and
+    the dashboard is statewide, and silently combining them would caption one scope's
+    number with another's.
+  - **Statistics is an actual analytics dashboard** (`viz/StatsDashboard.tsx`): five
+    KPI tiles, 36 months of case volume, a status donut, and ranked offence /
+    district / station bars — all from ONE scan (`sql_agent.dashboard`, five
+    groupings of the same rows rather than five scans of them, 0.28s over 10,000
+    cases). Every figure is a count of records; the conviction rate prints its own
+    denominator beside it. Colour is the neutral analytical blue, not the severity
+    ramp — a tall bar means "more cases recorded", which is not the claim "more
+    dangerous". Area Profile, Community, Watchlist and Workload get structured
+    renderings for the same reason a ranked list read out one sentence at a time is
+    a list an officer scrolls past.
+  - **`/jobs/refresh` rebuilt four INDEPENDENT derived layers inside ONE try/except**,
+    so the first raise silently skipped everything after it. `publish_graph()` is step
+    two and writes to Stratus, whose bucket creation is scope-blocked on this org (§2,
+    `OAUTH_SCOPE_MISMATCH`) — so a blocked CACHE publish was able to cancel the AML
+    detector sweep, a RECORD-layer rebuild. Each step now runs in its own try and
+    names itself when it fails. Found live; the failing test was confirmed to fail
+    against the pre-fix code first.
+  - **`sync=true` added to `/jobs/refresh`**, the same escape hatch
+    `/jobs/audit-verify` already carries (BUG-027). Not a convenience: AppSail exposes
+    bundle-creator logs and **no runtime logs**, so a step failing inside a background
+    thread is invisible from outside and `{"status":"started"}` is all a caller ever
+    learns. Diagnosing a background job through a log nobody can read is not
+    diagnosis. Cron must never use it — the recompute takes minutes and the gateway
+    kills the request long before that, which this pass also confirmed live.
+  - **`useAnalytics` reintroduced the exact bug it was written to remove, and a live
+    session caught it.** The obvious `let live = true; return () => { live = false }`
+    cleanup is wrong here: `enabled` flips false the moment the officer clicks another
+    tab, which re-runs the effect and fires that cleanup — so the response is thrown
+    away while the "already started" marker stays set and blocks any re-fetch. The tab
+    then spins forever on every later visit. Reproduced deterministically (open
+    Forecast, leave after 500ms, return) and A/B'd: old hook still spinning after 50s,
+    new hook "≈74 cases projected" with a rendered chart. A result is now accepted
+    whenever it still matches the key that asked for it — a stale ANSWER is one for a
+    scope nobody is looking at, not one that arrived while the officer glanced away.
+  - **Also fixed**: an influence/caseload meter's fill had `flex: 1 1 auto`, which
+    silently won over its own percentage width, so every row rendered the same length
+    and the ranking the column exists to show disappeared; "1 police stations"; and a
+    "top 10" caption on a chart with one row in it — both visible on an IO's own
+    dashboard.
+  - **The live Financial Watchlist is empty, and that is correct.** The detectors run
+    and are reachable live (`AML Detectors (structuring + GNN): 0 flag(s)` in a real
+    trace, beside `Graph Agent (money trail): 60 transfer path(s)` — so the financial
+    layer is populated); the live transaction set simply contains none of the
+    structuring patterns the local dataset has. The UI states it as a checked absence,
+    not a failed search. Not regenerated: manufacturing flags on a live dataset to
+    make a tab look busier is exactly the casual regeneration this project's rules
+    exclude.
+  - **One operational rule learned the hard way**: the console and the API are ONE
+    deploy when a new endpoint is involved. The console is a static export that calls
+    the live API by absolute URL, so shipping it first put 8 of 15 tabs into a 404
+    state on production until it was rebuilt from the previous commit and redeployed.
+    API first, confirm the route answers, then console.
+  - **Deployed and live-verified**: API deployments `52852000000392006` /
+    `52852000000390017`, console via `scripts/deploy-console.sh`. All eight routes
+    answer live; all nine tabs preload with **zero turns in the copilot transcript**;
+    a typed question still overrides (`hotspots in Mandya` → 263 cases, 4 hotspots,
+    real citations) and `Who are the associates of Usha Naika?` renders the 40-node
+    graph with distinct names and 12 citations.
+  - **Test suite: 802 passed, 2 skipped** (32 new — 6 pinning that the dashboard's
+    five breakdowns all sum to the same total it reports, 20 pinning that every
+    analytics endpoint is authenticated and rank-scoped, 6 on refresh-step isolation).
+    `npx tsc --noEmit` clean. Screenshots:
+    `docs/screenshots/2026-09-02-preloaded-analytics/`.
