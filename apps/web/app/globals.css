@@ -2191,3 +2191,171 @@ body {
   }
   .thread-path { stroke-dashoffset: 0; }
 }
+
+/* ═══ Analytical tabs — loaded directly from the records ═══════════════════
+ *
+ * These surfaces replaced a column of full English sentences. A ranked list read
+ * out one sentence at a time is a list an officer scrolls past: the value being
+ * compared is buried mid-clause, in a different place in every row. Same facts,
+ * same policy-scoped queries, in the shape the comparison actually needs.
+ *
+ * Everything here uses the console's existing vocabulary — the .off-row grid
+ * language, the .prov-* provenance rails, the .pill scale — rather than a second
+ * design for the same job. */
+
+/* ── Statistics dashboard ───────────────────────────────────────────────── */
+.stat-scroll { height: 100%; overflow-y: auto; }
+.stat-dash { padding: 14px 16px 22px; }
+
+.stat-answer {
+  margin: 0 0 16px;
+  border: 1px solid var(--gold-line);
+  border-radius: var(--r);
+  background: var(--gold-dim);
+  overflow: hidden;
+}
+.stat-answer-h {
+  padding: 7px 12px;
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+  color: var(--gold-hi);
+  border-bottom: 1px solid var(--gold-line);
+}
+
+.stat-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(158px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.stat-tile {
+  padding: 12px 14px;
+  background: var(--n-1);
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--line-2);
+  border-radius: var(--r);
+}
+.stat-tile-pri   { border-left-color: var(--pri); }
+.stat-tile-ok    { border-left-color: var(--ok); }
+.stat-tile-amber { border-left-color: var(--amber); }
+.stat-tile-n {
+  font-family: var(--font-rec);
+  font-size: 25px; font-weight: 600; color: var(--t-1); line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+}
+.stat-tile-l {
+  margin-top: 5px;
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--t-2);
+}
+.stat-tile-s { margin-top: 3px; font-size: 11px; color: var(--t-4); line-height: 1.35; }
+
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 10px;
+}
+.stat-panel {
+  background: var(--n-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 11px 12px 6px;
+  min-width: 0;
+}
+.stat-panel-h {
+  display: flex; align-items: baseline; gap: 8px;
+  margin-bottom: 4px;
+}
+.stat-panel-t { font-size: 12.5px; font-weight: 600; color: var(--t-1); }
+.stat-panel-n { font-size: 10.5px; color: var(--t-4); margin-left: auto; }
+.stat-asks { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 0 2px; }
+.stat-foot { font-size: 11px; color: var(--t-3); line-height: 1.5; padding: 8px 0 8px; }
+
+/* ── Area / Community / Watchlist / Workload ────────────────────────────── */
+.an-body { height: 100%; overflow-y: auto; padding: 14px 16px 20px; }
+.an-cols {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+.an-block {
+  background: var(--n-1);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 12px 14px 14px;
+  min-width: 0;
+}
+.an-h {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 0 10px;
+  font-size: 12.5px; font-weight: 600; color: var(--t-1);
+}
+.an-note {
+  margin: 10px 0 0;
+  font-size: 11.5px; color: var(--t-3); line-height: 1.5;
+}
+.an-lead { margin: 0 0 12px; }
+.an-acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+
+/* A bar per category. The track is what makes the comparison instant — a column
+ * of bare numbers is a table you have to read rather than a shape you can see. */
+.an-bars { display: flex; flex-direction: column; gap: 6px; }
+.an-bar {
+  display: grid;
+  grid-template-columns: minmax(96px, 1.1fr) minmax(60px, 2fr) 46px;
+  align-items: center; gap: 10px;
+}
+.an-bar-l { font-size: 12px; color: var(--t-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-bar-t { height: 7px; border-radius: 4px; background: var(--n-3); overflow: hidden; }
+.an-bar-t i { display: block; height: 100%; background: var(--pri); border-radius: 4px; }
+.an-bar-n { font-size: 12px; color: var(--t-2); text-align: right; font-variant-numeric: tabular-nums; }
+
+.an-dl { margin: 0; display: flex; flex-direction: column; }
+.an-dl-row {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+  padding: 6px 0; border-bottom: 1px solid var(--line);
+}
+.an-dl-row:last-child { border-bottom: 0; }
+.an-dl dt { font-size: 12px; color: var(--t-3); }
+.an-dl dd { margin: 0; font-size: 13px; color: var(--t-1); font-variant-numeric: tabular-nums; }
+
+.an-table { border: 1px solid var(--line); border-radius: var(--r); background: var(--n-1); overflow: hidden; }
+.an-row {
+  display: grid; align-items: center; gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px; color: var(--t-2);
+}
+.an-row:last-child { border-bottom: 0; }
+.an-head {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--t-4); background: var(--n-2);
+  border-bottom: 1px solid var(--line-2);
+}
+.an-table .an-row:not(.an-head):hover { background: var(--n-2); }
+.an-table-comm  .an-row { grid-template-columns: 28px minmax(140px, 1.3fr) minmax(120px, 1fr) 74px; }
+.an-table-watch .an-row { grid-template-columns: 74px minmax(120px, 1.1fr) 104px minmax(90px, 1fr) 128px 62px 66px; }
+.an-table-work  .an-row { grid-template-columns: 28px minmax(150px, 1.4fr) minmax(110px, 1fr) 84px 108px 74px; }
+.an-rank {
+  display: grid; place-items: center;
+  width: 20px; height: 20px; border-radius: 4px;
+  background: var(--n-3); color: var(--t-3);
+  font-family: var(--font-rec); font-size: 10.5px;
+}
+.an-who { min-width: 0; }
+.an-name { font-size: 13px; font-weight: 500; color: var(--t-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.an-sub { font-size: 10.5px; color: var(--t-4); }
+.an-meter { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* The fill needs a TRACK to be a percentage of. Without one it is a flex child
+ * and `flex: 1 1 auto` silently wins over its own width, so every row renders
+ * the same length and the ranking the column exists to show disappears. */
+.an-meter .an-bar-t { flex: 1 1 auto; min-width: 30px; }
+.an-meter .an-bar-t i { min-width: 3px; }
+.an-meter b { font-weight: 500; font-size: 11.5px; color: var(--t-3); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 1240px) {
+  .an-table-watch .an-row { grid-template-columns: 74px minmax(0, 1fr) 104px 128px 62px; }
+  .an-table-watch .an-row > :nth-child(4), .an-table-watch .an-row > :last-child { display: none; }
+  .an-table-work .an-row { grid-template-columns: 28px minmax(0, 1fr) 108px; }
+  .an-table-work .an-row > :nth-child(3), .an-table-work .an-row > :nth-child(4),
+  .an-table-work .an-row > :last-child { display: none; }
+}

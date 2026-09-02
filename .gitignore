@@ -61,3 +61,4 @@ self_client.json
 docs/*.html
 !docs/VERITAS_STATUS.html
 !docs/PHASE1_TRUTH_TABLE.html
+.playwright-mcp/

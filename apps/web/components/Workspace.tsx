@@ -5,7 +5,13 @@ import CaseExplorer from "./CaseExplorer";
 import CaseOverview from "./CaseOverview";
 import PersonOverview from "./PersonOverview";
 import Board from "./Board";
-import { getCaseTimeline, getFir } from "@/lib/api";
+import {
+  getAreaProfile, getCaseTimeline, getCommunity, getFir, getForecastSeries, getHotspots,
+  getOffenders, getStatistics, getWatchlist, getWorkload,
+} from "@/lib/api";
+import type { OffenderRow as ApiOffenderRow } from "@/lib/api";
+import { AreaView, CommunityView, WatchlistView, WorkloadView } from "./AnalyticsViews";
+import { useAnalytics } from "@/lib/useAnalytics";
 import { PROV_LABEL, provenanceOf } from "@/lib/evidence";
 import { useT } from "@/lib/i18n";
 import { densityReading, forecastReading, plural, rupees, type Reading } from "@/lib/metrics";
@@ -94,11 +100,53 @@ function OffenderTable({ items, onAsk }: { items: EvidenceItem[]; onAsk: (q: str
   );
 }
 
+/** The same ranking table as `OffenderTable`, but fed the STRUCTURED rows the
+ *  /analytics endpoint returns rather than the sentences a chat answer produces.
+ *
+ *  Two renderers rather than one because the two paths genuinely carry different
+ *  things: a chat answer's rows are evidence items with citation ids the console
+ *  threads back to the copilot, and the tab's own rows are plain records with no
+ *  turn behind them. Parsing the structured rows back into sentences so one
+ *  component could take both would be inventing prose to throw it away again.
+ *  Every column is still a recorded fact — case count, habitual flag, community —
+ *  and none of them is a risk score. */
+function OffenderRows({ rows, onAsk }: { rows: ApiOffenderRow[]; onAsk: (q: string) => void }) {
+  const t = useT();
+  return (
+    <div className="off-table">
+      <div className="off-row off-head" aria-hidden>
+        <span>#</span><span>{t("Offender")}</span><span>{t("Recorded as")}</span><span>{t("Community")}</span><span>{t("Cases")}</span><span />
+      </div>
+      <div className="off-body">
+        {rows.map((r, i) => (
+          <div key={r.person_id} className="off-row">
+            <span className="off-rank">{i + 1}</span>
+            <div className="off-who">
+              <div className="off-name">{r.name}</div>
+              <div className="off-id mono">{t("Person {id}", { id: r.person_id })}</div>
+            </div>
+            <div className="off-badges">
+              <span className="pill pill-red">{t("Accused")}</span>
+              {r.habitual && <span className="pill pill-amber">{t("Habitual")}</span>}
+            </div>
+            <span className="off-community">{r.community !== null ? t("Community {n}", { n: r.community }) : "—"}</span>
+            <span className="off-cases mono">{r.cases}</span>
+            <button className="btn btn-sm off-ask" onClick={() => onAsk(`Does ${r.name} have priors?`)}>
+              {t("Priors")}
+            </button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // Charts and MapLibre touch window/canvas — keep them out of the server bundle.
 const NetworkView = dynamic(() => import("./viz/NetworkView"), { ssr: false });
 const SankeyView = dynamic(() => import("./viz/SankeyView"), { ssr: false });
 const TrendView = dynamic(() => import("./viz/TrendView"), { ssr: false });
 const MapView = dynamic(() => import("./viz/MapView"), { ssr: false });
+const StatsDashboard = dynamic(() => import("./viz/StatsDashboard"), { ssr: false });
 const TimelineView = dynamic(() => import("./viz/TimelineView"), { ssr: false });
 
 /** A view that has nothing loaded yet. Never a dead end: it says what the view
@@ -119,6 +167,27 @@ function Prompt({
       {question && (
         <button className="btn" onClick={() => ask(question)}>{t(question)}</button>
       )}
+    </div>
+  );
+}
+
+/** What a directly-loaded tab shows while its own request is in flight, or when that
+ *  request failed. A failure has to say so: a view that silently keeps showing
+ *  "Loading…" is indistinguishable from a view whose data is genuinely empty, and an
+ *  officer cannot tell which one they are looking at. */
+function Loading({ label }: { label: string }) {
+  const t = useT();
+  return <div className="empty"><span className="spinner" /><p>{t(label)}</p></div>;
+}
+
+function Failed({ error, retryHint }: { error: string; retryHint?: string }) {
+  const t = useT();
+  return (
+    <div className="empty">
+      <span className="empty-mark" aria-hidden>⚠</span>
+      <h3>{t("This analysis could not be loaded")}</h3>
+      <p>{error}</p>
+      {retryHint && <p className="an-note">{t(retryHint)}</p>}
     </div>
   );
 }
@@ -167,68 +236,82 @@ export default function Workspace({
   const [showRegister, setShowRegister] = useState(false);
   useEffect(() => { setShowRegister(false); }, [firId, focus?.person?.person_id]);
 
-  // Offenders / Repeat Offenders / Statistics / Geography / Forecast are
-  // database-wide readouts, not a per-turn answer — an officer opening the tab
-  // shouldn't have to know a phrasing to ask for it. Auto-fires a canned
-  // question via onPreload — never onAsk, whose completion pulls the
-  // workspace to whatever view the ANSWER belongs in. A background preload
-  // firing that would snap an officer back to this tab after they had already
-  // clicked away is exactly the "stuck page" bug: every tab click looked like
-  // it did nothing, because a few seconds later the still-running preload
-  // yanked the view back. Keyed by a `fired` string (below) so a tab whose
-  // canned question depends on the open case (Network) can re-fire per case,
-  // while the case-independent tabs fire exactly once per session.
+  // Every analytical tab loads its own data DIRECTLY FROM THE RECORDS the moment it
+  // is opened, and keeps it. It used to fill itself by firing a canned English
+  // question at the conversational engine and reading the answer's evidence back
+  // out, which was wrong three ways at once: a turn's evidence is the LAST turn's
+  // evidence, so opening a second tab wiped the first; the guard that stopped the
+  // preload re-firing then left the revisited tab loading forever; and the officer's
+  // own transcript filled with questions nobody had asked. A tab is not a question.
+  //
+  // The conversational path is untouched and still WINS: where a chat answer has
+  // produced this view's result — with its citations, its scope and its refusals —
+  // that is what renders. The fetched data is the default the tab opens on, not a
+  // replacement for asking.
   const offenderRows = evidence.filter((e) => e.evidence_id.startsWith("offender:"));
   const hasOffenderRanking = offenderRows.length > 0;
   const hasHabitualRanking = offenderRows.some((e) => /habitual offender/i.test(e.content));
-  const hasStats = evidence.some((e) => e.evidence_id.startsWith("stats:"));
-  const hasGeography = evidence.some((e) => e.evidence_id.startsWith("hotspot:")) || kind === "map";
+  const chatStats = evidence.filter((e) => e.evidence_id.startsWith("stats:"));
+  const hasGeography = kind === "map";
   const hasForecast = kind === "trend";
-  const hasWatchlist = evidence.some((e) => e.evidence_id.startsWith("watchlist:"));
-  const hasWorkload = evidence.some((e) => e.evidence_id.startsWith("workload:"));
-  const onPreloadRef = useRef(onPreload);
-  useEffect(() => { onPreloadRef.current = onPreload; }, [onPreload]);
+  const chatArea = evidence.filter((e) => e.evidence_id.startsWith("area:"));
+  const chatCommunity = evidence.filter((e) => e.evidence_id.startsWith("community:"));
+  const chatWatchlist = evidence.filter((e) => e.evidence_id.startsWith("watchlist:"));
+  const chatWorkload = evidence.filter((e) => e.evidence_id.startsWith("workload:")
+    || e.evidence_id.startsWith("stalled:"));
 
-  // Network's own person to ask about: with a case open, that case's lead
-  // accused wins — otherwise a person focus left over from a DIFFERENT
-  // question asked before this case was opened would keep showing on this
-  // tab regardless of which case is now open. Only with no case open does an
-  // explicit person focus (from a person-scoped question) apply. Fetched once
-  // per case.
+  // Network's own person to ask about: with a case open, that case's lead accused
+  // wins — otherwise a person focus left over from a DIFFERENT question asked before
+  // this case was opened would keep showing on this tab regardless of which case is
+  // now open. Only with no case open does an explicit person focus apply. Fetched
+  // once per case.
   const [caseLead, setCaseLead] = useState<string | null>(null);
   useEffect(() => {
     if (!firId) { setCaseLead(null); return; }
     let live = true;
-    getFir(firId).then((f) => live && setCaseLead(f.accused?.[0]?.AccusedName ?? null)).catch(() => live && setCaseLead(null));
+    getFir(firId).then((f) => live && setCaseLead(f.accused?.[0]?.AccusedName ?? null))
+      .catch(() => live && setCaseLead(null));
     return () => { live = false; };
   }, [firId]);
   const networkSubject = firId ? (caseLead ?? person) : person;
 
-  const autoFired = useRef<Set<string>>(new Set());
+  // Network is the one analytical tab that stays on the conversational path: it is a
+  // subject-scoped graph traversal with real citations and a policy depth cap, not a
+  // readout of the case set, and there is nothing to show until a subject exists.
+  // `onPreload` (never `onAsk`) so its completion cannot yank the workspace back here
+  // after the officer has clicked away.
+  const onPreloadRef = useRef(onPreload);
+  onPreloadRef.current = onPreload;
+  const netFired = useRef("");
   useEffect(() => {
-    const AUTO_ASK: Partial<Record<WorkspaceView, { q: string; already: boolean; fired: string }>> = {
-      offenders: { q: "Who are the top 20 most active offenders?", already: hasOffenderRanking, fired: "offenders" },
-      // Loading first must not stop Repeat Offenders from ever auto-firing its
-      // own (habitual-filtered) query.
-      repeat_offenders: { q: "Who are the top 20 repeat offenders?", already: hasHabitualRanking, fired: "repeat_offenders" },
-      statistics: { q: "What is the conviction rate?", already: hasStats, fired: "statistics" },
-      geography: { q: "Show me crime hotspots", already: hasGeography, fired: "geography" },
-      forecast: { q: "Forecast crime for the next 30 days", already: hasForecast, fired: "forecast" },
-      watchlist: { q: "Show me the financial watchlist", already: hasWatchlist, fired: "watchlist" },
-      workload: { q: "Which stations are falling behind?", already: hasWorkload, fired: "workload" },
-      ...(networkSubject ? { network: {
-        q: `Who are the associates of ${networkSubject}?`,
-        already: kind === "network",
-        fired: `network:${firId ?? networkSubject}`,
-      } } : {}),
-    };
-    const entry = AUTO_ASK[view];
-    if (entry && !entry.already && !autoFired.current.has(entry.fired)) {
-      autoFired.current.add(entry.fired);
-      onPreloadRef.current(entry.q);
-    }
-  }, [view, hasOffenderRanking, hasHabitualRanking, hasStats, hasGeography, hasForecast,
-      hasWatchlist, hasWorkload, networkSubject, firId]);
+    if (view !== "network" || kind === "network" || !networkSubject) return;
+    const key = firId ?? networkSubject;
+    if (netFired.current === key) return;
+    netFired.current = key;
+    onPreloadRef.current(`Who are the associates of ${networkSubject}?`);
+  }, [view, kind, networkSubject, firId]);
+
+  const stats = useAnalytics(view === "statistics", "all", () => getStatistics());
+  const topOffenders = useAnalytics(view === "offenders" && !hasOffenderRanking, "all",
+    () => getOffenders({ limit: 20 }));
+  const repeatOffenders = useAnalytics(view === "repeat_offenders" && !hasHabitualRanking, "all",
+    () => getOffenders({ limit: 20, habitual: true }));
+  const geo = useAnalytics(view === "geography" && !hasGeography, "default",
+    () => getHotspots());
+  const fc = useAnalytics(view === "forecast" && !hasForecast, "default",
+    () => getForecastSeries());
+  const area = useAnalytics(view === "area" && !chatArea.length, "default",
+    () => getAreaProfile());
+  // Keyed on the person in focus: opening this tab while investigating someone should
+  // show THEIR community, and it must re-fetch when the subject changes.
+  const community = useAnalytics(view === "community" && !chatCommunity.length,
+    focus?.person?.person_id ?? "default",
+    () => getCommunity({ personId: focus?.person?.person_id ?? null }));
+  const watch = useAnalytics(view === "watchlist" && !chatWatchlist.length, "all",
+    () => getWatchlist(50));
+  const work = useAnalytics(view === "workload" && !chatWorkload.length, "all",
+    () => getWorkload());
+
 
   const [caseTl, setCaseTl] = useState<TimelineResult | null>(null);
   const [tlError, setTlError] = useState<string | null>(null);
@@ -269,11 +352,25 @@ export default function Workspace({
       figs = [{ n: String(f.days), l: t("days ahead") }];
       next = { label: t("Where are these concentrated?"), q: "Show me crime hotspots" };
       body = <TrendView data={d} />;
+    } else if (fc.data?.series?.length) {
+      // Loaded straight from the records (GET /analytics/forecast) — same Prophet +
+      // MinT call the FORECAST intent makes, without needing a question first.
+      const s: [string, number, number, number][] = fc.data.series;
+      const f = forecastReading(s);
+      title = t("{days}-day outlook", { days: f.days });
+      sub = fc.data.district
+        ? t("{d} — projected case volume, with the daily range the model considers likely.", { d: fc.data.district })
+        : t("Projected case volume, with the daily range the model considers likely.");
+      lead = f;
+      prov = "model";
+      figs = [{ n: String(f.days), l: t("days ahead") }];
+      next = { label: t("Where are these concentrated?"), q: "Show me crime hotspots" };
+      body = <TrendView data={{ series: s }} />;
     } else {
-      // Auto-preload (above) already asks for the statewide 30-day forecast
-      // the instant this tab opens.
       title = t("Forecast");
-      body = <Prompt mark="◷" title="Loading forecast…" body="" ask={onAsk} question={null} />;
+      body = fc.error
+        ? <Failed error={fc.error} />
+        : <Loading label="Fitting the forecast to the recorded case history…" />;
     }
   }
 
@@ -283,15 +380,27 @@ export default function Workspace({
       && (habitual ? /habitual offender/i.test(e.content) : true));
     title = habitual ? t("Repeat offenders") : t("Most active offenders");
     sub = t("Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.");
-    if (rows.length) {
-      lead = { headline: plural(rows.length, "person", "people"),
+    // A chat answer's ranking wins — it carries the question's own scope ("in
+    // Mandya", "theft") and its citations. Otherwise the tab's own statewide
+    // ranking, loaded directly from the records.
+    const loaded = habitual ? repeatOffenders : topOffenders;
+    const direct = loaded.data?.offenders ?? [];
+    const n = rows.length || direct.length;
+    if (n) {
+      lead = { headline: plural(n, "person", "people"),
         measure: t("Ranked by recorded case count, within your access scope") };
       prov = "record";
-      figs = [{ n: String(rows.length), l: t("ranked") }];
-      body = <OffenderTable items={rows} onAsk={onAsk} />;
+      figs = [{ n: String(n), l: t("ranked") }];
+      body = rows.length
+        ? <OffenderTable items={rows} onAsk={onAsk} />
+        : <OffenderRows rows={direct} onAsk={onAsk} />;
       flush = true;
+    } else if (loaded.error) {
+      body = <Failed error={loaded.error} />;
+    } else if (loaded.loading || !loaded.data) {
+      body = <Loading label="Counting the cases that name each person…" />;
     } else {
-      body = <Prompt mark="◈" title={habitual ? "No repeat-offender ranking loaded" : "No offender ranking loaded"}
+      body = <Prompt mark="◈" title={habitual ? "No repeat offender is on record in your scope" : "No offender ranking is available in your scope"}
         body="Case count is a recorded fact, never a risk score — this never ranks by PageRank or a model output."
         ask={onAsk}
         question={habitual ? "Who are the repeat offenders in Bengaluru Urban?" : "Who is the most active offender in Bengaluru Urban?"} />;
@@ -299,40 +408,73 @@ export default function Workspace({
   }
 
   if (view === "statistics") {
-    const items = evidence.filter((e) => e.evidence_id.startsWith("stats:"));
     title = t("Case statistics");
-    sub = t("Rates and breakdowns over the case set — not a list of individual cases.");
-    if (items.length) {
+    sub = t("The shape of the whole case set — volume over time, how cases end, and where they are recorded.");
+    if (stats.data) {
       prov = "record";
-      body = <EvidenceList items={items} />;
+      lead = {
+        headline: t("{n} cases analysed", { n: stats.data.total.toLocaleString() }),
+        measure: t("Every figure is a count of records within your access scope"),
+      };
+      figs = [
+        { n: String(stats.data.district.length), l: t("districts") },
+        { n: String(stats.data.station.length), l: t("stations") },
+        { n: String(stats.data.crime_type.length), l: t("offence types") },
+      ];
+      body = (
+        <div className="stat-scroll">
+          {/* A chat answer about statistics keeps its own citations and its own
+              scope, so it is shown AS an answer above the dashboard rather than
+              being folded into it — the dashboard is statewide and the answer
+              usually is not, and silently merging the two would caption one
+              scope's number with another's. */}
+          {chatStats.length > 0 && (
+            <div className="stat-answer">
+              <div className="stat-answer-h">{t("From your last question")}</div>
+              <EvidenceList items={chatStats} />
+            </div>
+          )}
+          <StatsDashboard data={stats.data} onAsk={onAsk} />
+        </div>
+      );
       flush = true;
+    } else if (stats.error) {
+      body = <Failed error={stats.error} />;
     } else {
-      body = <Prompt mark="◈" title="No statistics loaded"
-        body="Ask for a rate or a breakdown — conviction rate, which district has the most pending cases, how cases split by status — computed over the records you can see."
-        ask={onAsk} question="What is the conviction rate?" />;
+      body = <Loading label="Counting the case set…" />;
     }
   }
 
   if (view === "area") {
-    const items = evidence.filter((e) => e.evidence_id.startsWith("area:"));
     title = t("Area profile");
     sub = t("Recorded crime mix alongside real Census 2011 ground truth for the same district — shown side by side, never combined into one score.");
-    if (items.length) {
+    if (chatArea.length) {
       prov = "record";
-      figs = [{ n: String(items.length), l: t("facts") }];
-      body = <EvidenceList items={items} />;
+      figs = [{ n: String(chatArea.length), l: t("facts") }];
+      body = <EvidenceList items={chatArea} />;
       flush = true;
+    } else if (area.data?.district) {
+      prov = "record";
+      title = t("Area profile — {d}", { d: area.data.district });
+      lead = { headline: t("{n} cases on record", { n: area.data.total.toLocaleString() }),
+               measure: t("Recorded in this district, within your access scope") };
+      figs = [{ n: String(area.data.mix.length), l: t("offence types") }];
+      body = <AreaView data={area.data} onAsk={onAsk} />;
+      flush = true;
+    } else if (area.error) {
+      body = <Failed error={area.error} />;
+    } else if (area.loading || !area.data) {
+      body = <Loading label="Profiling the district against the case set and Census 2011…" />;
     } else {
-      body = <Prompt mark="◈" title="No area loaded"
+      body = <Prompt mark="◈" title="No area could be profiled"
         body="Name a district and Veritas profiles it: recorded offence mix next to real Census 2011 socioeconomic ground truth. No district finer than this exists in the data."
         ask={onAsk} question="Give me an area profile of Bengaluru Urban" />;
     }
   }
 
   if (view === "community") {
-    const items = evidence.filter((e) => e.evidence_id.startsWith("community:"));
-    const summary = items.find((e) => e.evidence_id.startsWith("community:summary:"));
-    const members = items.filter((e) => e !== summary);
+    const summary = chatCommunity.find((e) => e.evidence_id.startsWith("community:summary:"));
+    const members = chatCommunity.filter((e) => e !== summary);
     title = t("Known associates group");
     sub = t("A Louvain community over co-offending — derived from shared cases, never a legal or gang designation.");
     if (members.length) {
@@ -342,40 +484,88 @@ export default function Workspace({
       figs = [{ n: String(members.length), l: t("members") }];
       body = <EvidenceList items={summary ? [summary, ...members] : members} />;
       flush = true;
+    } else if (community.data?.members?.length) {
+      const c = community.data;
+      title = c.community_id !== null
+        ? t("Community {n}", { n: c.community_id })
+        : t("Known associates group");
+      lead = { headline: plural(c.members.length, "known associate"),
+        measure: t("Ranked by network influence — not a risk score") };
+      prov = "derived";
+      figs = [
+        { n: String(c.members.length), l: t("members") },
+        ...(c.profile ? [{ n: String(c.profile.case_count), l: t("shared cases") }] : []),
+      ];
+      body = <CommunityView data={c} onAsk={onAsk} />;
+      flush = true;
+    } else if (community.error) {
+      body = <Failed error={community.error} />;
+    } else if (community.loading || !community.data) {
+      body = <Loading label="Reading the co-offending communities off the graph…" />;
     } else {
-      body = <Prompt mark="◇" title="No community loaded"
+      body = <Prompt mark="◇" title="No community is on record"
         body="Name a community number, or ask about a person already in focus, and Veritas shows who else the graph places alongside them."
         ask={onAsk} question="Who is in community 1?" />;
     }
   }
 
   if (view === "watchlist") {
-    const items = evidence.filter((e) => e.evidence_id.startsWith("watchlist:"));
     title = t("Financial watchlist");
     sub = t("Every transaction a detector has flagged, statewide — each labelled by which one: the rule-based detector is court-auditable, the GNN is an investigative lead only.");
-    if (items.length) {
+    if (chatWatchlist.length) {
       prov = "model";
-      figs = [{ n: String(items.length), l: t("flagged") }];
-      body = <EvidenceList items={items} />;
+      figs = [{ n: String(chatWatchlist.length), l: t("flagged") }];
+      body = <EvidenceList items={chatWatchlist} />;
       flush = true;
+    } else if (watch.data?.transactions?.length) {
+      prov = "model";
+      lead = { headline: plural(watch.data.total, "flagged transaction"),
+               measure: t("Ranked by detector confidence") };
+      figs = [
+        { n: String(watch.data.rule), l: t("rule-based") },
+        { n: String(watch.data.gnn), l: t("GNN") },
+      ];
+      body = <WatchlistView data={watch.data} onAsk={onAsk} />;
+      flush = true;
+    } else if (watch.error) {
+      body = <Failed error={watch.error} />;
+    } else if (watch.loading || !watch.data) {
+      body = <Loading label="Reading the detectors flagged transactions…" />;
     } else {
-      body = <Prompt mark="◈" title="Loading watchlist…" body="" ask={onAsk} question={null} />;
+      body = <Prompt mark="◈" title="Nothing is currently flagged"
+        body="No transaction is flagged by either detector within your access scope. That is a checked absence, not a failed search."
+        ask={onAsk} question={null} />;
     }
   }
 
   if (view === "workload") {
-    const items = evidence.filter((e) => e.evidence_id.startsWith("workload:")
-      || e.evidence_id.startsWith("stalled:"));
     title = t("Station workload");
     sub = t("Open caseload and how much of it has gone stale — untouched on the investigation board for over 30 days. Never allocates work; only says where to look.");
-    if (items.length) {
+    if (chatWorkload.length) {
       prov = "derived";
-      figs = [{ n: String(items.filter((e) => e.evidence_id.startsWith("workload:")).length), l: t("stations") },
-              { n: String(items.filter((e) => e.evidence_id.startsWith("stalled:")).length), l: t("stalled cases") }];
-      body = <EvidenceList items={items} />;
+      figs = [{ n: String(chatWorkload.filter((e) => e.evidence_id.startsWith("workload:")).length), l: t("stations") },
+              { n: String(chatWorkload.filter((e) => e.evidence_id.startsWith("stalled:")).length), l: t("stalled cases") }];
+      body = <EvidenceList items={chatWorkload} />;
       flush = true;
+    } else if (work.data?.stations?.length) {
+      prov = "derived";
+      lead = { headline: plural(work.data.stalled, "stalled case"),
+               measure: t("{n} open across {s} station(s)",
+                          { n: work.data.open_cases.toLocaleString(), s: work.data.stations.length }) };
+      figs = [
+        { n: String(work.data.stations.length), l: t("stations") },
+        { n: String(work.data.open_cases), l: t("open cases") },
+      ];
+      body = <WorkloadView data={work.data} onAsk={onAsk} />;
+      flush = true;
+    } else if (work.error) {
+      body = <Failed error={work.error} />;
+    } else if (work.loading || !work.data) {
+      body = <Loading label="Measuring each station open caseload…" />;
     } else {
-      body = <Prompt mark="◈" title="Loading workload…" body="" ask={onAsk} question={null} />;
+      body = <Prompt mark="◈" title="No case is under investigation in your scope"
+        body="Nothing is currently open, so there is no workload to measure. That is a checked absence, not a failed search."
+        ask={onAsk} question={null} />;
     }
   }
 
@@ -413,9 +603,16 @@ export default function Workspace({
   }
 
   if (view === "geography") {
-    if (kind === "map") {
-      const pts: any[] = d.fir_points ?? [];
-      const polys: any[] = d.polygons ?? [];
+    // The map is PRELOADED. It used to appear only after a canned "Show me crime
+    // hotspots" question had round-tripped through the conversational engine, which
+    // meant an officer opening the tab watched a question they had not asked run in
+    // the copilot column beside an empty canvas. The same KDE + DBSCAN call now comes
+    // straight off GET /analytics/hotspots when the tab opens — and a chat answer,
+    // which carries its own district scope and citations, still overrides it.
+    const md = kind === "map" ? d : (geo.data ?? null);
+    if (md) {
+      const pts: any[] = md.fir_points ?? [];
+      const polys: any[] = md.polygons ?? [];
       const districts = new Set(pts.map((p) => p.district).filter(Boolean));
       const peak = polys.length ? Math.max(...polys.map((h) => h.intensity ?? 0)) : 0;
       const biggest = polys.length ? Math.max(...polys.map((h) => h.crime_count ?? 0)) : 0;
@@ -436,15 +633,15 @@ export default function Workspace({
         ] : []),
       ];
       if (main) next = { label: t("Cases in {main}", { main }), q: `Show me theft cases in ${main}` };
-      body = <MapView data={d} activeEvidenceId={activeEvidence} onSelect={onSelectEvidence}
+      body = <MapView data={md} activeEvidenceId={activeEvidence} onSelect={onSelectEvidence}
                onAsk={onAsk} sessionId={sessionId} />;
       flush = true;
-    } else {
-      // Auto-preload (above) already asks for the statewide hotspot map the
-      // instant this tab opens — this frame is only what shows while that
-      // request is in flight, never a prompt the officer has to act on.
+    } else if (geo.error) {
       title = t("Hotspot Map");
-      body = <Prompt mark="◈" title="Loading hotspots…" body="" ask={onAsk} question={null} />;
+      body = <Failed error={geo.error} />;
+    } else {
+      title = t("Hotspot Map");
+      body = <Loading label="Locating the recorded cases and fitting the density model…" />;
     }
   }
 

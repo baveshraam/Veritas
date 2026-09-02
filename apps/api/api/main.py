@@ -18,8 +18,8 @@ from fastapi.middleware.cors import CORSMiddleware
 load_dotenv(Path(__file__).resolve().parents[3] / ".env", override=False)
 
 from .routers import (  # noqa: E402
-    alerts, auth_routes, board, chat, copilot, explain, export, jobs, records,
-    search, timeline,
+    alerts, analytics, auth_routes, board, chat, copilot, explain, export, jobs,
+    records, search, timeline,
 )
 
 app = FastAPI(
@@ -113,6 +113,7 @@ app.add_middleware(
 app.include_router(auth_routes.router, tags=["auth"])
 app.include_router(chat.router, tags=["chat"])
 app.include_router(records.router, tags=["records"])
+app.include_router(analytics.router, tags=["analytics"])
 app.include_router(copilot.router, tags=["copilot"])
 app.include_router(board.router, tags=["board"])
 app.include_router(timeline.router, tags=["timeline"])

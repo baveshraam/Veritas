@@ -66,6 +66,15 @@ def _run_refresh() -> None:
         # is the one failure a citation-grounded system hides rather than reports —
         # retrieval simply returns nothing, confidently.
         out["vector_index"] = reindex()
+        # And the AML detectors. `vx_txn.FlaggedSuspicious` is a detector OUTPUT, never
+        # written by the generator (data/generator/financial.py asserts that), so on a
+        # freshly seeded dataset it is false on every row until something runs the
+        # models — which nothing did. The Financial Watchlist therefore reported "no
+        # transaction is flagged by either detector" forever, and that answer was
+        # indistinguishable from a genuine all-clear. It belongs here for the same
+        # reason the vector index does: a derived layer that is missing rather than
+        # stale is the failure a citation-grounded system hides instead of reporting.
+        out["aml"] = _rerun_detectors()
         log.info("scheduled refresh complete: %s", out)
     except Exception:
         # A background thread's exception has nowhere else to go — log it with the
@@ -74,6 +83,31 @@ def _run_refresh() -> None:
     finally:
         with _refresh_lock:
             _refresh_running = False
+
+
+def _rerun_detectors() -> dict:
+    """Both AML detectors over every account, flags rewritten from scratch.
+
+    `clear_flags()` first, deliberately: a flag is derived, and a stale one points an
+    investigator at a transaction the current model no longer considers suspicious.
+    Per-account because that is the unit `flag_transactions` traces a pattern over —
+    structuring is a shape in one account's own activity, and the GNN needs a subgraph
+    to classify. Failures are counted, not raised: one unparseable account must not
+    cost the whole sweep, and a silent partial run is worse than a reported one.
+    """
+    from data import ds
+    from data.transactions import clear_flags
+    from ml_models import serving
+
+    clear_flags()
+    accounts = [str(a["AccountID"]) for a in ds.query('SELECT "AccountID" FROM "vx_account"')]
+    flags = failed = 0
+    for a in accounts:
+        try:
+            flags += len(serving.flag_transactions(a))
+        except Exception:
+            failed += 1
+    return {"accounts": len(accounts), "flagged": flags, "failed": failed}
 
 
 @router.post("/jobs/refresh")

@@ -626,3 +626,63 @@ def fir_points(district_code: str, limit: int = 600) -> list[dict]:
             "crime_type": crime_names.get(r.get("CrimeMinorHeadID")), "district": district}
            for r in rows if r["latitude"] is not None and r["longitude"] is not None]
     return pts[:limit]
+
+
+def dashboard(officer_role: str, officer_ps_code: str,
+              district: Optional[str] = None, crime_type: Optional[str] = None) -> dict:
+    """Every count the Statistics dashboard needs, from ONE scan of the scoped case set.
+
+    `counts_by` is the right shape for a single grouped question and the wrong shape for
+    a dashboard: five groupings would be five full scans of the same rows, over a
+    backend whose SELECT already pages 300 at a time. The WHERE clause and the RBAC
+    scope are `_filters`/`_ps_scope` exactly as everywhere else in this module — this
+    counts the same rows differently, it does not widen them.
+
+    Every figure here is a COUNT OF RECORDS. Nothing is modelled, nothing is a rate the
+    caller can mistake for a prediction; the conviction rate is computed from the same
+    status breakdown printed beside it, so its denominator is always on screen.
+    """
+    scope, extra = _ps_scope(officer_role, officer_ps_code)
+    clauses, params = _filters(crime_type, district, None, None, None, None, None)
+    params.update(extra)
+    rows = ds.query(
+        'SELECT "CaseStatusMaster"."CaseStatusName", "CrimeSubHead"."CrimeHeadName", '
+        '       "District"."DistrictName", "Unit"."UnitName", '
+        '       "CaseMaster"."CrimeRegisteredDate"'
+        + _FILTERED_FROM
+        + f'WHERE "CaseMaster"."CaseMasterID" > 0 {scope} {" ".join(clauses)}', params)
+
+    status: dict[str, int] = {}
+    crime: dict[str, int] = {}
+    dist: dict[str, int] = {}
+    station: dict[str, int] = {}
+    month: dict[str, int] = {}
+    for r in rows:
+        for bucket, key in ((status, "CaseStatusName"), (crime, "CrimeHeadName"),
+                            (dist, "DistrictName"), (station, "UnitName")):
+            name = r.get(key) or "not recorded"
+            bucket[name] = bucket.get(name, 0) + 1
+        d = ds.to_dt(r.get("CrimeRegisteredDate"))
+        if d:
+            m = f"{d.year:04d}-{d.month:02d}"
+            month[m] = month.get(m, 0) + 1
+
+    def ranked(b: dict[str, int]) -> list[dict]:
+        return [{"name": k, "cases": v}
+                for k, v in sorted(b.items(), key=lambda kv: (-kv[1], kv[0]))]
+
+    convicted = status.get("Convicted", 0)
+    decided = convicted + status.get("Acquitted", 0)
+    return {
+        "total": len(rows),
+        "scope": {"district": district, "crime_type": crime_type},
+        "status": ranked(status),
+        "crime_type": ranked(crime),
+        "district": ranked(dist),
+        "station": ranked(station),
+        # Chronological, not ranked — this one is a series, and sorting it by
+        # volume would draw a trend line through a shuffled x-axis.
+        "monthly": [{"name": k, "cases": month[k]} for k in sorted(month)],
+        "conviction": {"convicted": convicted, "decided": decided,
+                       "rate": (convicted / decided) if decided else None},
+    }

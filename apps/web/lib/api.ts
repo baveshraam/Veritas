@@ -397,3 +397,105 @@ export function playBase64Audio(base64: string): void {
   audio.onended = () => URL.revokeObjectURL(url);
   audio.play().catch(() => URL.revokeObjectURL(url));
 }
+
+/* ── /analytics ───────────────────────────────────────────────────────────────
+ *
+ * The workspace's analytical tabs, read straight from the records rather than
+ * synthesised by the conversational engine. These are the same policy-scoped
+ * queries /chat runs for the same questions; what changes is only that a TAB no
+ * longer has to ask a QUESTION to fill itself. See apps/api/api/routers/analytics.py
+ * for why that distinction is worth a second surface.
+ *
+ * The chat path is unaffected: a typed question still produces its own answer,
+ * its own citations and its own visualization, and still wins over the tab's
+ * default whenever it has produced one (Workspace.tsx). */
+
+export type Counted = { name: string; cases: number };
+
+export type Statistics = {
+  total: number;
+  scope: { district: string | null; crime_type: string | null };
+  status: Counted[]; crime_type: Counted[]; district: Counted[];
+  station: Counted[]; monthly: Counted[];
+  conviction: { convicted: number; decided: number; rate: number | null };
+};
+
+export type OffenderRow = {
+  person_id: string; name: string; cases: number;
+  habitual: boolean; community: number | null;
+};
+
+export type HotspotPayload = {
+  district: string | null; district_code: string | null;
+  polygons: any[]; fir_points: any[];
+};
+
+export type AreaProfile = {
+  district: string | null; total: number; mix: Counted[]; status: Counted[];
+  census: Record<string, number> | null;
+};
+
+export type CommunityProfile = {
+  community_id: number | null; defaulted?: boolean;
+  profile: { case_count: number; top_crime_type: string | null } | null;
+  members: { person_id: string; name: string; influence: number }[];
+};
+
+export type WatchlistRow = {
+  txn_id: string; src: string; dst: string; amount: number; date: string | null;
+  fir_id: string | null; flag_type: string; detector: "rule" | "gnn"; confidence: number;
+};
+
+export type Watchlist = {
+  total: number; rule: number; gnn: number; transactions: WatchlistRow[];
+};
+
+export type StationRow = {
+  ps_code: string; station: string; open_cases: number;
+  avg_age_days: number; stalled_count: number; stalled_ids: string[];
+};
+
+export type Workload = {
+  stale_days: number; open_cases: number; stalled: number; stations: StationRow[];
+};
+
+async function analytics<T>(path: string, params: Record<string, string | number | boolean | null | undefined> = {}): Promise<T> {
+  const qs = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== null && v !== undefined && v !== "") qs.set(k, String(v));
+  }
+  const r = await fetch(`${BASE}/analytics/${path}${qs.toString() ? `?${qs}` : ""}`,
+                        { headers: authHeaders() });
+  // One message per failure mode an officer can act on. A 401 here means the
+  // rank was entered without a verified badge (LoginGate) — saying "unavailable"
+  // would read as the platform being down.
+  if (!r.ok) throw new Error(
+    r.status === 401 ? "Sign in with a verified badge to load this analysis"
+    : r.status === 403 ? "Your rank is not cleared for this analysis"
+    : "This analysis could not be loaded from the records");
+  return r.json();
+}
+
+export const getStatistics = (district?: string | null, crimeType?: string | null) =>
+  analytics<Statistics>("statistics", { district, crime_type: crimeType });
+
+export const getOffenders = (opts: { district?: string | null; habitual?: boolean; limit?: number } = {}) =>
+  analytics<{ offenders: OffenderRow[] }>("offenders",
+    { district: opts.district, habitual: opts.habitual, limit: opts.limit ?? 20 });
+
+export const getHotspots = (district?: string | null) =>
+  analytics<HotspotPayload>("hotspots", { district });
+
+export const getForecastSeries = (district?: string | null, horizon = 30) =>
+  analytics<{ district: string | null; reconciled: boolean; series: [string, number, number, number][] }>(
+    "forecast", { district, horizon });
+
+export const getAreaProfile = (district?: string | null) =>
+  analytics<AreaProfile>("area", { district });
+
+export const getCommunity = (opts: { id?: number | null; personId?: string | null } = {}) =>
+  analytics<CommunityProfile>("community", { id: opts.id, person_id: opts.personId });
+
+export const getWatchlist = (limit = 25) => analytics<Watchlist>("watchlist", { limit });
+
+export const getWorkload = () => analytics<Workload>("workload");
