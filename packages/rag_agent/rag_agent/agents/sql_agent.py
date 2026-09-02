@@ -235,7 +235,8 @@ def status_breakdown(officer_role: str, officer_ps_code: str,
 
 def ranked_offenders(officer_role: str, officer_ps_code: str,
                      district: Optional[str] = None, crime_type: Optional[str] = None,
-                     habitual_only: bool = False, limit: int = 5) -> list[dict]:
+                     habitual_only: bool = False, limit: int = 5,
+                     q: Optional[str] = None) -> list[dict]:
     """The people with the most cases on record, within this officer's scope.
 
     "Who is the most active offender in Mandya?" and "top 5 habitual offenders" are the
@@ -251,6 +252,12 @@ def ranked_offenders(officer_role: str, officer_ps_code: str,
     category error this platform works to avoid. Scope is applied by counting only the
     cases the officer may see, so an IO's "most active" is their station's, and the
     same query at IG rank returns the state's.
+
+    `q`, if given, is a name search over the FULL scoped set, applied before `limit`
+    slices it — a specific person can be well outside the top N by case count (most
+    offenders are, by definition) and still needs to be findable. A ranked top-N view
+    and a search are different operations sharing one function, not one operation with
+    a bigger page size.
     """
     scope, extra = _ps_scope(officer_role, officer_ps_code)
     clauses, params = _filters(crime_type, district, None, None, None, None, None)
@@ -283,6 +290,9 @@ def ranked_offenders(officer_role: str, officer_ps_code: str,
            for p in people]
     if habitual_only:
         out = [p for p in out if p["habitual"]]
+    if q:
+        needle = q.strip().lower()
+        out = [p for p in out if needle in (p["name"] or "").lower()]
     return sorted(out, key=lambda p: (-p["cases"], p["name"] or ""))[:limit]
 
 

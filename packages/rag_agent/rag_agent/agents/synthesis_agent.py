@@ -25,7 +25,7 @@ since the extractive path is always fully grounded in the same evidence either w
 """
 from .. import intents
 from ..evidence.evaluator import NOT_FOUND_MESSAGE
-from ..llm import available, generate
+from ..llm import available, generate_with_reasoning
 from ..state import Citation, EvidenceItem, VisualizationPayload
 
 _SYSTEM = (
@@ -52,8 +52,11 @@ def _label(e: EvidenceItem) -> str:
     return head[:120] + ("…" if len(head) > 120 else "")
 
 
-def synthesize(query: str, evidence: list[EvidenceItem],
-                operation: str = "") -> tuple[str, list[Citation]]:
+def synthesize(query: str, evidence: list[EvidenceItem], operation: str = "",
+                reasoning_sink: list[str] | None = None) -> tuple[str, list[Citation]]:
+    """`reasoning_sink`, if given, receives the model's own Chain-of-Thought when a
+    narrative call actually runs — the orchestrator surfaces it as a trace step.
+    Optional and additive: existing callers that don't pass it see no change."""
     if not evidence:
         return NOT_FOUND_MESSAGE, []
 
@@ -62,12 +65,16 @@ def synthesize(query: str, evidence: list[EvidenceItem],
 
     if operation in intents.NEEDS_NARRATIVE_SYNTHESIS and available():
         try:
-            answer = generate(
+            answer, reasoning = generate_with_reasoning(
                 f"Question: {query}\n\nEvidence:\n{numbered}\n\n"
-                f"Answer the question using only this evidence, citing [n] inline.",
+                f"First, reason step by step about which cited evidence actually answers "
+                f"the question. Then answer the question using only this evidence, citing "
+                f"[n] inline.",
                 system=_SYSTEM,
             )
             if answer:
+                if reasoning_sink is not None and reasoning:
+                    reasoning_sink.append(reasoning)
                 return answer, citations
         except Exception:
             pass      # fall through to extractive synthesis — never fail the turn

@@ -226,9 +226,22 @@ def warm() -> None:
         pass                          # the request path retries and degrades honestly
 
 
-def _chat(messages: list[dict], temperature: float | None = None) -> str:
-    """One real call to QuickML's GLM chat endpoint. Returns the reply text with any
-    <think>...</think> reasoning trace stripped."""
+def _split_think(text: str) -> tuple[str, str]:
+    """Split off the model's own chain-of-thought (see _THINK_RE) from its answer.
+
+    Returns (reasoning, answer). Normally the reasoning half is thrown away
+    (`_chat`); `generate_with_reasoning` is the one caller that keeps it, to
+    surface real Chain-of-Thought in the Reasoning Trace panel instead of paying
+    for a second, separate deliberation call."""
+    m = _THINK_RE.match(text)
+    if not m:
+        return "", text.strip()
+    return m.group(0)[: -len("</think>")].strip(), text[m.end():].strip()
+
+
+def _raw_chat(messages: list[dict], temperature: float | None = None) -> str:
+    """One real call to QuickML's GLM chat endpoint. Returns the full reply text,
+    <think> block and all — callers split it with `_split_think`."""
     global _ever_succeeded
 
     try:
@@ -254,7 +267,14 @@ def _chat(messages: list[dict], temperature: float | None = None) -> str:
         raise _degrade(RuntimeError(f"unexpected response shape: {str(result)[:200]}"))
 
     _ever_succeeded = True
-    return _THINK_RE.sub("", text).strip()
+    return text
+
+
+def _chat(messages: list[dict], temperature: float | None = None) -> str:
+    """One real call to QuickML's GLM chat endpoint. Returns the reply text with any
+    <think>...</think> reasoning trace stripped."""
+    _, answer = _split_think(_raw_chat(messages, temperature))
+    return answer
 
 
 def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -> str:
@@ -283,6 +303,36 @@ def generate(prompt: str, system: str | None = None, temperature: float = 0.2) -
         if _REFUSAL_MARKER in text.lower():
             raise _degrade(RuntimeError("model refused a benign prompt (safety false positive)"))
     return text
+
+
+def generate_with_reasoning(prompt: str, system: str | None = None,
+                            temperature: float = 0.2) -> tuple[str, str]:
+    """Like `generate()`, but also returns the model's own step-by-step reasoning.
+
+    GLM-4.7-Flash already emits a `<think>...</think>` chain-of-thought before its
+    answer on every call — `_chat()` normally discards it. Tree-of-Thought-style
+    branching search would cost several extra calls per turn on a small, fast model
+    and largely duplicate what HippoRAG/Think-on-Graph already do at the retrieval
+    layer (see rag_agent/retrieval/tog.py); the industry-standard fit for a single
+    synthesis call is plain Chain-of-Thought, so this stops throwing the model's own
+    CoT away rather than adding a second reasoning pass on top of it. Same
+    refusal-retry behaviour as `generate()`; raises LLMUnavailable on failure."""
+    if not available():
+        raise LLMUnavailable(_degraded_reason or "no LLM configured")
+
+    def _messages(extra_frame: str = "") -> list[dict]:
+        msgs = []
+        if system:
+            msgs.append({"role": "system", "content": system})
+        msgs.append({"role": "user", "content": extra_frame + prompt})
+        return msgs
+
+    reasoning, answer = _split_think(_raw_chat(_messages(), temperature))
+    if _REFUSAL_MARKER in answer.lower():
+        reasoning, answer = _split_think(_raw_chat(_messages(_INTEGRATION_FRAME), temperature))
+        if _REFUSAL_MARKER in answer.lower():
+            raise _degrade(RuntimeError("model refused a benign prompt (safety false positive)"))
+    return answer, reasoning
 
 
 def generate_json(prompt: str, schema: dict, system: str | None = None) -> dict:

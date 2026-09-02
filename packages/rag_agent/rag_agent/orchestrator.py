@@ -3048,8 +3048,10 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     for e in evidence:
         e.content = resolve_plural_markers(e.content)
 
+    reasoning_sink: list[str] = []
     answer, citations = synthesis_agent.synthesize(
-        state.original_query or "", evidence, operation=state.intent)
+        state.original_query or "", evidence, operation=state.intent,
+        reasoning_sink=reasoning_sink)
     answer = resolve_plural_markers(answer)
 
     # What KIND of result set this is — sampled, filtered, ranked, exhaustive,
@@ -3077,6 +3079,11 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     state.citations = citations
     state.evidence_items = evidence
     state.visualization = synthesis_agent.build_visualization(state.intent, state)
+    if reasoning_sink:
+        # Chain-of-Thought the model already did to reach this answer — one entry,
+        # capped, not a second retrieval step. Shown collapsed like every other
+        # trace step; never treated as a citation source.
+        _trace(state, "Reasoning", reasoning_sink[0][:600], t0)
     _trace(state, "Evidence Synthesis",
            f"Answer grounded in {len(citations)} citation(s); "
            f"visualization: {state.visualization.kind}", t0)

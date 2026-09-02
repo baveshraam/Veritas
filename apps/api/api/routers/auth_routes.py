@@ -52,25 +52,29 @@ async def token(req: TokenRequest):
     rec = officers.by_id(row["EmployeeID"]) if row else None
     if not rec:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Unknown badge number")
+    # No personal name in the response — the console identifies an officer by rank
+    # and station only, never by name (LoginGate/TopBar). `rec.name` still exists
+    # in the Employee record and in vx_audit_log's real EmployeeID; it simply never
+    # crosses this endpoint.
     return {
         "access_token": issue_token(rec.officer_id, rec.role),
         "token_type": "bearer",
-        "officer": {"name": rec.name, "role": rec.role, "ps_code": rec.ps_code},
+        "officer": {"role": rec.role, "ps_code": rec.ps_code},
     }
 
 
 @router.get("/auth/officers")
 async def list_officers():
-    """Demo helper: one badge number per role to sign in with."""
+    """Demo helper: one badge number per role to sign in with. No personal name —
+    see the note in `token()` above."""
     from data.generator.refdata import DESIGNATION_TO_ROLE
 
     seen: dict[str, dict] = {}
     rows = _data_layer(lambda: ds.query(
-        'SELECT "EmployeeID", "DesignationID", "KGID", "FirstName", "UnitID" '
+        'SELECT "EmployeeID", "DesignationID", "KGID", "UnitID" '
         'FROM "Employee" ORDER BY "EmployeeID"'))
     for r in rows:
         role = DESIGNATION_TO_ROLE.get(int(r["DesignationID"] or 0))
         if role and role not in seen:
-            seen[role] = {"badge_no": r["KGID"], "name": r["FirstName"], "role": role,
-                          "ps_code": str(r["UnitID"] or "")}
+            seen[role] = {"badge_no": r["KGID"], "role": role, "ps_code": str(r["UnitID"] or "")}
     return sorted(seen.values(), key=lambda o: o["role"])

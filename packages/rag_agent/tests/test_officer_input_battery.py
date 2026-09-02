@@ -274,6 +274,20 @@ def test_the_offender_ranking_counts_cases_not_model_scores(dataset, habitual):
     assert len(sql_agent.person_record(top["person_id"])) >= top["cases"]
 
 
+def test_a_name_search_finds_someone_outside_the_top_ranked_page(dataset):
+    """A name search must scan every offender in scope, not just the ranked page —
+    most offenders are outside any top-N by definition (that is what "top" means),
+    and a specific person an officer names must still be findable regardless of
+    where they fall in the case-count ranking."""
+    from rag_agent.agents import sql_agent
+    everyone = sql_agent.ranked_offenders("IG", "", limit=10_000)
+    assert len(everyone) > 5, "need more than one ranked page to prove this"
+    target = everyone[-1]                     # at the bottom of the ranking
+    hit = sql_agent.ranked_offenders("IG", "", limit=5, q=target["name"])
+    assert any(p["person_id"] == target["person_id"] for p in hit), \
+        "a small limit must not hide a name search's own match"
+
+
 def test_an_io_ranking_never_reaches_another_station(dataset):
     """Scope is applied inside the count, so an IO's "most active offender" is their
     station's — not the state's list with the other stations' names still on it."""

@@ -161,6 +161,39 @@ def write_conversation_turn(session_id: str, turn_index: int, query: str, langua
     }])
 
 
+def list_sessions(role: str, ps_code: str, limit: int = 20) -> list[dict]:
+    """Sessions belonging to any officer sharing this rank+station.
+
+    History is pooled by rank+station, not by individual officer — the console
+    never asks "whose session is this", only "what has this desk been asked
+    before". `vx_audit_log` still records the real signed-in EmployeeID for every
+    action regardless; this is a separate, narrower question about what the
+    console shows, not about accountability.
+    """
+    from .generator.refdata import ROLE_TO_DESIGNATION
+
+    desig = ROLE_TO_DESIGNATION.get(role)
+    if desig is None or not ps_code or not str(ps_code).isdigit():
+        return []
+    rows = ds.query(
+        'SELECT "vx_session"."SessionID" AS "SessionID", '
+        '"vx_session"."UpdatedAt" AS "UpdatedAt" FROM "vx_session" '
+        'JOIN "Employee" ON "vx_session"."EmployeeID" = "Employee"."EmployeeID" '
+        'WHERE "Employee"."DesignationID" = :desig AND "Employee"."UnitID" = :ps '
+        'ORDER BY "vx_session"."UpdatedAt" DESC',
+        {"desig": desig, "ps": int(ps_code)},
+    )
+    out = []
+    for r in rows[:limit]:
+        sid = r["SessionID"]
+        first = ds.one('SELECT "Query" FROM "vx_conversation_turn" '
+                       'WHERE "SessionID" = :sid AND "TurnIndex" = 0', {"sid": sid})
+        if not first:
+            continue          # a session-focus row with no turn ever written yet
+        out.append({"session_id": sid, "updated_at": r["UpdatedAt"], "label": first["Query"]})
+    return out
+
+
 def get_conversation_history(session_id: str) -> list[ConversationTurn]:
     rows = ds.query(
         'SELECT "TurnIndex", "Query", "Language", "FinalAnswer", "Payload", "CreatedAt" '

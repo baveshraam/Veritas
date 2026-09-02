@@ -15,6 +15,7 @@ from data.sessions import (
     _focus_row,
     get_conversation_history,
     get_session_focus,
+    list_sessions,
     upsert_session_focus,
     write_conversation_turn,
 )
@@ -162,3 +163,38 @@ def test_the_focus_cache_is_a_cache_not_a_second_source_of_truth():
 
     upsert_session_focus("s1", "7", SessionFocus(active_person="99"))
     assert get_session_focus("s1").active_person == "99"  # and never serves a stale one
+
+
+# -------------------------------------------------------------- pooled session history
+def _employee(employee_id: int, designation_id: int, unit_id: int) -> None:
+    ds.insert("Employee", [{"EmployeeID": employee_id, "DesignationID": designation_id,
+                            "UnitID": unit_id, "KGID": f"K{employee_id}"}])
+
+
+def test_sessions_pool_by_rank_and_station_not_by_individual_officer():
+    """Two different DSPs at the same station share one history bucket — the console
+    shows what the desk has been asked, not whose login asked it."""
+    _employee(1, 3, 2201)   # DSP, station 2201
+    _employee(2, 3, 2201)   # a different DSP, same station
+    _employee(3, 3, 9999)   # a DSP at a DIFFERENT station — must not show up
+
+    upsert_session_focus("s1", "1", SessionFocus())
+    write_conversation_turn("s1", 0, "cases in Mandya?", "en", "a", [], [], {}, [])
+    upsert_session_focus("s2", "2", SessionFocus())
+    write_conversation_turn("s2", 0, "does he have priors?", "en", "a", [], [], {}, [])
+    upsert_session_focus("s3", "3", SessionFocus())
+    write_conversation_turn("s3", 0, "other station", "en", "a", [], [], {}, [])
+
+    sessions = list_sessions("DSP", "2201")
+    assert {s["session_id"] for s in sessions} == {"s1", "s2"}
+    assert {s["label"] for s in sessions} == {"cases in Mandya?", "does he have priors?"}
+
+
+def test_a_session_with_no_turn_yet_is_not_listed():
+    _employee(1, 5, 100)   # IO
+    upsert_session_focus("s1", "1", SessionFocus())        # focus written, no turn yet
+    assert list_sessions("IO", "100") == []
+
+
+def test_an_unrecognised_role_returns_no_sessions():
+    assert list_sessions("NOT_A_ROLE", "100") == []

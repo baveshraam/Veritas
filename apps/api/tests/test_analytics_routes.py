@@ -71,6 +71,24 @@ def test_the_habitual_filter_is_actually_applied(client, officers, dataset):
     assert all(r["habitual"] for r in rows), "a repeat-offender ranking must be habitual-only"
 
 
+def test_offender_search_finds_a_name_the_top_ranked_page_would_miss(client, officers, dataset):
+    """The default page (limit=20, ranked by case count) is a small slice of a large
+    population — `q` must search the whole scoped set, not just that slice, or a real
+    person the officer knows by name is simply unfindable from the tab."""
+    h = _auth(client, officers["IG"]["badge_no"])
+    everyone = client.get("/analytics/offenders?limit=100", headers=h).json()["offenders"]
+    assert len(everyone) > 5, "need more than one small page to prove this"
+    target = everyone[-1]["name"]
+
+    unfiltered_top5 = client.get("/analytics/offenders?limit=5", headers=h).json()["offenders"]
+    assert not any(r["name"] == target for r in unfiltered_top5), \
+        "test needs a target genuinely outside the default small ranked page"
+
+    searched = client.get(f"/analytics/offenders?limit=5&q={target}", headers=h).json()["offenders"]
+    assert any(r["name"] == target for r in searched), \
+        "a name search must find someone outside the top-ranked page"
+
+
 def test_the_hotspot_payload_carries_the_points_under_the_polygons(client, officers,
                                                                    dataset):
     """A hull with no incidents beneath it is an assertion, not a hotspot — the same

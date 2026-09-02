@@ -20,7 +20,7 @@ def test_a_simple_factual_operation_never_calls_the_model(monkeypatch):
 
     def fail_if_called(*a, **k):
         raise AssertionError("LLM must not be called for a simple factual operation")
-    monkeypatch.setattr(synthesis_agent, "generate", fail_if_called)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning", fail_if_called)
 
     answer, citations = synthesis_agent.synthesize(
         "what is the status of this FIR", [_ev()], operation="FIR_LOOKUP")
@@ -30,11 +30,26 @@ def test_a_simple_factual_operation_never_calls_the_model(monkeypatch):
 
 def test_a_narrative_operation_calls_the_model_when_available(monkeypatch):
     monkeypatch.setattr(synthesis_agent, "available", lambda: True)
-    monkeypatch.setattr(synthesis_agent, "generate", lambda *a, **k: "a fluent answer [1]")
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning",
+                        lambda *a, **k: ("a fluent answer [1]", "step one, step two"))
 
     answer, citations = synthesis_agent.synthesize(
         "what stands out in the money trail", [_ev()], operation="FINANCIAL")
     assert answer == "a fluent answer [1]"
+
+
+def test_reasoning_sink_captures_the_models_chain_of_thought(monkeypatch):
+    """The orchestrator reads this back to add a 'Reasoning' trace step — optional
+    and additive, so a caller that doesn't pass a sink (every test above) sees no
+    change in behaviour."""
+    monkeypatch.setattr(synthesis_agent, "available", lambda: True)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning",
+                        lambda *a, **k: ("a fluent answer [1]", "step one, step two"))
+
+    sink: list[str] = []
+    synthesis_agent.synthesize("what stands out", [_ev()], operation="FINANCIAL",
+                               reasoning_sink=sink)
+    assert sink == ["step one, step two"]
 
 
 def test_a_narrative_operation_falls_back_when_the_model_is_unavailable(monkeypatch):
@@ -42,7 +57,7 @@ def test_a_narrative_operation_falls_back_when_the_model_is_unavailable(monkeypa
 
     def fail_if_called(*a, **k):
         raise AssertionError("must not call generate() when unavailable")
-    monkeypatch.setattr(synthesis_agent, "generate", fail_if_called)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning", fail_if_called)
 
     answer, citations = synthesis_agent.synthesize(
         "what stands out", [_ev()], operation="FINANCIAL")
@@ -54,7 +69,7 @@ def test_a_narrative_operation_falls_back_when_the_model_raises(monkeypatch):
 
     def explode(*a, **k):
         raise RuntimeError("degraded")
-    monkeypatch.setattr(synthesis_agent, "generate", explode)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning", explode)
 
     answer, citations = synthesis_agent.synthesize(
         "why is this person high risk", [_ev()], operation="RISK")
@@ -68,7 +83,7 @@ def test_an_unspecified_operation_defaults_to_the_safe_extractive_path(monkeypat
 
     def fail_if_called(*a, **k):
         raise AssertionError("an unrecognized/unspecified operation must not call the model")
-    monkeypatch.setattr(synthesis_agent, "generate", fail_if_called)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning", fail_if_called)
 
     answer, citations = synthesis_agent.synthesize("some query", [_ev()])
     assert "a fact" in answer
@@ -79,7 +94,7 @@ def test_empty_evidence_never_calls_the_model_regardless_of_operation(monkeypatc
 
     def fail_if_called(*a, **k):
         raise AssertionError("no evidence means nothing to synthesize")
-    monkeypatch.setattr(synthesis_agent, "generate", fail_if_called)
+    monkeypatch.setattr(synthesis_agent, "generate_with_reasoning", fail_if_called)
 
     answer, citations = synthesis_agent.synthesize("what stands out", [], operation="FINANCIAL")
     assert citations == []

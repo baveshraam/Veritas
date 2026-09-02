@@ -10,6 +10,8 @@ dependencies = [
     "pyjwt>=2.9",
     "python-dotenv>=1.0",
     "python-multipart>=0.0.9",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
     "sse-starlette>=2.1",
     "zcatalyst-sdk>=0.1",       # Catalyst Authentication + SmartBrowz + Data Store
     "veritas-data[embeddings]",

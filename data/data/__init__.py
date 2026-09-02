@@ -16,6 +16,7 @@ from .nlp import (
 from .sessions import (
     get_conversation_history,
     get_session_focus,
+    list_sessions,
     upsert_session_focus,
     write_conversation_turn,
 )
@@ -24,7 +25,7 @@ from .transactions import clear_flags, flag_transaction
 __all__ = [
     "SessionFocus", "ConversationTurn",
     "get_session_focus", "upsert_session_focus",
-    "write_conversation_turn", "get_conversation_history",
+    "write_conversation_turn", "get_conversation_history", "list_sessions",
     "write_audit", "verify_chain", "flag_transaction", "clear_flags",
     "Entity", "ner_extract", "transliterate", "translate",
     "speech_to_text", "text_to_speech",
