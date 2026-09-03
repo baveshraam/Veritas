@@ -14,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 802 green, 2 skipped (`python -m pytest` prints the current
+- **Tests**: `python -m pytest` — 830 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -376,6 +376,20 @@ outcomes, ranked investigative leads, and a paste-ready case-diary paragraph.
 Leads are **direct co-accused only**. At the 4-hop policy cap this would name most of the
 connected component ("857 associates") — true, and useless. A lead has to be actionable this
 week.
+
+**Six further conversational operations (v24)** extend the same case/person-scoped
+pattern, each built entirely on data already in the record layer: **interrogation
+prep** (priors, structural case gaps, direct associates, assembled before an officer
+questions someone), **case-similarity watch** (`SIMILAR_CASES` narrowed to an
+officer's own backlog and the unsolved pool), **case handoff** (the Copilot brief
+fused with the investigation board's own state into one "catch me up" narrative),
+**challenge a finding** (a new meta-turn, alongside "why is this here"/"what supports
+this", that actively looks for what would WEAKEN the previous answer rather than
+explaining how it was reached), **pre-filing check** (the same structural-gap check,
+run proactively before a case is sent up), and **cross-station linkage** (reports when
+a case's accused is also named at a different station, under the same partial-
+visibility rule associate explanations already use — the link is always reported, the
+other case named only where the officer's access allows it).
 
 ---
 
@@ -1837,3 +1851,51 @@ volume justifies the training cost.
     analytics endpoint is authenticated and rank-scoped, 6 on refresh-step isolation).
     `npx tsc --noEmit` clean. Screenshots:
     `docs/screenshots/2026-09-02-preloaded-analytics/`.
+
+- **v24 (six conversational additions, researched against the brief itself) — the
+  challenge brief asks for "conversational AI," and a statistics dashboard is not
+  that. Researched real deployed products (eSleuth, Case IQ, SymphonyAI Sensa
+  Copilot) and the academic/DOJ literature for what genuinely helps an investigator
+  through dialogue rather than through more charts, cross-checked against the West
+  Midlands Police Microsoft Copilot hallucination incident (a fabricated match used
+  to justify a real football banning order) as the concrete argument for why every
+  addition had to inherit the existing cited-or-refuse discipline.
+  - **Six new intents**, §5's Investigation Copilot section names them in full:
+    interrogation prep, case-similarity watch, case handoff, challenge-a-finding
+    (a new meta-turn alongside EXPLAIN_REASONING/EVIDENCE_FOR), pre-filing check, and
+    cross-station linkage. All built on data already in the record layer — no new
+    table, no new model, no LLM required for the deterministic path.
+  - **The case-diary draft now tags its one DERIVED sentence inline**, in both the
+    templated and LLM-generated paths — the direct answer to the West Midlands
+    incident: an unverified/derived claim can no longer ship unlabeled into an
+    exported document.
+  - **A real Python-version bug, caught by the deploy pipeline's own smoke-test
+    import, not by anything local.** A multi-line f-string expression (valid under
+    Python 3.12+'s relaxed grammar, PEP 701) parsed cleanly on this machine's local
+    3.13 and failed with a plain `SyntaxError` on the deployed container's 3.11.
+    Every touched file is now also checked against a local Python 3.11 interpreter
+    directly, not just whichever version `python` resolves to.
+  - **A real conversational bug found live, on the first end-to-end test, and fixed
+    the same pass**: "Poke holes in this." right after "Catch me up on this case." —
+    the most natural way to chain the two new features — found nothing to challenge,
+    because `CASE_HANDOFF`'s evidence is written `handoff:{fir_id}:summary` and the
+    case-id extraction only recognised the `fir:{fir_id}` shape a direct lookup uses.
+    Fixed and reproduced as a regression test before being re-verified live.
+  - **The `appsail/upsert` deploy contract, reverse-engineered and finally written
+    down.** No prior pass's changelog entry contains the actual request shape — every
+    deploy before this one apparently reconstructed it from scratch. It is a
+    **multipart/form-data PUT**, not JSON (`name`, `memory`, `platform:
+    "custom_runtime"`, `configuration` as a JSON *string*, `local_object_key` — never
+    `image`/`object_key`, which return an opaque `INVALID_INPUT` regardless of shape),
+    found by reading the installed Catalyst CLI's own source rather than by further
+    trial and error. Saved as `scripts/deploy-api.py` — a one-command deploy from
+    here on, full detail in `docs/WORK_LOG.md`'s 2026-09-04 entry.
+  - **Deployed and live-verified twice** (`52852000000400007`, then
+    `52852000000391012` carrying the CHALLENGE_FINDING fix): a real multi-turn
+    session drove all six new intents plus `/explain` against a live `linkage:`
+    evidence id, end to end, against the full 10,000-FIR live dataset.
+  - **`docs/OFFICER_PITCH.md`** (new) restates the whole platform in plain,
+    non-technical language for a law-enforcement audience, filtered by "does this
+    actually help an officer" rather than by what was technically interesting to
+    build — a different artifact from this file, written the same session on request.
+  - **Test suite: 830 passed, 2 skipped** (14 new).
