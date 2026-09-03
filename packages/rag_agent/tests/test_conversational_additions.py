@@ -222,6 +222,44 @@ def test_challenge_finding_names_a_real_case_gap():
     assert len(state.citations) == 1     # the prior turn's own citation is re-shown
 
 
+def test_challenge_finding_finds_the_case_behind_a_handoff_turn():
+    """Live-found: 'poke holes in this' right after 'catch me up on this case' read
+    no case at all, because CASE_HANDOFF's own evidence is `handoff:{fir_id}:summary`
+    — the FIR id sits in the SECOND segment, not written as a bare `fir:{fir_id}`
+    citation the way a direct FIR lookup's evidence is."""
+    state = _state("Poke holes in this.")
+    state.intent = "CHALLENGE_FINDING"
+    state.active_entities.active_fir = "9"
+
+    prior = _prior_turn(
+        query="Catch me up on this case.",
+        citations=[{"index": 1, "evidence_id": "handoff:9:summary", "label": "x"}],
+        evidence_items=[{"evidence_id": "handoff:9:summary", "source_type": "FIR_RECORD",
+                         "source_id": "9", "source_query": "q", "content": "...",
+                         "confidence": 0.95, "authoritative": True,
+                         "confidence_kind": "support",
+                         "timestamp": datetime.now(timezone.utc).isoformat()}])
+    saved_last_turn = orchestrator._last_turn
+    saved_fir_by_id = orchestrator.sql_agent.fir_by_id
+    saved_query = orchestrator.ds.query
+    orchestrator._last_turn = lambda sid: prior
+    orchestrator.sql_agent.fir_by_id = lambda fir_id, role, ps: (
+        [{"fir_id": "9", "fir_number": "FIR9", "date_filed": "2020-01-01",
+          "crime_type": "Hurt", "district": "Mandya", "ps_code": "1",
+          "case_status": "Under Investigation"}] if fir_id == "9" else [])
+    orchestrator.ds.query = lambda sql, params=None: []
+    try:
+        orchestrator.node_retrieve(state)
+        orchestrator.node_evaluate(state)
+        orchestrator.node_synthesize(state)
+    finally:
+        orchestrator._last_turn = saved_last_turn
+        orchestrator.sql_agent.fir_by_id = saved_fir_by_id
+        orchestrator.ds.query = saved_query
+
+    assert "no arrest is recorded" in state.final_answer.lower()
+
+
 def test_challenge_finding_refuses_honestly_on_a_first_turn():
     state = _state("Poke holes in this.")
     state.intent = "CHALLENGE_FINDING"

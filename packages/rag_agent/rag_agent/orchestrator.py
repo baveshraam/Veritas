@@ -2800,9 +2800,31 @@ def _challenge_explanation(prior, state: InvestigationState) -> str:
                 f'"{prior.query}" cited no records, so there is no finding resting '
                 f"on anything to argue against.")
 
+    # A prior turn's own evidence carries the case id two different shapes:
+    # `fir:{fir_id}` (a direct FIR citation) and `{prefix}:{fir_id}:{suffix}` (every
+    # case-scoped addition this pass built — handoff/filing/watch/linkage all write
+    # their case id as the SECOND segment, not the whole tail). Live-found: "poke
+    # holes in this" right after "catch me up on this case" read no case at all,
+    # because CASE_HANDOFF's own evidence is `handoff:{fir_id}:summary`, not
+    # `fir:{fir_id}` — this checked only the first shape and found nothing to check.
+    _CASE_SCOPED_PREFIXES = {"handoff", "filing", "watch", "linkage"}
+
+    def _fir_id_of(eid: str) -> Optional[str]:
+        parts = (eid or "").split(":")
+        if not parts:
+            return None
+        if parts[0] == "fir" and len(parts) >= 2:
+            return parts[1]
+        if parts[0] in _CASE_SCOPED_PREFIXES and len(parts) >= 2 and parts[1].isdigit():
+            return parts[1]
+        return None
+
     fir_ids = list(dict.fromkeys(
-        e.get("evidence_id", "").split(":", 1)[1] for e in pool
-        if (e.get("evidence_id") or "").startswith("fir:")))[:3]
+        fid for e in pool if (fid := _fir_id_of(e.get("evidence_id") or ""))))[:3]
+    if not fir_ids and state.active_entities.active_fir:
+        # The pool named no case at all (e.g. every item is a board/summary line) —
+        # the case still open in this session is the one the prior answer was about.
+        fir_ids = [state.active_entities.active_fir]
     person_ids = list(dict.fromkeys(
         e.get("evidence_id", "").split(":", 1)[1] for e in pool
         if (e.get("evidence_id") or "").split(":", 1)[0] in ("accused", "priors", "offender")
