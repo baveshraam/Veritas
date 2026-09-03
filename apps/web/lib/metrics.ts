@@ -66,9 +66,13 @@ export function rupees(n: number): string {
        : `₹${Math.round(n).toLocaleString("en-IN")}`;
 }
 
-/** "1 case" / "12 cases", without the "(s)" that reads as a form field. */
-export function plural(n: number, one: string, many = `${one}s`): string {
-  return `${n.toLocaleString("en-IN")} ${n === 1 ? one : many}`;
+/** "1 case" / "12 cases", without the "(s)" that reads as a form field. `t`,
+ *  when given, runs the chosen noun through the Kannada dictionary — without
+ *  it this always reads in English, which is why every call site should pass
+ *  the console's own `useT()` translator. */
+export function plural(n: number, one: string, many = `${one}s`, t?: (s: string) => string): string {
+  const word = n === 1 ? one : many;
+  return `${n.toLocaleString("en-IN")} ${t ? t(word) : word}`;
 }
 
 /** How closely two records' wording matches. Never phrased as truth: a high

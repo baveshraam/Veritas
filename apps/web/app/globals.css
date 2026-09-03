@@ -2118,6 +2118,18 @@ body {
   width: 34px; height: 7px; border-radius: 2px;
   background: linear-gradient(90deg, var(--ok), var(--amber), var(--red));
 }
+.map-legend-types {
+  display: flex; flex-wrap: wrap; gap: 4px 10px;
+  max-width: 200px; padding-left: 21px;
+}
+.map-legend-type {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10.5px; color: var(--t-3);
+}
+.map-legend-type i {
+  width: 7px; height: 7px; border-radius: 50%; flex: 0 0 auto;
+  border: 1px solid rgba(255,255,255,0.7);
+}
 
 .map-district-label {
   font-family: var(--font-label);

@@ -2,6 +2,7 @@
 import { useT } from "@/lib/i18n";
 import type { AreaProfile, CommunityProfile, Watchlist, Workload } from "@/lib/api";
 import { influence as influenceColour } from "./viz/palette";
+import { plural } from "@/lib/metrics";
 
 /** The structured renderings of the four record-readout tabs.
  *
@@ -142,10 +143,10 @@ export function CommunityView({ data, onAsk }: { data: CommunityProfile; onAsk: 
         <span className="prov prov-derived">{t("Derived")}</span>{" "}
         {t("Membership is a Louvain community over co-offending — derived from shared cases, never a legal or gang designation. Influence is a graph-position fact, not a threat score.")}
         {data.profile && data.profile.case_count > 0 && " " +
-          t("{n} distinct case(s) behind this group{c}.", {
-            n: data.profile.case_count,
-            c: data.profile.top_crime_type ? `, most often ${data.profile.top_crime_type}` : "",
-          })}
+          plural(data.profile.case_count, "distinct case", "distinct cases", t) +
+          (data.profile.top_crime_type
+            ? t(", most often {c}.", { c: data.profile.top_crime_type })
+            : ".")}
       </p>
     </div>
   );

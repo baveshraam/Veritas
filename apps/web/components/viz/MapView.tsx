@@ -5,7 +5,7 @@ import WhyChain from "../WhyChain";
 import { caseIdOf } from "@/lib/evidence";
 import { useT } from "@/lib/i18n";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { ACCENT, MAP_POINT, ramp, rgba } from "./palette";
+import { ACCENT, MAP_POINT, categorical, ramp, rgba } from "./palette";
 
 type Hotspot = { polygon: [number, number][]; intensity: number; crime_count: number };
 type Point = {
@@ -63,17 +63,15 @@ const DISTRICTS: { code: string; name: string; lat: number; lng: number }[] = [
 // What crosses the network is a tile z/x/y for the current viewport — never an FIR's
 // exact coordinates or any investigative text.
 //
-// "positron" over "liberty"/"dark": a v1 pass tried "liberty" (too saturated — bright
-// cream/yellow roads competed with every overlay colour) and then "dark" (unified with
-// the console's own ink chrome, but read as a second dark instrument stacked on the
-// first, and this product's own design review called for the map to go back to a
-// LIGHT analytical basemap). "positron" is CartoDB's classic muted-cartography style —
-// background rgb(242,243,240), park fill rgb(230,233,229) — confirmed directly, not
-// assumed: low-saturation land, pale water, subdued grey labels, the register used by
-// analytics tools specifically because it gets out of the way of data drawn on top of
-// it. "bright" (OpenFreeMap's other light option) is closer to liberty's saturation and
-// was rejected for the same reason liberty was.
-const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/positron";
+// "liberty": OpenFreeMap's full-detail OSM style — real roads, building fill, water,
+// terrain shading and place-name labels at every zoom, the "industry standard" look an
+// investigator expects from a map (Google Maps/OSM-bright register). An earlier pass
+// swapped this for "positron" (CartoDB's ultra-minimal cartography — near-blank land,
+// no street rendering until deep zoom) for a quieter analytical look, but a map an
+// officer can't actually read as a map is the wrong trade: overlays already carry their
+// own contrast (navy case glyphs, white keylines, a severity-ramp hotspot fill), so they
+// hold up fine over real street detail.
+const DEFAULT_STYLE = "https://tiles.openfreemap.org/styles/liberty";
 
 const CASE_R = 4.5;
 const SELECT_RING_R = CASE_R + 4.5;
@@ -301,6 +299,11 @@ export default function MapView({
               properties: {
                 fir_id: p.fir_id, crime_no: p.crime_no ?? null, filed: p.filed ?? null,
                 crime_type: p.crime_type ?? null, district: p.district ?? null,
+                // Colour by offence type — a RECORD attribute, never a severity or
+                // risk signal — so the dots read as "what kind of case", not "how
+                // dangerous". Clusters stay the neutral map-point navy: they mix
+                // multiple types and have no single colour to show honestly.
+                color: categorical(p.crime_type),
               },
               geometry: { type: "Point" as const, coordinates: [p.lng, p.lat] },
             })),
@@ -355,7 +358,7 @@ export default function MapView({
           filter: ["!", ["has", "point_count"]],
           paint: {
             "circle-radius": ["interpolate", ["linear"], ["zoom"], 10, CASE_R * 0.6, 13, CASE_R],
-            "circle-color": MAP_POINT(),
+            "circle-color": ["coalesce", ["get", "color"], MAP_POINT()],
             "circle-opacity": ["interpolate", ["linear"], ["zoom"], 10, 0.55, 13, 1],
             "circle-stroke-width": 1.5, "circle-stroke-color": "#ffffff",
           },
@@ -444,6 +447,16 @@ export default function MapView({
 
   const hasHotspots = (data.polygons ?? []).length > 0;
 
+  // The legend's crime-type key: every distinct type on screen right now, most
+  // frequent first, capped so the key can't grow taller than the map itself.
+  const crimeTypeKey = (() => {
+    const counts = new Map<string, number>();
+    for (const p of data.fir_points ?? []) {
+      if (p.crime_type) counts.set(p.crime_type, (counts.get(p.crime_type) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8).map(([type]) => type);
+  })();
+
   // The case behind the current selection, if the selection is one of the points
   // on this map. A click already highlighted the evidence card; this is what turns
   // that highlight into somewhere to go next.
@@ -526,9 +539,19 @@ export default function MapView({
       <div className="map-legend">
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--case" />
-          <span>{t("Case")}</span>
+          <span>{t("Case — coloured by offence type")}</span>
           <span className="prov prov-record" style={{ marginLeft: "auto" }}>{t("Record")}</span>
         </div>
+        {crimeTypeKey.length > 0 && (
+          <div className="map-legend-types">
+            {crimeTypeKey.map((type) => (
+              <span className="map-legend-type" key={type}>
+                <i style={{ background: categorical(type) }} />
+                {type}
+              </span>
+            ))}
+          </div>
+        )}
         <div className="map-legend-row">
           <span className="map-legend-mark map-legend-mark--cluster">N</span>
           <span>{t("Cases here — click to expand")}</span>

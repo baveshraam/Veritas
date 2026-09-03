@@ -38,6 +38,25 @@ export const PRIMARY = () => token("--pri", "#1f6ed0");      // neutral analytic
 export const VIOLET = () => token("--violet", "#574bb0");    // model output
 export const MAP_POINT = () => token("--map-point", "#1e4a78");
 
+// A fixed qualitative set for CATEGORY, never MAGNITUDE — crime type has no
+// inherent order, so nothing here is a ramp. Kept clear of severity's
+// green/amber/red and influence's slate/blue so a category dot is never
+// mistaken for either scale.
+const CATEGORY = [
+  "#4e79a7", "#f28e2b", "#59a14f", "#af7aa1", "#76b7b2", "#edc949",
+  "#ff9da7", "#9c755f", "#5b8c5a", "#7b6888", "#c9a227", "#3d7a91",
+];
+
+/** Deterministic colour for an open-ended category string (crime type, station,
+ *  …) — same input always gets the same colour, spread across CATEGORY by a
+ *  cheap string hash rather than a hand-maintained type->colour table. */
+export function categorical(key: string | null | undefined): string {
+  if (!key) return MAP_POINT();
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
+  return CATEGORY[h % CATEGORY.length];
+}
+
 export const GRID = () => token("--chart-grid", "rgba(22,32,43,0.07)");
 export const TEXT = () => token("--t-1", "#16202b");
 export const TEXT_DIM = () => token("--t-2", "#41505f");

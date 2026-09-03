@@ -71,6 +71,15 @@ const KN: Record<string, string> = {
   "Sign in at another rank": "ಬೇರೆ ಶ್ರೇಣಿಯಲ್ಲಿ ಸೈನ್ ಇನ್ ಮಾಡಿ",
   "Switch": "ಬದಲಿಸಿ",
 
+  // ---- SessionHistory -----------------------------------------------------
+  "Previous chats": "ಹಿಂದಿನ ಚಾಟ್‌ಗಳು",
+  "Previous questions asked at your rank and station": "ನಿಮ್ಮ ಶ್ರೇಣಿ ಮತ್ತು ಠಾಣೆಯಲ್ಲಿ ಕೇಳಲಾದ ಹಿಂದಿನ ಪ್ರಶ್ನೆಗಳು",
+  "Chat history": "ಚಾಟ್ ಇತಿಹಾಸ",
+  "Loading…": "ಲೋಡ್ ಆಗುತ್ತಿದೆ…",
+  "Could not load chat history.": "ಚಾಟ್ ಇತಿಹಾಸವನ್ನು ಲೋಡ್ ಮಾಡಲು ಸಾಧ್ಯವಾಗಲಿಲ್ಲ.",
+  "No previous questions from your rank and station yet.": "ನಿಮ್ಮ ಶ್ರೇಣಿ ಮತ್ತು ಠಾಣೆಯಿಂದ ಇನ್ನೂ ಯಾವುದೇ ಹಿಂದಿನ ಪ್ರಶ್ನೆಗಳಿಲ್ಲ.",
+  "Shared by rank and station, not by who is signed in.": "ಶ್ರೇಣಿ ಮತ್ತು ಠಾಣೆಯ ಮೂಲಕ ಹಂಚಿಕೊಳ್ಳಲಾಗಿದೆ, ಯಾರು ಸೈನ್ ಇನ್ ಆಗಿದ್ದಾರೆ ಎಂಬುದರ ಮೂಲಕ ಅಲ್ಲ.",
+
   // ---- InvestigationHeader ----------------------------------------------
   "Case under investigation": "ತನಿಖೆಯಲ್ಲಿರುವ ಪ್ರಕರಣ",
   "Person of interest": "ಆಸಕ್ತಿಯ ವ್ಯಕ್ತಿ",
@@ -93,6 +102,10 @@ const KN: Record<string, string> = {
   "Timeline": "ಕಾಲಾನುಕ್ರಮ",
   "Network": "ಜಾಲ",
   "Geography": "ಭೂಗೋಳ",
+  "Hotspot Map": "ಹಾಟ್‌ಸ್ಪಾಟ್ ನಕ್ಷೆ",
+  "Area Profile": "ಪ್ರದೇಶ ವಿವರ",
+  "Watchlist": "ವೀಕ್ಷಣಾ ಪಟ್ಟಿ",
+  "Workload": "ಕೆಲಸದ ಹೊರೆ",
   "Financial": "ಹಣಕಾಸು",
   "Offenders": "ಅಪರಾಧಿಗಳು",
   "Repeat Offenders": "ಪುನರಪರಾಧಿಗಳು",
@@ -123,9 +136,20 @@ const KN: Record<string, string> = {
   "Most active offenders": "ಅತ್ಯಂತ ಸಕ್ರಿಯ ಅಪರಾಧಿಗಳು",
   "Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.":
     "ದಾಖಲೆಯಲ್ಲಿ ಎಷ್ಟು ಪ್ರಕರಣಗಳು ಅವರನ್ನು ಹೆಸರಿಸುತ್ತವೆ ಎಂಬುದರ ಆಧಾರದ ಮೇಲೆ ಶ್ರೇಣೀಕರಿಸಲಾಗಿದೆ — ಗುರುತು ಪದರವು ಸಾಧ್ಯವಾಗಿಸಿದ ಸತ್ಯ, ಏಕೆಂದರೆ ಮೂಲ ದಾಖಲೆಗಳಲ್ಲಿ ಪ್ರಕರಣಗಳಾದ್ಯಂತ ವ್ಯಕ್ತಿ ಎಂಬುದೇ ಇಲ್ಲ.",
+  "Every person named as accused on a case within your access scope — the identity layer makes this list possible at all, since the raw records have no cross-case person.":
+    "ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯೊಳಗಿನ ಒಂದು ಪ್ರಕರಣದಲ್ಲಿ ಆರೋಪಿಯಾಗಿ ಹೆಸರಿಸಲಾದ ಪ್ರತಿಯೊಬ್ಬ ವ್ಯಕ್ತಿ — ಈ ಪಟ್ಟಿಯನ್ನು ಗುರುತು ಪದರವು ಸಾಧ್ಯವಾಗಿಸಿದೆ, ಏಕೆಂದರೆ ಮೂಲ ದಾಖಲೆಗಳಲ್ಲಿ ಪ್ರಕರಣಗಳಾದ್ಯಂತ ವ್ಯಕ್ತಿ ಎಂಬುದೇ ಇಲ್ಲ.",
+  "Every offender on record, within your access scope": "ದಾಖಲೆಯಲ್ಲಿರುವ ಪ್ರತಿಯೊಬ್ಬ ಅಪರಾಧಿ, ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯೊಳಗೆ",
   "ranked": "ಶ್ರೇಣೀಕೃತ",
+  "listed": "ಪಟ್ಟಿಮಾಡಲಾಗಿದೆ",
   "No repeat-offender ranking loaded": "ಯಾವುದೇ ಪುನರಪರಾಧಿ ಶ್ರೇಣಿ ಲೋಡ್ ಆಗಿಲ್ಲ",
   "No offender ranking loaded": "ಯಾವುದೇ ಅಪರಾಧಿ ಶ್ರೇಣಿ ಲೋಡ್ ಆಗಿಲ್ಲ",
+  "No offender is on record in your scope": "ನಿಮ್ಮ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ ಯಾವುದೇ ಅಪರಾಧಿ ದಾಖಲೆಯಲ್ಲಿಲ್ಲ",
+  "Search every offender in your scope by name…": "ನಿಮ್ಮ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ ಪ್ರತಿಯೊಬ್ಬ ಅಪರಾಧಿಯನ್ನು ಹೆಸರಿನ ಮೂಲಕ ಹುಡುಕಿ…",
+  "Search offenders by name": "ಹೆಸರಿನ ಮೂಲಕ ಅಪರಾಧಿಗಳನ್ನು ಹುಡುಕಿ",
+  "Matching “{q}”, within your access scope": "“{q}” ಗೆ ಹೊಂದಿಕೆಯಾಗುತ್ತಿದೆ, ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯೊಳಗೆ",
+  "No offender named “{q}” is on record in your scope": "ನಿಮ್ಮ ವ್ಯಾಪ್ತಿಯಲ್ಲಿ “{q}” ಹೆಸರಿನ ಯಾವುದೇ ಅಪರಾಧಿ ದಾಖಲೆಯಲ್ಲಿಲ್ಲ",
+  "The search covers every offender in your access scope, not only the ranked page — this name simply isn't in the records you can see.":
+    "ಹುಡುಕಾಟವು ನಿಮ್ಮ ಪ್ರವೇಶ ವ್ಯಾಪ್ತಿಯಲ್ಲಿನ ಪ್ರತಿಯೊಬ್ಬ ಅಪರಾಧಿಯನ್ನು ಒಳಗೊಂಡಿದೆ, ಶ್ರೇಣೀಕೃತ ಪುಟ ಮಾತ್ರವಲ್ಲ — ಈ ಹೆಸರು ನೀವು ನೋಡಬಹುದಾದ ದಾಖಲೆಗಳಲ್ಲಿ ಇಲ್ಲ.",
   "Case count is a recorded fact, never a risk score — this never ranks by PageRank or a model output.":
     "ಪ್ರಕರಣ ಸಂಖ್ಯೆ ಒಂದು ದಾಖಲಿತ ಸತ್ಯ, ಎಂದಿಗೂ ಅಪಾಯದ ಅಂಕ ಅಲ್ಲ — ಇದು PageRank ಅಥವಾ ಮಾದರಿ ಔಟ್‌ಪುಟ್‌ನಿಂದ ಎಂದಿಗೂ ಶ್ರೇಣೀಕರಿಸುವುದಿಲ್ಲ.",
   "Who are the repeat offenders in Bengaluru Urban?": "ಬೆಂಗಳೂರು ನಗರದಲ್ಲಿ ಪುನರಪರಾಧಿಗಳು ಯಾರು?",
@@ -219,6 +243,29 @@ const KN: Record<string, string> = {
   "Accused": "ಆರೋಪಿ",
   "Habitual": "ಅಭ್ಯಾಸಬಲ",
   "Priors": "ಪೂರ್ವ ದಾಖಲೆ",
+  "Known associates group": "ಪರಿಚಿತ ಸಹಚರರ ಗುಂಪು",
+  "A Louvain community over co-offending — derived from shared cases, never a legal or gang designation.":
+    "ಸಹ-ಅಪರಾಧದ ಮೇಲಿನ ಒಂದು Louvain ಸಮುದಾಯ — ಹಂಚಿಕೊಂಡ ಪ್ರಕರಣಗಳಿಂದ ಪಡೆಯಲಾಗಿದೆ, ಎಂದಿಗೂ ಕಾನೂನುಬದ್ಧ ಅಥವಾ ಗ್ಯಾಂಗ್ ಪದನಾಮವಲ್ಲ.",
+  "Membership is a Louvain community over co-offending — derived from shared cases, never a legal or gang designation. Influence is a graph-position fact, not a threat score.":
+    "ಸದಸ್ಯತ್ವವು ಸಹ-ಅಪರಾಧದ ಮೇಲಿನ ಒಂದು Louvain ಸಮುದಾಯ — ಹಂಚಿಕೊಂಡ ಪ್ರಕರಣಗಳಿಂದ ಪಡೆಯಲಾಗಿದೆ, ಎಂದಿಗೂ ಕಾನೂನುಬದ್ಧ ಅಥವಾ ಗ್ಯಾಂಗ್ ಪದನಾಮವಲ್ಲ. ಪ್ರಭಾವವು ಗ್ರಾಫ್-ಸ್ಥಾನದ ಸತ್ಯ, ಅಪಾಯದ ಅಂಕವಲ್ಲ.",
+  "Ranked by network influence — not a risk score": "ಜಾಲ ಪ್ರಭಾವದ ಪ್ರಕಾರ ಶ್ರೇಣೀಕರಿಸಲಾಗಿದೆ — ಅಪಾಯದ ಅಂಕವಲ್ಲ",
+  "Known associate": "ಪರಿಚಿತ ಸಹಚರ",
+  "Network influence": "ಜಾಲ ಪ್ರಭಾವ",
+  "members": "ಸದಸ್ಯರು",
+  "shared cases": "ಹಂಚಿಕೊಂಡ ಪ್ರಕರಣಗಳು",
+  "No person is in focus, so this is the largest community in the graph. Name a person or a community number to see a different one.":
+    "ಯಾವುದೇ ವ್ಯಕ್ತಿ ಗಮನದಲ್ಲಿಲ್ಲ, ಆದ್ದರಿಂದ ಇದು ಗ್ರಾಫ್‌ನಲ್ಲಿನ ಅತಿದೊಡ್ಡ ಸಮುದಾಯ. ಬೇರೊಂದನ್ನು ನೋಡಲು ಒಬ್ಬ ವ್ಯಕ್ತಿಯನ್ನು ಅಥವಾ ಸಮುದಾಯದ ಸಂಖ್ಯೆಯನ್ನು ಹೆಸರಿಸಿ.",
+  ", most often {c}.": ", ಹೆಚ್ಚಾಗಿ {c}.",
+  "{n} open across": "{n} ತೆರೆದಿರುವ, ಒಟ್ಟು",
+  "named in these records": "ಈ ದಾಖಲೆಗಳಲ್ಲಿ ಹೆಸರಿಸಲಾಗಿದೆ",
+  "who offended alongside them": "ಅವರೊಂದಿಗೆ ಅಪರಾಧ ಮಾಡಿದವರು",
+  ", and {n} more reached through a chain of shared cases": ", ಮತ್ತು ಹಂಚಿಕೊಂಡ ಪ್ರಕರಣಗಳ ಸರಪಳಿಯ ಮೂಲಕ {n} ಹೆಚ್ಚು ತಲುಪಲಾಗಿದೆ",
+  "directly involved": "ನೇರವಾಗಿ ಭಾಗಿಯಾಗಿದ್ದಾರೆ",
+  "direct co-offenders": "ನೇರ ಸಹ-ಅಪರಾಧಿಗಳು",
+  "{n} in this network": "ಈ ಜಾಲದಲ್ಲಿ {n}",
+  "{n} people in view": "ವೀಕ್ಷಣೆಯಲ್ಲಿ {n} ಜನರು",
+  "{amount} traced": "{amount} ಪತ್ತೆಹಚ್ಚಲಾಗಿದೆ",
+  "{a} stated in the records · {b} linked by identity resolution": "{a} ದಾಖಲೆಗಳಲ್ಲಿ ಹೇಳಲಾಗಿದೆ · {b} ಗುರುತು ಪರಿಹಾರದಿಂದ ಜೋಡಿಸಲಾಗಿದೆ",
 
   // ---- ChatPane -----------------------------------------------------------
   "Copilot": "ಸಹಚಾಲಕ",
@@ -650,7 +697,26 @@ const PATTERNS: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^Check whether (.+) has priors$/, (m) => `${m[1]} ಅವರಿಗೆ ಪೂರ್ವ ದಾಖಲೆ ಇದೆಯೇ ಎಂದು ಪರಿಶೀಲಿಸಿ`],
   [/^Show the network around (.+)$/, (m) => `${m[1]} ಸುತ್ತಲಿನ ಜಾಲವನ್ನು ತೋರಿಸಿ`],
   [/^Cases in (.+)$/, (m) => `${m[1]} ನಲ್ಲಿ ಪ್ರಕರಣಗಳು`],
+  // `lib/metrics.ts`'s `plural(n, one, many)` — "12 known associates", "3 stalled
+  // cases" — built at render time from a count and one of a fixed set of nouns.
+  // Unrecognised nouns fall through untranslated (m[0]) rather than breaking.
+  [/^([\d,]+) (.+)$/, (m) => COUNT_NOUNS[m[2]] ? `${m[1]} ${COUNT_NOUNS[m[2]]}` : m[0]],
 ];
+
+const COUNT_NOUNS: Record<string, string> = {
+  "person": "ವ್ಯಕ್ತಿ", "people": "ಜನರು",
+  "known associate": "ಪರಿಚಿತ ಸಹಚರ", "known associates": "ಪರಿಚಿತ ಸಹಚರರು",
+  "flagged transaction": "ಗುರುತಿಸಲಾದ ವಹಿವಾಟು", "flagged transactions": "ಗುರುತಿಸಲಾದ ವಹಿವಾಟುಗಳು",
+  "stalled case": "ಸ್ಥಗಿತಗೊಂಡ ಪ್ರಕರಣ", "stalled cases": "ಸ್ಥಗಿತಗೊಂಡ ಪ್ರಕರಣಗಳು",
+  "connection": "ಸಂಪರ್ಕ", "connections": "ಸಂಪರ್ಕಗಳು",
+  "source account": "ಮೂಲ ಖಾತೆ", "source accounts": "ಮೂಲ ಖಾತೆಗಳು",
+  "destination account": "ಗಮ್ಯ ಖಾತೆ", "destination accounts": "ಗಮ್ಯ ಖಾತೆಗಳು",
+  "dated event": "ದಿನಾಂಕದ ಘಟನೆ", "dated events": "ದಿನಾಂಕದ ಘಟನೆಗಳು",
+  "distinct case": "ವಿಭಿನ್ನ ಪ್ರಕರಣ", "distinct cases": "ವಿಭಿನ್ನ ಪ್ರಕರಣಗಳು",
+  "police station": "ಪೊಲೀಸ್ ಠಾಣೆ", "police stations": "ಪೊಲೀಸ್ ಠಾಣೆಗಳು",
+  "station": "ಠಾಣೆ", "stations": "ಠಾಣೆಗಳು",
+  "FIR": "FIR", "FIRs": "FIRs",
+};
 
 /** Fills `{token}` placeholders in a (possibly already-translated) template. */
 function fill(s: string, vars?: Record<string, string | number>): string {

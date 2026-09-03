@@ -176,7 +176,7 @@ export default function StatsDashboard({ data, onAsk }: { data: Statistics; onAs
         <Tile n={chargesheeted.toLocaleString()} l={t("chargesheeted")}
               sub={t("filed, awaiting trial")} />
         <Tile n={String(data.district.length)} l={t("districts")}
-              sub={plural(data.station.length, "police station")} />
+              sub={plural(data.station.length, "police station", undefined, t)} />
       </div>
 
       <div className="stat-grid">

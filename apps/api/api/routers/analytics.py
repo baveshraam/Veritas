@@ -68,7 +68,7 @@ async def offenders(district: str | None = None, crime_type: str | None = None,
     unfindable."""
     people = sql_agent.ranked_offenders(officer.role, officer.ps_code, district=district,
                                         crime_type=crime_type, habitual_only=habitual,
-                                        limit=min(limit, 100), q=q)
+                                        limit=min(limit, 5000), q=q)
     return {"scope": {"district": district, "crime_type": crime_type,
                       "habitual_only": habitual, "q": q},
             "offenders": [{**p, "name": mask_person_name(officer.role, p["name"])}

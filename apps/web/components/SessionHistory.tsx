@@ -51,8 +51,8 @@ export default function SessionHistory({
     <div style={{ position: "relative" }}>
       <button className="btn btn-sm history-trigger" onClick={toggle} aria-expanded={open}
         title={t("Previous questions asked at your rank and station")}>
-        <span aria-hidden style={{ fontSize: 14 }}>🕘</span>
-        {t("History")}
+        <span aria-hidden style={{ fontSize: 14 }}>💬</span>
+        {t("Previous chats")}
       </button>
 
       {open && (

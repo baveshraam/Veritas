@@ -302,8 +302,14 @@ export default function Workspace({
   }, [view, kind, networkSubject, firId]);
 
   const stats = useAnalytics(view === "statistics", "all", () => getStatistics());
-  const topOffenders = useAnalytics(view === "offenders" && !(hasOffenderRanking && !offenderQueryLive),
-    `all:${offenderQueryLive}`, () => getOffenders({ limit: 20, q: offenderQueryLive || null }));
+  // Offenders is every offender in scope, full stop — not a "most active" top-N. That
+  // ranked-by-activity framing belongs to Repeat Offenders, which is genuinely a
+  // ranking (habitual, by recorded case count). So Offenders always fetches the whole
+  // scoped list, regardless of whether a chat answer's own (narrower, question-scoped)
+  // ranking is sitting in evidence — a search or a fresh open should never show fewer
+  // people than "everyone".
+  const topOffenders = useAnalytics(view === "offenders",
+    `all:${offenderQueryLive}`, () => getOffenders({ limit: 5000, q: offenderQueryLive || null }));
   const repeatOffenders = useAnalytics(view === "repeat_offenders" && !(hasHabitualRanking && !offenderQueryLive),
     `all:${offenderQueryLive}`, () => getOffenders({ limit: 20, habitual: true, q: offenderQueryLive || null }));
   const geo = useAnalytics(view === "geography" && !hasGeography, "default",
@@ -389,18 +395,19 @@ export default function Workspace({
     const habitual = view === "repeat_offenders";
     const rows = evidence.filter((e) => e.evidence_id.startsWith("offender:")
       && (habitual ? /habitual offender/i.test(e.content) : true));
-    title = habitual ? t("Repeat offenders") : t("Most active offenders");
-    sub = t("Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.");
-    // A chat answer's ranking wins when there is one AND nobody is searching — it
-    // carries the question's own scope ("in Mandya", "theft") and its citations.
-    // A search always overrides it: typing a name is an explicit request to look
-    // past whatever ranking is currently on screen, statewide, across everyone in
-    // scope — not just the ranked top page a chat answer or the tab's own default
-    // view shows.
+    title = habitual ? t("Repeat offenders") : t("Offenders");
+    sub = habitual
+      ? t("Ranked by how many cases on record name them — a fact the identity layer makes possible, since the raw records have no cross-case person at all.")
+      : t("Every person named as accused on a case within your access scope — the identity layer makes this list possible at all, since the raw records have no cross-case person.");
+    // Repeat Offenders is a genuine ranking, and a chat answer's own (question-scoped)
+    // ranking wins there when there is one and nobody is searching. Offenders is never
+    // a ranking — it is everyone in scope — so it always shows the full fetched list;
+    // a chat answer that named a handful of people is not "the offenders", it's a
+    // narrower answer to a different question.
     const loaded = habitual ? repeatOffenders : topOffenders;
     const direct = loaded.data?.offenders ?? [];
     const searching = offenderQueryLive.length > 0;
-    const useDirect = searching || !rows.length;
+    const useDirect = !habitual || searching || !rows.length;
     const n = useDirect ? direct.length : rows.length;
     searchBar = (
       <input
@@ -413,12 +420,14 @@ export default function Workspace({
       />
     );
     if (n) {
-      lead = { headline: plural(n, "person", "people"),
+      lead = { headline: plural(n, "person", "people", t),
         measure: searching
           ? t("Matching “{q}”, within your access scope", { q: offenderQueryLive })
-          : t("Ranked by recorded case count, within your access scope") };
+          : habitual
+            ? t("Ranked by recorded case count, within your access scope")
+            : t("Every offender on record, within your access scope") };
       prov = "record";
-      figs = [{ n: String(n), l: searching ? t("matched") : t("ranked") }];
+      figs = [{ n: String(n), l: searching ? t("matched") : habitual ? t("ranked") : t("listed") }];
       body = useDirect
         ? <OffenderRows rows={direct} onAsk={onAsk} />
         : <OffenderTable items={rows} onAsk={onAsk} />;
@@ -432,7 +441,7 @@ export default function Workspace({
         body={t("The search covers every offender in your access scope, not only the ranked page — this name simply isn't in the records you can see.")}
         ask={onAsk} question={habitual ? "Who are the repeat offenders in Bengaluru Urban?" : "Who is the most active offender in Bengaluru Urban?"} />;
     } else {
-      body = <Prompt mark="◈" title={habitual ? "No repeat offender is on record in your scope" : "No offender ranking is available in your scope"}
+      body = <Prompt mark="◈" title={habitual ? "No repeat offender is on record in your scope" : "No offender is on record in your scope"}
         body="Case count is a recorded fact, never a risk score — this never ranks by PageRank or a model output."
         ask={onAsk}
         question={habitual ? "Who are the repeat offenders in Bengaluru Urban?" : "Who is the most active offender in Bengaluru Urban?"} />;
@@ -510,7 +519,7 @@ export default function Workspace({
     title = t("Known associates group");
     sub = t("A Louvain community over co-offending — derived from shared cases, never a legal or gang designation.");
     if (members.length) {
-      lead = { headline: plural(members.length, "known associate"),
+      lead = { headline: plural(members.length, "known associate", undefined, t),
         measure: t("Ranked by network influence — not a risk score") };
       prov = "derived";
       figs = [{ n: String(members.length), l: t("members") }];
@@ -521,7 +530,7 @@ export default function Workspace({
       title = c.community_id !== null
         ? t("Community {n}", { n: c.community_id })
         : t("Known associates group");
-      lead = { headline: plural(c.members.length, "known associate"),
+      lead = { headline: plural(c.members.length, "known associate", undefined, t),
         measure: t("Ranked by network influence — not a risk score") };
       prov = "derived";
       figs = [
@@ -551,7 +560,7 @@ export default function Workspace({
       flush = true;
     } else if (watch.data?.transactions?.length) {
       prov = "model";
-      lead = { headline: plural(watch.data.total, "flagged transaction"),
+      lead = { headline: plural(watch.data.total, "flagged transaction", undefined, t),
                measure: t("Ranked by detector confidence") };
       figs = [
         { n: String(watch.data.rule), l: t("rule-based") },
@@ -581,9 +590,8 @@ export default function Workspace({
       flush = true;
     } else if (work.data?.stations?.length) {
       prov = "derived";
-      lead = { headline: plural(work.data.stalled, "stalled case"),
-               measure: t("{n} open across {s} station(s)",
-                          { n: work.data.open_cases.toLocaleString(), s: work.data.stations.length }) };
+      lead = { headline: plural(work.data.stalled, "stalled case", undefined, t),
+               measure: `${t("{n} open across", { n: work.data.open_cases.toLocaleString() })} ${plural(work.data.stations.length, "station", undefined, t)}` };
       figs = [
         { n: String(work.data.stations.length), l: t("stations") },
         { n: String(work.data.open_cases), l: t("open cases") },
@@ -684,18 +692,18 @@ export default function Workspace({
       title = t("People and connections");
       // The layering, stated where the graph is. The copilot says the same
       // thing beside the answer — an officer arriving by tab never read that.
-      const front = net.basis === "record" ? "named in these records" : "who offended alongside them";
+      const front = t(net.basis === "record" ? "named in these records" : "who offended alongside them");
       const wider = net.extended.length
-        ? `, and ${net.extended.length} more reached through a chain of shared cases`
+        ? t(", and {n} more reached through a chain of shared cases", { n: net.extended.length })
         : "";
       sub = net.direct.length
-        ? `${plural(net.direct.length, "person", "people")} ${front}${wider}.`
+        ? `${plural(net.direct.length, "person", "people", t)} ${front}${wider}.`
         : t("People reconstructed from accused records by probabilistic linkage, connected by the cases they share.");
       lead = {
         headline: net.direct.length
-          ? `${net.direct.length} ${net.basis === "record" ? "directly involved" : "direct co-offenders"}`
-          : `${net.total} in this network`,
-        measure: `${plural(net.edges, "connection")} · ${net.total} people in view`,
+          ? `${net.direct.length} ${t(net.basis === "record" ? "directly involved" : "direct co-offenders")}`
+          : t("{n} in this network", { n: net.total }),
+        measure: `${plural(net.edges, "connection", undefined, t)} · ${t("{n} people in view", { n: net.total })}`,
       };
       prov = net.basis === "record" ? "record" : "derived";
       figs = [
@@ -732,8 +740,8 @@ export default function Workspace({
       title = t("Financial trail");
       sub = t("Transfers between accounts owned by people in this investigation. Direction is preserved — money moves one way.");
       lead = {
-        headline: `${rupees(traced)} traced`,
-        measure: `${plural(sources, "source account")} · ${plural(dests, "destination account")}`,
+        headline: t("{amount} traced", { amount: rupees(traced) }),
+        measure: `${plural(sources, "source account", undefined, t)} · ${plural(dests, "destination account", undefined, t)}`,
       };
       prov = "record";
       figs = [
@@ -777,8 +785,9 @@ export default function Workspace({
     if (events.length) {
       const derived = events.filter((e) => e.kind === "derived").length;
       lead = {
-        headline: plural(events.length, "dated event"),
-        measure: `${events.length - derived} stated in the records · ${derived} linked by identity resolution`,
+        headline: plural(events.length, "dated event", undefined, t),
+        measure: t("{a} stated in the records · {b} linked by identity resolution",
+          { a: events.length - derived, b: derived }),
       };
       prov = derived ? "derived" : "record";
       figs = [
