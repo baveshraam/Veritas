@@ -1132,13 +1132,14 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                 total = sum(breakdown.values())
                 summary = ", ".join(f"{v} {k}" for k, v in
                                     sorted(breakdown.items(), key=lambda kv: -kv[1])[:4])
+                offence = case.get("crime_type") or "this type of"
                 out.append(EvidenceItem(
                     evidence_id=f"filing:{state.active_entities.active_fir}:context",
                     source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
                     source_query="status breakdown for this crime type, within your "
                                  "access scope",
-                    content=f"For context: of {total} {case.get('crime_type') or 'this '
-                            'type of'} case(s) you can see, the outcomes are {summary}.",
+                    content=f"For context: of {total} {offence} case(s) you can see, "
+                            f"the outcomes are {summary}.",
                     confidence=0.85, authoritative=True))
             _trace(state, "SQL Agent (filing readiness)",
                    f"{len(gaps)} structural gap(s) found", t0)
