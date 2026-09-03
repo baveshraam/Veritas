@@ -261,8 +261,18 @@ def _draft_summary(case: dict, timeline: list[dict], similar: list[dict],
     facts += (
         f"Current status: {safe.get('case_status')}. "
         f"{len(timeline)} recorded events in the case timeline. "
-        f"{len(similar)} past cases share this pattern; {convicted} ended in conviction."
     )
+    # The similar-cases figure is DERIVED (a structural/narrative match, not a case
+    # fact) — everything before it in `facts` is RECORD, read straight from the case
+    # file. A draft that doesn't say which is which is exactly the failure a real
+    # deployment hit: UK police used an AI-drafted report containing an unlabelled,
+    # unverified claim to justify a football banning order, and nobody caught it
+    # before it was acted on. Marked inline rather than only in the console's own
+    # provenance channel, because this text is also what gets pasted into a document
+    # that leaves the console entirely (PDF export, a copied paragraph).
+    derived_note = (f"{len(similar)} past cases share this pattern; {convicted} ended "
+                    f"in conviction.")
+    facts += f"{derived_note} [DERIVED — structural/narrative match, not a stated case fact]"
 
     if available():
         try:
@@ -273,7 +283,12 @@ def _draft_summary(case: dict, timeline: list[dict], similar: list[dict],
                 system="You draft factual case-diary entries. Never invent details.",
             )
             if out:
-                return out
+                # The model may drop or reword the inline tag while paraphrasing the
+                # facts around it — the tag's job is done once as a trailer instead
+                # of trusted to survive inside generated prose.
+                return (f"{out.rstrip()}\n\n[Note: the similar-past-cases figure "
+                        f"above is a DERIVED estimate from structural/narrative "
+                        f"matching, not a fact stated on this case's own file.]")
         except Exception:
             pass
     return facts

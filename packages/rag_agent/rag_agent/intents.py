@@ -122,6 +122,32 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
                            "remove that lead", "remove the lead", "remove lead",
                            "pursue that lead", "pursue the lead", "lead as pursued",
                            "lead pursued"), "none"),
+    # Six intents added for the "conversational, not statistical" pass: each is a
+    # real dialogue behaviour built on data already in the record layer, not a new
+    # model or a new table. All are case- or subject-scoped for the same reason
+    # BOARD_*/CASE_CONTEXT are — none of them means anything without a case or a
+    # named person already in view.
+    "INTERROGATION_PREP": (("prepare me for questioning", "prepare to question",
+                            "prep me for questioning", "interrogation prep",
+                            "questioning prep", "help me prepare to interview",
+                            "what should i ask", "get me ready to question",
+                            "brief me before i question"), "none"),
+    # "backlog" is deliberately absent here — _WORKLOAD_SHAPE already claims that
+    # bare word as a shape, checked before keyword scoring ever runs, so any phrase
+    # containing it would be intercepted before this list is ever consulted.
+    "CASE_SIMILARITY_WATCH": (("cold case match", "cold-case match",
+                               "check my open cases", "check against cold cases",
+                               "check my other cases", "check my unsolved cases",
+                               "match against my open cases",
+                               "check for a cold case match"), "none"),
+    "CASE_HANDOFF": (("catch me up", "bring me up to speed", "case handoff",
+                      "handoff briefing", "hand this case off to me",
+                      "pick this case up cold", "brief me on this case cold"), "none"),
+    "PREFILING_CHECK": (("would this hold up", "would this case hold up",
+                         "is this case ready to file", "is this ready for chargesheet",
+                         "pre-filing check", "prefiling check", "is this case ready",
+                         "would this case stand up", "case readiness check",
+                         "is this case solid"), "none"),
 }
 
 # Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
@@ -137,7 +163,8 @@ _KEYWORD_RE = {
 # run the whole retrieval pipeline, come back with semantic neighbours, and refuse with
 # "check whether the record exists in the system" — which is not why it failed. The
 # orchestrator short-circuits these instead, and says which subject is missing.
-NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK"}
+NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK",
+                 "INTERROGATION_PREP"}
 # BOARD_PIN_PERSON also needs a resolved person, but is NOT in NEEDS_SUBJECT: it is
 # also in NEEDS_CASE (a board belongs to a case), and the no_case gate runs first —
 # adding it here as well would make "no case, no person" report the wrong missing
@@ -151,7 +178,9 @@ NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL",
 # BOARD_* intent joins this set for the same reason: a board belongs to a case.
 NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
              "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
-             "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS"}
+             "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS",
+             "CASE_SIMILARITY_WATCH", "CASE_HANDOFF", "PREFILING_CHECK",
+             "CROSS_STATION_LINKAGE"}
 
 # Operations that read or describe the PREVIOUS turn (or the system itself), rather
 # than making a fresh investigative ask of their own — a meta-turn, not a new
@@ -170,6 +199,10 @@ META_OPERATIONS = {
     "CASE_LOCATIONS", "CASE_REFERENCE_UNSUPPORTED", "RESULT_SET_FOLLOWUP",
     "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
     "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS",
+    # Reads the PREVIOUS turn's own finding and argues against it — a meta-turn
+    # about an existing answer, not a fresh investigative ask, for the same reason
+    # EXPLAIN_REASONING/EVIDENCE_FOR are.
+    "CHALLENGE_FINDING",
 }
 
 # Operations where a woven narrative genuinely adds something the evidence list alone
@@ -187,6 +220,12 @@ META_OPERATIONS = {
 NEEDS_NARRATIVE_SYNTHESIS = {
     "PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK", "CAUSAL",
     "SIMILAR_CASES", "NEXT_STEPS", "BRIEFING", "TIMELINE_CONNECTION",
+    # A real handoff/interview briefing reads better woven than as a flat list, the
+    # same reason BRIEFING is here. PREFILING_CHECK and CASE_SIMILARITY_WATCH stay
+    # OUT deliberately — each is a checklist of structural facts, and an LLM asked
+    # to "weave a narrative" from a completeness gap is exactly where a rephrase
+    # could soften or blur something that needs to stay a plain, checkable fact.
+    "INTERROGATION_PREP", "CASE_HANDOFF",
     # Set by orchestrator._run_plan once a general multi-step plan (see
     # semantic_interpreter's SemanticRequest.plan_steps) finishes executing —
     # never produced by classify() or the model directly. A plan's whole point is
@@ -357,6 +396,29 @@ _THAT = r"(?:this|that|these|those|it|them|they|he|she|him|her|the\s+\w+)"
 # The nouns that make a "why is this X" question one about the WORLD rather than about
 # the answer. Guarded separately below, in _WORLD_QUESTION.
 _WORLD_NOUN = r"(?:crime|crimes|district|districts|area|areas|region|state|city|town)"
+
+# "Poke holes in this" — a meta-question about the PREVIOUS answer, checked before
+# _EXPLAIN_REASONING for the same reason _TIMELINE_CONNECTION is: it asks the engine
+# to ACTIVELY LOOK for what would weaken the last finding (an uncharged co-accused, a
+# missing arrest, another of the same person's cases closed as false), which is a
+# different question from "how did you decide this" — that one explains the chain
+# that is already there; this one goes looking for what is NOT there. None of these
+# verbs ("argue", "poke", "break", "devil's advocate") appear in _DERIVE_VERB, so the
+# two patterns do not compete for the same phrasing; this is checked first only to
+# match the file's own established discipline of narrower shapes owning their own
+# wording before the broad explanation branch runs.
+_CHALLENGE_FINDING = re.compile(
+    r"\bpoke\s+holes?\s+in\b"
+    r"|\bargue\s+against\s+(?:this|that|it)\b"
+    r"|\bplay\s+devil.s\s+advocate\b"
+    r"|\bwhat\s+would\s+(?:the\s+)?defen[cs]e\s+(?:say|argue)\b"
+    r"|\bwhat\s+would\s+break\s+(?:this|that|the)\s+case\b"
+    r"|\bfind\s+the\s+weak(?:ness|est\s+point)\s+in\s+(?:this|that|the)\s+case\b"
+    r"|\bwhat\s+is\s+the\s+weakest\s+part\s+of\s+(?:this|that|the)\s+case\b"
+    r"|\bconvince\s+me\s+(?:this|that|it)(?:'s|\s+is)?\s+wrong\b"
+    r"|\bchallenge\s+(?:this|that)\s+finding\b"
+    r"|\bmake\s+the\s+case\s+against\s+(?:this|that|it)\b",
+    re.I)
 
 _EXPLAIN_REASONING = re.compile(
     # 1. "why are you showing / selecting / deriving these"
@@ -840,6 +902,20 @@ _WORKLOAD_SHAPE = re.compile(
     r"|\bstalled\s+cases?\b|\bcases?\s+(?:going|gone)\s+cold\b|\bbacklog\b"
     r"|\buntouched\s+cases?\b|\bwhich\s+stations?\s+need", re.I)
 
+# "Who else should know about this?" — checked as a shape rather than added to
+# PERSON_NETWORK's keyword list, because the natural wording ("connections",
+# "station") already belongs to PERSON_NETWORK/HOTSPOT and a keyword tie there is
+# decided by dict registration order, the same fragile property BOARD_VIEW's own
+# "case board" collision (v16) already burned once.
+_CROSS_STATION_LINKAGE = re.compile(
+    r"\bwho\s+else\s+should\s+know\b"
+    r"|\bany\s+other\s+stations?\s+(?:working|involved|looking)\b"
+    r"|\banother\s+station\s+(?:working\s+on|involved\s+in|looking\s+at)\s+(?:this|it)\b"
+    r"|\bcross.?station\s+(?:link|links|linkage|connection|connections)\b"
+    r"|\blinked?\s+(?:cases?\s+)?at\s+(?:another|a\s+different)\s+station\b"
+    r"|\bnotify\s+(?:another|other)\s+stations?\b"
+    r"|\bshould\s+(?:another|other)\s+stations?\s+know\b", re.I)
+
 
 # "Add this event to the investigation board" contains "investigation board" —
 # a bare BOARD_VIEW keyword — so without this pre-check it misroutes to a board
@@ -945,6 +1021,11 @@ def classify(query: str) -> str:
     # everything it does not match falls through to the explanation branch below.
     if _TIMELINE_CONNECTION.search(query or ""):
         return "TIMELINE_CONNECTION"
+    # Checked before _EXPLAIN_REASONING for the same reason _TIMELINE_CONNECTION is:
+    # "poke holes in this" and "what would break this case" are requests to go
+    # looking for a weakness, not requests to explain how the answer was reached.
+    if _CHALLENGE_FINDING.search(query or ""):
+        return "CHALLENGE_FINDING"
     # The explanation branch is broad by design, so the one thing it must not swallow
     # is handed back first: "why is crime higher in this district" is causal analysis
     # over socioeconomics, not a request to explain the answer on screen.
@@ -987,6 +1068,8 @@ def classify(query: str) -> str:
         return "WATCHLIST"
     if _WORKLOAD_SHAPE.search(query or ""):
         return "STATION_WORKLOAD"
+    if _CROSS_STATION_LINKAGE.search(query or ""):
+        return "CROSS_STATION_LINKAGE"
     if _COMMUNITY_PROFILE_SHAPE.search(query or ""):
         return "COMMUNITY_PROFILE"
     if _AREA_PROFILE_SHAPE.search(query or ""):
@@ -1074,6 +1157,7 @@ ALL_OPERATIONS: frozenset[str] = frozenset(INTENTS) | {
     "OFFENDER_RANKING", "CASE_STATS",
     "AREA_PROFILE", "COMMUNITY_PROFILE", "WATCHLIST", "STATION_WORKLOAD",
     "RESULT_SET_FOLLOWUP", "UNKNOWN",
+    "CHALLENGE_FINDING", "CROSS_STATION_LINKAGE",
 }
 
 

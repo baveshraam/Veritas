@@ -143,6 +143,12 @@ def test_no_two_intents_claim_the_same_input_by_accident():
         # SIMILAR_CASES, not a search that happens to say "cases").
         ("cases", "previous cases"), ("cases", "matching cases"),
         ("cases", "related cases"),
+        # Same shape: every CASE_SIMILARITY_WATCH phrase happens to contain "cases",
+        # which only ever adds a harmless CRIME_SEARCH point (CRIME_SEARCH is the
+        # scored-last fallback and cannot outvote a specific intent either way).
+        ("cases", "check my open cases"), ("cases", "check against cold cases"),
+        ("cases", "check my other cases"), ("cases", "check my unsolved cases"),
+        ("cases", "match against my open cases"),
         # ALIAS_CHECK's two-word keyword deliberately overlaps PERSON_HISTORY's
         # "record": the second hit is what breaks a 1-1 tie toward the alias read.
         ("record", "duplicate record"),

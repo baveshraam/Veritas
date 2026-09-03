@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional
 
 from data import ds, upsert_session_focus
-from policy import mask_person_name
+from policy import can_view_fir, mask_person_name
 
 from . import board as board_agent
 from . import intents
@@ -81,6 +81,12 @@ _SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
     # narratives to "conviction rate 59%" only buries it — measured live, where the
     # rate arrived as citation [2] of 7 with five unrelated assault cases under it.
     "OFFENDER_RANKING", "CASE_STATS",
+    # The six conversational additions below are each a complete answer once their
+    # subject/case is resolved, for the same reason the case-scoped block above is:
+    # semantic neighbours of an interview-prep briefing or a filing-readiness check
+    # are not evidence for the specific gaps those branches already went and found.
+    "INTERROGATION_PREP", "CASE_SIMILARITY_WATCH", "CASE_HANDOFF",
+    "PREFILING_CHECK", "CROSS_STATION_LINKAGE",
 }
 
 
@@ -364,7 +370,7 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
     # or "evidence" and answer from whatever it happened to find. node_synthesize
     # does the actual work; this only routes the turn there untouched, the same way
     # CAPABILITY routes above.
-    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR"):
+    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR", "CHALLENGE_FINDING"):
         state.refusal_reason = "meta"
         _trace(state, "Orchestrator",
                "Question is about the previous answer, not the records", t0)
@@ -995,6 +1001,205 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
             _trace(state, "Copilot (briefing)",
                    "the open case is outside this officer's station scope", t0)
 
+    elif intent == "INTERROGATION_PREP" and pid:
+        rows = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)
+        who = mask_person_name(role, _person_name(pid) or f"person {pid}")
+        prep: list[str] = []
+        if rows:
+            convicted = sum(1 for r in rows if (r.get("case_status") or "") == "Convicted")
+            prep.append(f"{who} is named as accused on {len(rows)} case(s) on record "
+                        f"within your access scope, {convicted} of which ended in "
+                        f"conviction.")
+            for r in rows[:5]:
+                for gap in _case_evidence_gaps(r["fir_id"], role, ps):
+                    prep.append(f"On FIR {r.get('fir_number') or r['fir_id']}: {gap}")
+        else:
+            prep.append(f"No case within your access scope names {who} as accused — "
+                        f"there is no prior record to prepare from.")
+        net = graph_agent.person_network(pid, role)
+        if net:
+            top = sorted(net, key=lambda r: r.get("hops", 99))[:3]
+            named = ", ".join(x for x in (mask_person_name(role, r.get("name_en") or "")
+                                          for r in top if r.get("name_en")) if x)
+            if named:
+                prep.append(f"Known associates worth asking about: {named}.")
+        out += [EvidenceItem(
+            evidence_id=f"interview:{pid}:{i}", source_type="CRIMINAL_RECORD",
+            source_id=pid,
+            source_query="person_record + arrest/chargesheet gaps + co-offending "
+                         "network, assembled for interview preparation",
+            content=p, confidence=0.9, authoritative=True) for i, p in enumerate(prep)]
+        _trace(state, "Copilot (interrogation prep)", f"{len(prep)} preparation point(s)", t0)
+
+    elif intent == "CASE_SIMILARITY_WATCH" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            candidates = copilot_brief.similar_cases_for(case_rows[0], limit=10)
+            shown = [c for c in candidates
+                    if (c.get("case_status") or "").lower() in
+                       ("undetected", "closed as undetected")
+                    or c.get("ps_code") == ps][:5]
+            if shown:
+                out += [EvidenceItem(
+                    evidence_id=f"watch:{state.active_entities.active_fir}:{c['fir_id']}",
+                    source_type="FIR_RECORD", source_id=str(c["fir_id"]),
+                    source_query="similar_cases_for, filtered to your own open backlog "
+                                 "and unsolved cases",
+                    content=f"{_fir_content(c)} Matches your open case because: "
+                            f"{c['explanation']}.",
+                    confidence=float(c["similarity"]), confidence_kind="similarity")
+                    for c in shown]
+            else:
+                out.append(EvidenceItem(
+                    evidence_id=f"watch:{state.active_entities.active_fir}:none",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="similar_cases_for, filtered to your own open backlog "
+                                 "and unsolved cases",
+                    content="Nothing in your own open cases or the unsolved backlog "
+                            "structurally matches this one. This checks structural "
+                            "overlap only — it is not a guarantee no connection exists.",
+                    confidence=0.85, authoritative=True))
+            _trace(state, "Copilot (case-similarity watch)",
+                   f"{len(shown)} backlog/cold match(es)", t0)
+
+    elif intent == "CASE_HANDOFF" and state.active_entities.active_fir:
+        fir_id = state.active_entities.active_fir
+        try:
+            b = copilot_brief.generate_copilot_brief(fir_id, role, ps)
+            board = board_agent.get_board(fir_id, role, ps)
+            out.append(EvidenceItem(
+                evidence_id=f"handoff:{fir_id}:summary", source_type="FIR_RECORD",
+                source_id=fir_id, source_query="Investigation Copilot brief, read as a "
+                             "case handoff",
+                content=b.draft_summary, confidence=0.95, authoritative=True))
+            notes = [i for i in board["items"] if i["item_type"] == "note"]
+            leads_open = [i for i in board["items"]
+                         if i["item_type"] == "lead" and i.get("status") == "open"]
+            leads_dismissed = [i for i in board["items"]
+                               if i["item_type"] == "lead" and i.get("status") == "dismissed"]
+            pinned = [i for i in board["items"] if i["item_type"] in ("evidence", "person")]
+            out.append(EvidenceItem(
+                evidence_id=f"handoff:{fir_id}:board", source_type="COMMUNITY_SUMMARY",
+                source_id=fir_id, source_query="Investigation board — what previous "
+                             "officers left on this case",
+                content=(f"The investigation board carries {len(pinned)} pinned "
+                         f"item(s), {len(notes)} note(s), {len(leads_open)} open "
+                         f"lead(s) and {len(leads_dismissed)} lead(s) already ruled "
+                         f"out — nothing here needs to be rediscovered."
+                         if board["items"] else
+                         "Nothing has been pinned to the investigation board for this "
+                         "case yet — you are the first to leave a record here."),
+                confidence=0.95, authoritative=True))
+            out += [EvidenceItem(
+                evidence_id=f"handoff:{fir_id}:lead:{i}", source_type="COMMUNITY_SUMMARY",
+                source_id=fir_id, source_query="Investigation board — open leads",
+                content=f"Still open: {item['content']}", confidence=0.85,
+                authoritative=True) for i, item in enumerate(leads_open[:5])]
+            _trace(state, "Copilot (case handoff)",
+                   f"handoff assembled — {len(board['items'])} board item(s)", t0)
+        except KeyError:
+            _trace(state, "Copilot (case handoff)",
+                   "the open case is no longer found within policy scope", t0)
+        except copilot_brief.NotPermitted:
+            _trace(state, "Copilot (case handoff)",
+                   "the open case is outside this officer's station scope", t0)
+
+    elif intent == "PREFILING_CHECK" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            case = case_rows[0]
+            gaps = _case_evidence_gaps(state.active_entities.active_fir, role, ps)
+            if gaps:
+                out += [EvidenceItem(
+                    evidence_id=f"filing:{state.active_entities.active_fir}:{i}",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="ArrestSurrender/ChargesheetDetails for the open case",
+                    content=g, confidence=0.9, authoritative=True)
+                    for i, g in enumerate(gaps)]
+            else:
+                out.append(EvidenceItem(
+                    evidence_id=f"filing:{state.active_entities.active_fir}:none",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="ArrestSurrender/ChargesheetDetails for the open case",
+                    content="No structural gap was found — an arrest is on record and "
+                            "the case either has a chargesheet or is still within a "
+                            "normal open window. This checks the file's own "
+                            "completeness only; it is not a judgement on the strength "
+                            "of the evidence itself.",
+                    confidence=0.9, authoritative=True))
+            breakdown = sql_agent.status_breakdown(role, ps, crime_type=case.get("crime_type"))
+            if breakdown:
+                total = sum(breakdown.values())
+                summary = ", ".join(f"{v} {k}" for k, v in
+                                    sorted(breakdown.items(), key=lambda kv: -kv[1])[:4])
+                out.append(EvidenceItem(
+                    evidence_id=f"filing:{state.active_entities.active_fir}:context",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="status breakdown for this crime type, within your "
+                                 "access scope",
+                    content=f"For context: of {total} {case.get('crime_type') or 'this '
+                            'type of'} case(s) you can see, the outcomes are {summary}.",
+                    confidence=0.85, authoritative=True))
+            _trace(state, "SQL Agent (filing readiness)",
+                   f"{len(gaps)} structural gap(s) found", t0)
+
+    elif intent == "CROSS_STATION_LINKAGE" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            case = case_rows[0]
+            accused = sql_agent.accused_on_case(state.active_entities.active_fir)
+            links: list[EvidenceItem] = []
+            seen = {state.active_entities.active_fir}
+            for a in accused[:10]:
+                try:
+                    other_cases = sql_agent.person_record(str(a["PersonUID"]))
+                except Exception:
+                    other_cases = []
+                for oc in other_cases:
+                    if oc["fir_id"] in seen or oc.get("ps_code") == case["ps_code"]:
+                        continue
+                    seen.add(oc["fir_id"])
+                    name = a["CanonicalName"] or a["AccusedName"]
+                    if can_view_fir(role, ps, oc.get("ps_code") or ""):
+                        links.append(EvidenceItem(
+                            evidence_id=f"linkage:{state.active_entities.active_fir}:"
+                                       f"{oc['fir_id']}",
+                            source_type="FIR_RECORD", source_id=oc["fir_id"],
+                            source_query="person_record — this case's accused, "
+                                         "cross-referenced by station",
+                            content=(f"{name} is also named as accused on FIR "
+                                    f"{oc.get('fir_number') or oc['fir_id']} "
+                                    f"({oc.get('crime_type') or 'offence not recorded'}) "
+                                    f"at {oc.get('ps_name') or oc.get('ps_code')} — a "
+                                    f"different station."),
+                            confidence=0.93, authoritative=True))
+                    else:
+                        links.append(EvidenceItem(
+                            evidence_id=f"linkage:{state.active_entities.active_fir}:"
+                                       f"{oc['fir_id']}",
+                            source_type="FIR_RECORD", source_id=oc["fir_id"],
+                            source_query="person_record — this case's accused, "
+                                         "cross-referenced by station",
+                            content=(f"{name} is also named as accused on an open case "
+                                    f"at a station outside your access scope — the "
+                                    f"link is real, the case cannot be named here. "
+                                    f"Contact that station directly."),
+                            confidence=0.9, authoritative=True))
+            if links:
+                out += links[:8]
+            else:
+                out.append(EvidenceItem(
+                    evidence_id=f"linkage:{state.active_entities.active_fir}:none",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="person_record — this case's accused, cross-referenced "
+                                 "by station",
+                    content="None of this case's accused are named on any case at a "
+                            "different station, within what this check can see. This "
+                            "is a checked absence, not a failed search.",
+                    confidence=0.9, authoritative=True))
+            _trace(state, "SQL Agent (cross-station linkage)",
+                   f"{len(links)} cross-station link(s)", t0)
+
     # Vector search complements the graph on narrative/MO semantics — but not when a
     # specialist has already produced the whole answer. Two shapes of that:
     #
@@ -1079,6 +1284,62 @@ def _resolve_subject_from_open_case(state: InvestigationState) -> None:
         return
     state.refusal_reason = "ambiguous_person"
     state.ambiguous_candidates = [a["CanonicalName"] or a["AccusedName"] for a in accused]
+
+
+def _case_evidence_gaps(fir_id: str, role: str, ps: str) -> list[str]:
+    """Structural completeness gaps on ONE case file — no arrest on record, no
+    chargesheet after a normal open window, or a chargesheet already marked false or
+    undetected. Shared by PREFILING_CHECK ('would this hold up') and
+    CHALLENGE_FINDING ('poke holes in this') — the same real gaps, asked about two
+    different moments: before a case is sent up, and after an answer built on it has
+    already been given. States an absence; never an opinion on guilt or strength."""
+    rows = sql_agent.fir_by_id(fir_id, role, ps)
+    if not rows:
+        return []
+    case = rows[0]
+    gaps: list[str] = []
+    arrests = ds.query(
+        'SELECT "ArrestSurrenderID" FROM "ArrestSurrender" WHERE "CaseMasterID" = :cid',
+        {"cid": int(fir_id)})
+    if not arrests:
+        gaps.append("No arrest is recorded on this case — the accusation alone is on file.")
+    chargesheets = ds.query(
+        'SELECT "cstype" FROM "ChargesheetDetails" WHERE "CaseMasterID" = :cid',
+        {"cid": int(fir_id)})
+    types = {c.get("cstype") for c in chargesheets}
+    if not chargesheets:
+        filed = ds.to_dt(case.get("date_filed"))
+        if filed:
+            age = (datetime.now() - filed).days
+            if age > sql_agent.STALE_DAYS:
+                gaps.append(f"No chargesheet has been filed in {age} days.")
+    elif "B" in types:
+        gaps.append("A chargesheet on this case is already marked closed as false.")
+    elif "C" in types:
+        gaps.append("A chargesheet on this case is already marked closed as undetected.")
+    return gaps
+
+
+def _person_pattern_gaps(pid: str, role: str, ps: str) -> list[str]:
+    """Whether this person's OTHER cases show a pattern worth knowing before relying
+    on the one currently in view — never a judgement on the current case's own
+    merits, only on what the rest of their record looks like."""
+    try:
+        cases = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)[:10]
+    except Exception:
+        return []
+    closed_without_conviction = 0
+    for c in cases:
+        rows = ds.query(
+            'SELECT "cstype" FROM "ChargesheetDetails" WHERE "CaseMasterID" = :cid',
+            {"cid": int(c["fir_id"])})
+        if any(r.get("cstype") in ("B", "C") for r in rows):
+            closed_without_conviction += 1
+    if closed_without_conviction:
+        return [f"{closed_without_conviction} of their other case(s) on record were "
+                f"closed as false or undetected — worth checking whether this one "
+                f"shares the same pattern."]
+    return []
 
 
 def _last_turn(session_id: str):
@@ -2525,6 +2786,59 @@ def _evidence_explanation(prior, state: InvestigationState) -> str:
     return "\n".join(lines)
 
 
+def _challenge_explanation(prior, state: InvestigationState) -> str:
+    """'Poke holes in this' — actively looks for what would WEAKEN the previous
+    answer, rather than explaining how it was reached (EXPLAIN_REASONING's job).
+    Reuses the same gap-detection PREFILING_CHECK runs before a case is filed — the
+    same real gaps, asked about an answer already given rather than a case not yet
+    sent up. Never invents a weakness: an absence of one is reported honestly."""
+    role, ps = state.officer_role, _officer_ps(state.officer_id)
+    pool = _explain_pool(prior)
+    if not pool:
+        return (f'There is nothing to challenge — the previous answer to '
+                f'"{prior.query}" cited no records, so there is no finding resting '
+                f"on anything to argue against.")
+
+    fir_ids = list(dict.fromkeys(
+        e.get("evidence_id", "").split(":", 1)[1] for e in pool
+        if (e.get("evidence_id") or "").startswith("fir:")))[:3]
+    person_ids = list(dict.fromkeys(
+        e.get("evidence_id", "").split(":", 1)[1] for e in pool
+        if (e.get("evidence_id") or "").split(":", 1)[0] in ("accused", "priors", "offender")
+        and e.get("evidence_id", "").split(":", 1)[1].isdigit()))[:1]
+
+    lines = [f'Looking for what would weaken the previous answer to "{prior.query}":']
+    found = False
+    for fid in fir_ids:
+        for g in _case_evidence_gaps(fid, role, ps):
+            found = True
+            lines.append(f"- On FIR {fid}: {g}")
+    for pid in person_ids:
+        for g in _person_pattern_gaps(pid, role, ps):
+            found = True
+            lines.append(f"- {g}")
+
+    scored = [e for e in pool
+             if not e.get("authoritative") and e.get("confidence") is not None]
+    if scored:
+        weakest = min(scored, key=lambda e: e["confidence"])
+        found = True
+        excerpt = (weakest.get("content") or "")[:160]
+        lines.append(
+            f'- The least-supported single point this rests on: "{excerpt}" '
+            f"(confidence {float(weakest['confidence']):.0%}). If that one does not "
+            f"hold, the rest of the finding is unaffected, but that specific point is.")
+
+    if not found:
+        lines.append(
+            "- Nothing structural stands out: every record cited is a direct, dated "
+            "entry with no missing arrest or chargesheet gap on file. That does not "
+            "certify the finding is correct — only that this check found no "
+            "structural weakness to name.")
+    from data.nlp.translate import resolve_plural_markers
+    return resolve_plural_markers("\n".join(lines))
+
+
 def _district_code(state: InvestigationState) -> str | None:
     from data.districts import canonical_code
     # state.constraints wins over active_location: a constraint-change follow-up
@@ -2941,7 +3255,7 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
     # Meta-questions about the PREVIOUS turn — see node_retrieve's "meta" short
     # circuit. Answered here rather than there because the answer is built from
     # storage, not from anything node_retrieve/node_evaluate compute.
-    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR"):
+    if state.intent in ("EXPLAIN_REASONING", "EVIDENCE_FOR", "CHALLENGE_FINDING"):
         prior = _last_substantive_turn(state.session_id)
         if not prior:
             answer = refusal_message("nothing_prior")
@@ -2958,7 +3272,8 @@ def node_synthesize(state: InvestigationState) -> InvestigationState:
             return state
 
         answer = (_reasoning_explanation(prior, state) if state.intent == "EXPLAIN_REASONING"
-                 else _evidence_explanation(prior, state))
+                 else _evidence_explanation(prior, state) if state.intent == "EVIDENCE_FOR"
+                 else _challenge_explanation(prior, state))
         note = None
         if state.language != "en":
             answer, note = translation_agent.to_language(answer, state.language)

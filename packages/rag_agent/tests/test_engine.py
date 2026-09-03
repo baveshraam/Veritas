@@ -245,6 +245,16 @@ def test_no_intents_keyword_is_a_substring_of_another_intents_keyword_unless_exp
         ("FINANCIAL", "accounts", "CRIME_SEARCH", "count"),
         ("SIMILAR_CASES", "matching cases", "CRIME_SEARCH", "cases"),
         ("SIMILAR_CASES", "related cases", "CRIME_SEARCH", "cases"),
+        # Same shape again: every CASE_SIMILARITY_WATCH phrase happens to contain
+        # "cases", so it always adds a harmless CRIME_SEARCH point alongside its own
+        # — harmless because CRIME_SEARCH is excluded from the specific-intent race
+        # (classify()'s own `specific = {... if i != "CRIME_SEARCH"}`) and can only
+        # ever be the total fallback.
+        ("CASE_SIMILARITY_WATCH", "check my open cases", "CRIME_SEARCH", "cases"),
+        ("CASE_SIMILARITY_WATCH", "check against cold cases", "CRIME_SEARCH", "cases"),
+        ("CASE_SIMILARITY_WATCH", "check my other cases", "CRIME_SEARCH", "cases"),
+        ("CASE_SIMILARITY_WATCH", "check my unsolved cases", "CRIME_SEARCH", "cases"),
+        ("CASE_SIMILARITY_WATCH", "match against my open cases", "CRIME_SEARCH", "cases"),
         ("CRIME_SEARCH", "firs", "FIR_LOOKUP", "fir"),
         # Wanted, not tolerated: "is there a duplicate record for him" scores
         # PERSON_HISTORY on "record" and ALIAS_CHECK on "duplicate". The two-word

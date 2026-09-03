@@ -1058,6 +1058,124 @@ def _explain_idcheck(eid: str, item) -> Derivation:
         next_questions=["Is this person recorded under another name?"])
 
 
+def _explain_interview_prep(eid: str, item) -> Derivation:
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim="This is a point to prepare before questioning this person.",
+        steps=["Their recorded case history, and the structural gaps on those cases "
+               "(no arrest logged, no chargesheet filed), were read from the record.",
+               "Their direct co-offending associates were read from the graph, "
+               "nearest first.",
+               "Each point below is either a case fact or a named gap in the file — "
+               "nothing here is a suggested question or a guess at what they will say."],
+        qualifies="Assembled from the record layer only; it prepares you with what is "
+                  "on file, not with an interrogation script.",
+        caveat="This is preparation, not evidence. Nothing here establishes what "
+               "happened in this specific case.",
+        next_questions=["Does this person have priors?", "Who are this person's associates?"])
+
+
+def _explain_watch(eid: str, item) -> Derivation:
+    negative = eid.endswith(":none")
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim=("No match was found in your own backlog or the unsolved case pool."
+               if negative else "This case structurally resembles the one you have open."),
+        steps=["The same structured-similarity check the Investigation Copilot runs "
+               "for 'similar cases' was run again, narrowed to two populations: your "
+               "own open cases, and cases on record closed as undetected.",
+               "Only matches inside those two populations are shown — a strong match "
+               "outside them would not appear here."],
+        qualifies=("A checked absence across both populations." if negative else
+                   "Ranked the same way SIMILAR_CASES is: shared crime type, IPC "
+                   "sections, district and modus operandi first, text similarity as "
+                   "the tiebreaker."),
+        caveat="A structural match is a reason to compare the two cases, not a "
+               "finding that they are connected.",
+        next_questions=["Find similar cases.", "What happened in this case?"])
+
+
+def _explain_handoff(eid: str, item) -> Derivation:
+    kind = eid.split(":")[-1] if eid.count(":") >= 2 else ""
+    if kind == "board":
+        return Derivation(
+            evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+            claim="This states what previous officers left on this case's "
+                  "investigation board.",
+            steps=["Every pinned item, note and lead recorded against this case was "
+                   "read and counted by type."],
+            qualifies="A count of board rows, not a summary written by anyone.",
+            next_questions=["What is on the board for this case?"])
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim="This is a handoff briefing, assembled so you do not have to rebuild "
+              "the case from a blank file.",
+        steps=["The same case-diary draft the Investigation Copilot generates was "
+               "read first — the case's own facts, its timeline, its leads.",
+               "The investigation board was read alongside it, so anything a "
+               "previous officer already pinned, noted or ruled out does not need "
+               "rediscovering."],
+        qualifies="Every fact in it traces to the case file, the timeline, or the "
+                  "board — nothing here is written from outside the record.",
+        caveat="It is a briefing to read before you act, not a document of record.",
+        next_questions=["What is on the board for this case?", "What should I do next?"])
+
+
+def _explain_filing(eid: str, item) -> Derivation:
+    negative = eid.endswith(":none")
+    context = eid.endswith(":context")
+    if context:
+        return Derivation(
+            evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+            claim="This is how other cases of the same offence type, within your "
+                  "access scope, have actually been recorded as ending.",
+            steps=["Every case sharing this case's crime type, within your rank and "
+                   "station scope, was counted by its recorded status."],
+            qualifies="Context for judgement, not a prediction about this case.",
+            next_questions=["What is the conviction rate?"])
+    return Derivation(
+        evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
+        claim=("No structural gap was found on this case file."
+               if negative else "This is a structural gap in this case's own file."),
+        steps=["The case's ArrestSurrender and ChargesheetDetails rows were read "
+               "directly — this checks whether the paperwork is complete, not "
+               "whether the evidence is strong."],
+        qualifies=("A checked absence of the three gaps this look for." if negative
+                   else "A fact read directly from the case's own records."),
+        caveat="A structural gap is not a judgement that the case is weak, and its "
+               "absence is not a judgement that it is strong. It states only what "
+               "paperwork is or is not on file.",
+        next_questions=["Has a chargesheet been filed?", "Was there an arrest?"])
+
+
+def _explain_linkage(eid: str, item) -> Derivation:
+    negative = eid.endswith(":none")
+    withheld = "outside your access scope" in (_get(item, "content", "") or "")
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim=("No cross-station link was found for this case's accused."
+               if negative else
+               "This case's accused is also named on a case at a different station."
+               if not withheld else
+               "This case's accused is also named on a case at another station, "
+               "outside what you may see."),
+        steps=["Every person accused on this case was resolved to their cross-case "
+               "identity, and their other cases were read.",
+               "Any of those other cases filed at a DIFFERENT station than this "
+               "case's own is reported here — the identity link is the same one "
+               "'does this person have priors' reads.",
+               "Each such case is then checked against your own rank and station: "
+               "the LINK is always reported, the CASE is named only where your "
+               "access allows it."],
+        qualifies=("A checked absence across this case's own accused." if negative
+                   else "The link is a resolved identity match, not a coincidence of "
+                        "name."),
+        caveat="A shared person across two stations' cases is a reason for those "
+               "stations to compare notes. It is not itself a finding that the "
+               "cases are related.",
+        next_questions=["Who are this person's associates?", "Does this person have priors?"])
+
+
 def _explain_no_accused(eid: str, item) -> Derivation:
     return Derivation(
         evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
@@ -1103,6 +1221,11 @@ _PREFIX = {
     "workload":         lambda eid, it, c: _explain_workload(eid, it),
     "stalled":          lambda eid, it, c: _explain_stalled(eid, it),
     "idcheck":          lambda eid, it, c: _explain_idcheck(eid, it),
+    "interview":        lambda eid, it, c: _explain_interview_prep(eid, it),
+    "watch":            lambda eid, it, c: _explain_watch(eid, it),
+    "handoff":          lambda eid, it, c: _explain_handoff(eid, it),
+    "filing":           lambda eid, it, c: _explain_filing(eid, it),
+    "linkage":          lambda eid, it, c: _explain_linkage(eid, it),
 }
 
 # Every evidence_id prefix this system produces must have a handler above. The
