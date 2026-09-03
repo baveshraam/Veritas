@@ -1199,3 +1199,95 @@ were the only two that actually broke. The exact internal mechanism on Data Stor
 side that rejects a bare small JSON number yet still corrupts a scientific-notation
 string was inferred with high confidence from the pattern across every case checked,
 not confirmed from Zoho's own source or documentation.
+
+---
+
+## 2026-09-04 — six conversational additions, and the real `appsail/upsert` contract
+
+Driven by a research pass into what real conversational-AI-for-policing products
+(eSleuth, Case IQ, SymphonyAI Sensa Copilot) and the academic/DOJ literature actually
+offer, cross-checked against the West Midlands Police Microsoft Copilot hallucination
+incident (a fabricated match used to justify a real football banning order) as the
+concrete argument for why every new feature had to inherit the existing cited-or-refuse
+discipline rather than add a new surface that could bypass it.
+
+**Six new conversational intents, each built entirely on data already in the record
+layer — no new table, no new model:**
+- `INTERROGATION_PREP` — priors, structural case gaps (no arrest, no chargesheet after
+  a normal window), and direct associates, assembled before an officer questions someone.
+- `CASE_SIMILARITY_WATCH` — the existing `SIMILAR_CASES` retrieval, narrowed to an
+  officer's own open backlog and cases closed as undetected.
+- `CASE_HANDOFF` — fuses the Copilot brief with the investigation board's own state
+  into one "catch me up" narrative.
+- `CHALLENGE_FINDING` — a new meta-turn (alongside `EXPLAIN_REASONING`/`EVIDENCE_FOR`)
+  that actively looks for what would WEAKEN the previous answer, rather than explaining
+  how it was reached.
+- `PREFILING_CHECK` — the same structural-gap check as `CHALLENGE_FINDING`, run
+  proactively before a case is sent up.
+- `CROSS_STATION_LINKAGE` — reports when a case's accused is also named at a different
+  station, following the same v20 partial-visibility discipline as associate
+  explanations (the link is always reported, the other case named only where the
+  officer's access allows it).
+
+Also: the case-diary draft now tags its one DERIVED sentence inline (both the
+templated and LLM-generated paths), so an unverified/derived claim can never ship
+unlabeled into an exported document — the direct, deliberate answer to the West
+Midlands incident above.
+
+**A real Python-version bug caught by the deploy pipeline's own smoke-test import,
+not by any local check.** `PREFILING_CHECK`'s status-breakdown sentence split a string
+literal across a line inside an f-string's `{}` — valid under the relaxed f-string
+grammar Python 3.12+ ships (PEP 701), so it parsed cleanly under this machine's local
+Python 3.13 (`ast.parse` gave no warning). The deployed container runs 3.11, and the
+import failed with a plain `SyntaxError` before the build ever reached AppSail. Fixed
+by computing the fallback text as a local variable first; every touched file is now
+also checked against a local Python 3.11 interpreter (`py -3.11`), not just whichever
+version `python` happens to resolve to.
+
+**A real conversational bug found live, on the very first end-to-end test, and fixed
+the same pass.** "Poke holes in this." asked right after "Catch me up on this case." —
+the single most natural way to chain these two new features — answered "nothing
+structural stands out," even though the case had two real, findable gaps (no arrest,
+no chargesheet in 65 days). Cause: `CASE_HANDOFF`'s own evidence is written as
+`handoff:{fir_id}:summary`, and `CHALLENGE_FINDING`'s case-id extraction only
+recognised the `fir:{fir_id}` shape a direct FIR lookup's citations use. Fixed to also
+read the case id out of `handoff:`/`filing:`/`watch:`/`linkage:` evidence, and to fall
+back to the session's own `active_fir` when the prior turn names no case at all.
+Verified by reproducing the exact live sequence, both as a regression test and again
+against the redeployed live API.
+
+**The `appsail/upsert` contract — reverse-engineered, and now written down.** No prior
+session's changelog entry contains the actual request shape, only the pipeline name
+(`get-signature` → `.github/relay-upload.url` → `relay-deploy.yml` → local
+`appsail/upsert`); every past deploy apparently reconstructed the call from scratch.
+JSON bodies with `image`/`object_key` fields all returned an opaque `Invalid input
+value for image` regardless of shape or nesting. The real contract, found by reading
+the installed Catalyst CLI's own source
+(`node_modules/zcatalyst-cli/lib/endpoints/lib/appsail.js`,
+`customAppSailCallback`/`getSignedUrl`): `get-signature` and `upsert` take NO
+resource-id path segment (only `.../appsail/{id}/configuration` does); `name` is a
+query parameter for `get-signature` and a form FIELD for `upsert`; and `upsert` is a
+**multipart/form-data PUT**, not JSON — fields `name`, `memory`, `platform` (must be
+`"custom_runtime"`), `configuration` (a JSON **string**, not a nested object — e.g.
+`'{"port": 8000}'`), and `local_object_key` (the bare base64 key `get-signature`
+returns). Saved as `scripts/deploy-api.py` so this is a one-command operation from
+here on, not tribal knowledge re-derived under time pressure every pass.
+
+**Deployed and live-verified, end to end, twice** (deployment ids
+`52852000000400007` then `52852000000391012`, the second carrying the
+`CHALLENGE_FINDING` fix): `/health` 200 with the full dataset warm; a real multi-turn
+session opened FIR `100222201202600022` and drove all six new intents plus `/explain`
+against a `linkage:` evidence id — every one answered with real records, honest
+absences where nothing existed, and a working provenance chain.
+
+**Test suite: 830 passed, 2 skipped** (14 new — `packages/rag_agent/tests/
+test_conversational_additions.py`).
+
+**Not done this pass, named rather than silently skipped**: no console changes — every
+new intent uses `visualization: "none"` and renders through the existing generic
+citation/evidence rail, matching `CASE_CONTEXT`/`NEXT_STEPS`/`BRIEFING`'s own
+precedent; a dedicated UI affordance (an "Interrogation prep" button on a person view,
+a "Challenge this" button on an answer) would be a small, purely additive follow-up.
+`docs/OFFICER_PITCH.md` (new) restates the whole platform in plain, non-technical
+language for a law-enforcement audience — a different artifact from this file,
+written this same session on request.
