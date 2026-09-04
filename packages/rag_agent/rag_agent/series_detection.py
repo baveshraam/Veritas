@@ -21,10 +21,10 @@ What is new here is the layer CROSS_STATION_LINKAGE and SIMILAR_CASES don't prov
   case elsewhere is coincidence, not a pattern, and CCA's own literature is explicit
   that a pattern claim needs multiple corroborating instances.
 """
-from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from data import ds
+from pydantic import BaseModel, Field
 
 from .agents import sql_agent
 from .copilot import brief as copilot_brief
@@ -61,23 +61,23 @@ MIN_CLUSTER_SIZE = 3
 MAX_CANDIDATES = 8
 
 
-@dataclass
-class SeriesMember:
+class SeriesMember(BaseModel):
     fir_id: str
     fir_number: str
     ps_code: str
-    ps_name: str | None
-    district: str | None
-    date_filed: object
-    case_status: str | None
-    viewable: bool                  # can_view_fir already applied by the caller
-    matched_features: list[str] = field(default_factory=list)
+    ps_name: str | None = None
+    district: str | None = None
+    date_filed: str | None = None
+    case_status: str | None = None
+    matched_features: list[str] = Field(default_factory=list)
     similarity: float = 0.0
 
 
-@dataclass
-class SeriesResult:
+class SeriesResult(BaseModel):
     anchor_fir_id: str
+    anchor_ps_code: str      # so a caller (e.g. GET /alerts) can can_view_fir the
+                             # anchor itself before deciding whether to surface this
+                             # to a given officer at all
     members: list[SeriesMember]
     stations: list[str]
     districts: list[str]
@@ -119,11 +119,12 @@ def find_series(anchor_case: dict, *, min_cluster: int = MIN_CLUSTER_SIZE,
             continue                                   # consistent, but not distinctive
         if _shared_known_accused(anchor_id, str(c["fir_id"])):
             continue                                   # already linked by identity
+        date_filed = c.get("date_filed")
         members.append(SeriesMember(
             fir_id=str(c["fir_id"]), fir_number=c.get("fir_number") or "",
             ps_code=c.get("ps_code") or "", ps_name=c.get("ps_name"),
-            district=c.get("district"), date_filed=c.get("date_filed"),
-            case_status=c.get("case_status"), viewable=True,
+            district=c.get("district"), date_filed=str(date_filed) if date_filed else None,
+            case_status=c.get("case_status"),
             matched_features=c.get("matched_features") or [],
             similarity=float(c.get("similarity") or 0.0)))
         if len(members) >= max_candidates:
@@ -136,8 +137,9 @@ def find_series(anchor_case: dict, *, min_cluster: int = MIN_CLUSTER_SIZE,
                       {anchor_case.get("ps_name") or anchor_ps or ""})
     districts = sorted({m.district for m in members if m.district} |
                        ({anchor_case.get("district")} if anchor_case.get("district") else set()))
-    return SeriesResult(anchor_fir_id=anchor_id, members=members,
-                        stations=[s for s in stations if s], districts=districts)
+    return SeriesResult(anchor_fir_id=anchor_id, anchor_ps_code=anchor_ps or "",
+                        members=members, stations=[s for s in stations if s],
+                        districts=districts)
 
 
 def scan_for_new_series(days: int = 14, min_cluster: int = MIN_CLUSTER_SIZE) -> list[SeriesResult]:

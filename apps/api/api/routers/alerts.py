@@ -28,15 +28,18 @@ the same `Depends(current_officer)` every other data-bearing route already
 uses — no more hand-rolled first-frame auth.
 """
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from data import ds
+from data import cache, ds
 from fastapi import APIRouter, Depends, Request
 from ml_models.serving import check_anomalies
+from policy import can_view_fir
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth.jwt_auth import Officer, current_officer
+from .jobs import SERIES_CACHE_KEY
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -69,10 +72,37 @@ def _recent(alert) -> bool:
     return at >= cutoff
 
 
+def _cached_series() -> list[dict]:
+    """Read-only: the actual scan runs in /jobs/refresh's own step, on that job's 6h
+    cadence, never here. A poll that finds nothing cached (no refresh has run yet)
+    gets an empty list, not an error — the same "a missing derived layer degrades
+    silently" property the rest of this feed already has."""
+    return cache.get(SERIES_CACHE_KEY) or []
+
+
+def _scoped_series(series: dict, role: str, ps: str) -> dict | None:
+    """The same partial-visibility discipline SERIES_DISCOVERY's conversational
+    handler applies, here for the push feed: an officer never sees this at all if
+    they can't see the anchor case itself, and a member at a station outside their
+    scope is reported as existing without being named — the pattern is real, the
+    case is not shown."""
+    if not can_view_fir(role, ps, series.get("anchor_ps_code") or ""):
+        return None
+    members = []
+    for m in series.get("members", []):
+        if can_view_fir(role, ps, m.get("ps_code") or ""):
+            members.append(m)
+        else:
+            members.append({**m, "fir_number": None, "ps_name": None,
+                            "matched_features": ["outside your access scope"]})
+    return {**series, "members": members}
+
+
 @router.get("/alerts")
 async def alerts(request: Request, officer: Officer = Depends(current_officer)):
     async def stream():
         seen: set[str] = set()
+        seen_series: set[str] = set()
         loop = asyncio.get_running_loop()
         try:
             while True:
@@ -90,6 +120,17 @@ async def alerts(request: Request, officer: Officer = Depends(current_officer)):
                 fresh.sort(key=lambda a: -abs(a.observed - a.expected))
                 for alert in fresh[:MAX_PER_POLL]:
                     yield {"event": "alert", "data": alert.model_dump_json()}
+
+                for series in await loop.run_in_executor(None, _cached_series):
+                    anchor = series.get("anchor_fir_id")
+                    if not anchor or anchor in seen_series:
+                        continue
+                    scoped = _scoped_series(series, officer.role, officer.ps_code)
+                    if scoped is None:
+                        continue          # can't see the anchor case at all
+                    seen_series.add(anchor)
+                    yield {"event": "series", "data": json.dumps(scoped)}
+
                 await asyncio.sleep(POLL_SECONDS)
         except asyncio.CancelledError:
             return

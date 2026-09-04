@@ -1,4 +1,4 @@
-"""`/jobs/refresh` rebuilds four INDEPENDENT derived layers. One failing must not
+"""`/jobs/refresh` rebuilds several INDEPENDENT derived layers. One failing must not
 cancel the rest.
 
 This is a real live failure, not a hypothetical. The four steps were in one try/except,
@@ -42,6 +42,7 @@ def steps(monkeypatch):
     monkeypatch.setattr("data.embeddings.index_job.run_all", ok("vector_index"),
                         raising=False)
     monkeypatch.setattr(jobs, "_rerun_detectors", ok("aml"))
+    monkeypatch.setattr(jobs, "_scan_series", ok("series_scan"))
     return called
 
 
@@ -51,7 +52,7 @@ def test_a_blocked_stratus_publish_does_not_cancel_the_aml_sweep(steps, caplog):
     jobs._refresh_running = True
     jobs._run_refresh()
 
-    assert steps == ["gds", "stratus_graph", "vector_index", "aml"], (
+    assert steps == ["gds", "stratus_graph", "vector_index", "aml", "series_scan"], (
         "every step must be attempted — a failing cache publish cancelled the two "
         "record-layer rebuilds after it")
 
@@ -133,7 +134,8 @@ def test_sync_returns_the_per_step_summary_rather_than_just_started(client, step
     assert body["status"] == "complete"
     # Every step is reported, and the one that blew up says so by name instead of
     # vanishing into a log nobody can read.
-    assert set(body["steps"]) == {"gds", "stratus_graph", "vector_index", "aml"}
+    assert set(body["steps"]) == {"gds", "stratus_graph", "vector_index", "aml",
+                                  "series_scan"}
     assert body["steps"]["stratus_graph"].startswith("failed: RuntimeError")
     assert body["steps"]["aml"] == "aml-done"
     assert jobs._refresh_running is False

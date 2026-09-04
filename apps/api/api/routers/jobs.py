@@ -2,8 +2,10 @@
 
 Everything derived from the record layer goes stale the moment the record layer changes:
 the graph metrics (PageRank / Louvain / betweenness), the Stratus graph blob a cold
-container reads instead of paginating 136k edges, and the AML flags. None of that is
-expensive enough to recompute per request, and none of it is cheap enough to.
+container reads instead of paginating 136k edges, the AML flags, and (as of the series-
+discovery pass) the cross-station pattern scan GET /alerts reads from cache rather than
+recomputing per officer per poll. None of that is expensive enough to recompute per
+request, and none of it is cheap enough to.
 
 So it is a job. Catalyst's scheduler (Cron) is what runs it — a Cron entry cannot invoke an
 AppSail container directly, but it can call a URL, so the job *is* an endpoint. It is not a
@@ -82,6 +84,16 @@ def _run_refresh() -> dict:
         # transaction is flagged by either detector" forever, and that answer was
         # indistinguishable from a genuine all-clear.
         ("aml", _rerun_detectors),
+        # Cross-station series discovery (rag_agent.series_detection) — a genuinely
+        # proactive scan, not a per-query answer. Deliberately NOT run on /alerts'
+        # own 30-second poll: it calls similar_cases_for (a real hybrid vector
+        # search) per recently-filed case, and every connected officer's SSE stream
+        # runs its own independent poll loop — recomputing that every 30 seconds per
+        # officer is real, avoidable compute. This step runs it once per refresh
+        # cycle (the same 6h Cron cadence as everything else derived from the record
+        # layer) and caches the result; /alerts reads the cache, it never recomputes.
+        # Placed after vector_index above so it searches against fresh embeddings.
+        ("series_scan", _scan_series),
     )
     out: dict = {}
     try:
@@ -99,6 +111,24 @@ def _run_refresh() -> dict:
     finally:
         with _refresh_lock:
             _refresh_running = False
+
+
+SERIES_CACHE_KEY = "series_scan_v1"
+SERIES_CACHE_TTL_HOURS = 24     # a bit longer than the 6h refresh cadence, so a
+                                # missed/slow refresh cycle doesn't blank the feed
+
+
+def _scan_series() -> dict:
+    """Cache the result so GET /alerts can read it cheaply on every poll instead of
+    re-running a real vector search per recently-filed case for every connected
+    officer every 30 seconds — see the step's own comment in _run_refresh above."""
+    from data import cache
+    from rag_agent.series_detection import scan_for_new_series
+
+    results = scan_for_new_series()
+    cache.put(SERIES_CACHE_KEY, [r.model_dump(mode="json") for r in results],
+             expiry_hours=SERIES_CACHE_TTL_HOURS)
+    return {"candidates": len(results)}
 
 
 def _rerun_detectors() -> dict:
