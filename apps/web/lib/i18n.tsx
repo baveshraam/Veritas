@@ -276,7 +276,9 @@ const KN: Record<string, string> = {
     "ನೀವು ನೋಡಲು ಅನುಮತಿಸಿದ ಪ್ರಕರಣ ದಾಖಲೆಗಳಿಂದ ಉತ್ತರಗಳನ್ನು ಪಡೆಯಲಾಗುತ್ತದೆ, ಮತ್ತು ಪ್ರತಿ ಹಕ್ಕು ಅದು ಬಂದ ದಾಖಲೆಯನ್ನು ಹೊಂದಿರುತ್ತದೆ. ದಾಖಲೆಗಳು ಒಂದು ಹಕ್ಕನ್ನು ಬೆಂಬಲಿಸದಿದ್ದಾಗ, Veritas ಊಹಿಸುವ ಬದಲು ಹಾಗೆ ಹೇಳುತ್ತದೆ.",
   "Start here": "ಇಲ್ಲಿಂದ ಆರಂಭಿಸಿ",
   "Does Usha Naika have priors?": "ಉಷಾ ನಾಯ್ಕ ಅವರಿಗೆ ಪೂರ್ವ ದಾಖಲೆ ಇದೆಯೇ?",
+  "What should I ask Usha Naika?": "ಉಷಾ ನಾಯ್ಕ ಅವರನ್ನು ನಾನು ಏನು ಕೇಳಬೇಕು?",
   "Person history": "ವ್ಯಕ್ತಿ ಇತಿಹಾಸ",
+  "Interrogation prep": "ವಿಚಾರಣೆ ಸಿದ್ಧತೆ",
   "Criminal network": "ಅಪರಾಧ ಜಾಲ",
   "Demonstration rank — not signed in": "ಪ್ರದರ್ಶನ ಶ್ರೇಣಿ — ಸೈನ್ ಇನ್ ಆಗಿಲ್ಲ",
   "No supporting records": "ಬೆಂಬಲಿಸುವ ದಾಖಲೆಗಳಿಲ್ಲ",
@@ -301,6 +303,12 @@ const KN: Record<string, string> = {
   "Who is involved in this case?": "ಈ ಪ್ರಕರಣದಲ್ಲಿ ಯಾರು ಭಾಗಿಯಾಗಿದ್ದಾರೆ?",
   "What should I investigate next?": "ಮುಂದೆ ನಾನು ಏನನ್ನು ತನಿಖೆ ಮಾಡಬೇಕು?",
   "Pin this to the case board": "ಇದನ್ನು ಪ್ರಕರಣ ಬೋರ್ಡ್‌ಗೆ ಪಿನ್ ಮಾಡಿ",
+  "What should I ask {name}?": "{name} ಅವರನ್ನು ನಾನು ಏನು ಕೇಳಬೇಕು?",
+  "Catch me up on this case": "ಈ ಪ್ರಕರಣದ ಬಗ್ಗೆ ನನಗೆ ಸಂಕ್ಷಿಪ್ತ ಮಾಹಿತಿ ನೀಡಿ",
+  "Would this case hold up?": "ಈ ಪ್ರಕರಣ ನ್ಯಾಯಾಲಯದಲ್ಲಿ ನಿಲ್ಲುತ್ತದೆಯೇ?",
+  "Who else should know about this?": "ಇದರ ಬಗ್ಗೆ ಬೇರೆ ಯಾರಿಗೆ ತಿಳಿಯಬೇಕು?",
+  "Check my other cases for a match": "ಹೊಂದಾಣಿಕೆಗಾಗಿ ನನ್ನ ಇತರ ಪ್ರಕರಣಗಳನ್ನು ಪರಿಶೀಲಿಸಿ",
+  "Convince me this is wrong": "ಇದು ತಪ್ಪು ಎಂದು ನನಗೆ ಮನವರಿಕೆ ಮಾಡಿ",
   "What are the crime trends?": "ಅಪರಾಧ ಪ್ರವೃತ್ತಿಗಳು ಏನು?",
 
   // ---- EvidencePanel / EvidenceInspector -----------------------------------
@@ -690,6 +698,7 @@ const PATTERNS: [RegExp, (m: RegExpMatchArray) => string][] = [
   // recur across ChatPane's follow-ups, CommandPalette, CaseOverview and the
   // graph/map probe cards, always as one of these exact shapes.
   [/^Does (.+) have priors\?$/, (m) => `${m[1]} ಅವರಿಗೆ ಪೂರ್ವ ದಾಖಲೆ ಇದೆಯೇ?`],
+  [/^What should I ask (.+)\?$/, (m) => `${m[1]} ಅವರನ್ನು ನಾನು ಏನು ಕೇಳಬೇಕು?`],
   [/^Who are the associates of (.+)\?$/, (m) => `${m[1]} ಅವರ ಸಹಚರರು ಯಾರು?`],
   [/^Show me the timeline for (.+?)\.?$/, (m) => `${m[1]} ಅವರ ಕಾಲಾನುಕ್ರಮವನ್ನು ತೋರಿಸಿ`],
   [/^Where did (.+)'s money go\?$/, (m) => `${m[1]} ಅವರ ಹಣ ಎಲ್ಲಿ ಹೋಯಿತು?`],

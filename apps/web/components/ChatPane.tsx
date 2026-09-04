@@ -13,7 +13,7 @@ import type { SessionFocusView, Turn } from "@/lib/types";
 import VoiceRecorder from "./VoiceRecorder";
 
 const OPENERS: { label: string; q: string }[] = [
-  { label: "Person history", q: "Does Usha Naika have priors?" },
+  { label: "Interrogation prep", q: "What should I ask Usha Naika?" },
   { label: "Criminal network", q: "Who are the associates of Usha Naika?" },
   { label: "Geography", q: "Show me crime hotspots" },
   { label: "Forecast", q: "What are the crime trends?" },
@@ -25,14 +25,23 @@ function followUps(focus: SessionFocusView | undefined, t: Turn): string[] {
   const out: string[] = [];
   const person = focus?.person?.name;
   if (focus?.case) {
-    out.push("What happened in this case?", "Who is involved in this case?",
+    out.push("What happened in this case?", "Catch me up on this case",
+             "Would this case hold up?", "Who else should know about this?",
+             "Check my other cases for a match", "Who is involved in this case?",
              "What should I investigate next?");
   }
   if (person) {
-    out.push(`Does ${person} have priors?`, `Who are the associates of ${person}?`);
+    out.push(`What should I ask ${person}?`, `Does ${person} have priors?`,
+             `Who are the associates of ${person}?`);
   }
   if (t.visualization.kind === "network" && focus?.case) out.push("Pin this to the case board");
-  return out.filter((q) => q.toLowerCase() !== t.query.toLowerCase()).slice(0, 3);
+  const picked = out.filter((q) => q.toLowerCase() !== t.query.toLowerCase()).slice(0, 3);
+  // The self-challenge is a meta-turn about THIS answer, so it earns a slot of its
+  // own rather than competing with the case/person questions for one.
+  if (t.evidence.length && t.query.toLowerCase() !== "convince me this is wrong") {
+    picked.push("Convince me this is wrong");
+  }
+  return picked;
 }
 
 export default function ChatPane({
