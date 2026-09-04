@@ -1,5 +1,12 @@
 # Veritas vs. the industry — gap analysis
 
+**Newer analysis exists.** `docs/STRATEGIC_RESET_2026-09-04.md` (2026-09-04/05) re-audited
+current state directly against the code and added a four-way gap analysis (challenge brief vs.
+investigator workflow vs. mature-platform practice vs. actual implementation) plus a ranked
+capability list and a phased build — series discovery and behavioral profiling, both flagged
+below, were built in that pass. This document's platform comparisons (Gotham/i2/Maltego) remain
+independently useful background; defer to the newer document for what's actually built today.
+
 **Purpose**: an honest comparison of Veritas against mature investigation platforms
 (Palantir Gotham, IBM i2 Analyst's Notebook, Maltego) and general law-enforcement/
 financial-intelligence/GIS-intelligence practice, to find what would materially

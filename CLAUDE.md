@@ -14,7 +14,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 830 green, 2 skipped (`python -m pytest` prints the current
+- **Tests**: `python -m pytest` — 868 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -1952,3 +1952,130 @@ volume justifies the training cost.
     priors answer is the worst case), not a regression from this pass, which touched
     only the two handlers above. Fixing it means a smaller/faster MT model or
     streaming the translation, neither of which is a change to make on the way past.
+
+- **v26 (a strategic reset, then two of the challenge's own named capabilities, built
+  for real) — a ground-up audit done on request before any more features got added,
+  because "crime pattern discovery" and "behavioral profiling" were both named
+  explicitly by the challenge and both were only half-built.** Full four-way gap
+  analysis, research citations, ranked capability list and hero demo scenario in
+  `docs/STRATEGIC_RESET_2026-09-04.md`; terser dated log in `docs/WORK_LOG.md`. This
+  entry is the summary this file's own header promises — see those two for the detail
+  it deliberately doesn't duplicate.
+  - **The headline finding**: the six v24/25 conversational operations
+    (interrogation prep, cross-station linkage, handoff, prefiling check,
+    challenge-a-finding, similarity-watch) are the most under-sold part of the
+    product — real investigative-process tools no competing "map+graph+chatbot"
+    hackathon submission is likely to have built, sitting at the tail end of a
+    changelog dominated by Catalyst infrastructure war stories. Meanwhile the two
+    capabilities the challenge names most directly were reactive-only: series/
+    pattern discovery only ever answered when asked, never noticed anything on its
+    own, and "behavioral profiling" was a risk number, not a readable pattern —
+    despite the underlying signal (the co-offending graph; the generator's own
+    recurring-MO `_signature_choice` weighting) already sitting in the data,
+    unsurfaced.
+  - **BNS section currency.** `data/generator/refdata.py` cited only the retired IPC
+    for every generated case, though the dataset's own date range spans the
+    2024-07-01 BNS transition and `manifest.py` already (falsely) claimed an "IPC/BNS
+    mix." Added a real, sourced (BPRD's official IPC↔BNS correspondence table) date-
+    aware lookup; backfilled onto the already-seeded live 10,000-case dataset in
+    place via the existing narrative-backfill job, not a regeneration. A cheap,
+    high-credibility fix — a real KSP officer would catch a citation to a defunct
+    code in about four seconds.
+  - **A hard QuickML spend guard**, added ahead of any feature work once real
+    LLM-authorship (a considered, not-yet-built enrichment pass) was raised as a
+    possibility. Every QuickML request had **no `max_tokens` cap at all** — the model
+    supports up to 128K tokens of output, an open-ended cost per call independent of
+    any budget conversation. Fixed with a hard cap (`VERITAS_LLM_MAX_TOKENS`, default
+    900) plus a persistent, Cache-backed call-count circuit breaker
+    (`VERITAS_LLM_MAX_CALLS`, default 300, survives redeploys) that degrades to the
+    existing deterministic fallback path once hit — the same degrade path every other
+    LLM failure mode already uses. Framed explicitly as defense-in-depth: the
+    authoritative control is Catalyst's own Settings → Billing budget cap, which only
+    the account owner can set, recommended over inventing a cost estimate Zoho does
+    not publish anywhere reachable.
+  - **Unprompted cross-station series discovery** (new
+    `packages/rag_agent/rag_agent/series_detection.py`) — the flagship capability
+    this pass. Finds clusters of open, unresolved-suspect cases sharing a
+    distinctive MO-clause match plus geographic/temporal proximity, with **no common
+    investigating officer** — the general form of what `CROSS_STATION_LINKAGE` (v24)
+    could only do when a suspect was already named on both cases, and the direct,
+    concrete answer to linkage blindness (Egger, 1984), the named failure mode FBI
+    ViCAP has existed to fix since 1985. New intent `SERIES_DISCOVERY` ("is this
+    part of a pattern?"), a provenance handler, and — the genuinely *proactive* half,
+    not just a better answer to a question — wired into `/jobs/refresh`'s existing 6h
+    cadence and pushed through the existing `/alerts` SSE feed as a new `series`
+    event alongside the existing district-anomaly `alert` events. Same
+    partial-visibility discipline as every other cross-station feature: a series is
+    reported only if the officer can view its anchor case; an out-of-scope member is
+    reported as existing without being named. Console: `AlertBell.tsx` renders a
+    second, DERIVED-labeled "Cross-station patterns" section. Found and fixed while
+    wiring this in: `/jobs/refresh` ran four independent derived layers inside one
+    `try`/`except`, so the new series-scan step needed the same per-step isolation
+    three prior steps already have (§v23).
+  - **Evidence-backed behavioral profile** (new
+    `packages/rag_agent/rag_agent/behavioral_profile.py`) — "behavioral profiling"
+    as the challenge means it, not as a risk score means it. For a resolved person:
+    recurring time-of-day (bucketed, majority-fraction gated), an exact repeated
+    MO-clause (reusing `series_detection`'s own matching logic), geographic range
+    (haversine span across recorded incidents), escalation in offence severity
+    (**only** where the record's own gravity classification — not the crime-type
+    label alone — actually shows an increase over time), and co-accused who recur
+    across more than one of the person's own cases. Requires at least 3 cases before
+    reporting anything at all — fewer is a history, not yet a pattern. Never
+    demographic **by construction**: caste/religion/gender columns are never read by
+    this module, full stop — the same rule every model in §6 already follows, now
+    extended to a narrative surface instead of just a scored feature set. New intent
+    `BEHAVIORAL_PROFILE` ("build a profile on him," "how does she operate").
+  - **Three real bugs, all caught by driving the feature rather than trusting a
+    green suite, one of them spanning two sessions:**
+    1. An edit placed near the existing `INTERROGATION_PREP` block left its closing
+       `_trace()` call orphaned inside the new `BEHAVIORAL_PROFILE` `elif`,
+       referencing a variable that only exists in the sibling branch —
+       `UnboundLocalError` on every turn. Caught by the handler's own new test, not
+       by inspection.
+    2. **The live-found `BEHAVIORAL_PROFILE` routing fix shipped, at the end of the
+       prior session, as dead code — and the prior session ran out of budget before
+       catching it.** It wrapped only the pronoun alternative of
+       `_BEHAVIORAL_PROFILE_SHAPE` in `(?i:...)` and left the literal
+       `how`/`does`/`operate` case-sensitive, while `classify()` matches the *raw*,
+       non-lowercased query — and a real sentence starts with a capital "How." The
+       fix matched *nothing at all*, for either the pronoun case (which only
+       appeared to work, via the older keyword-based fallback scorer matching a
+       separately-lowercased copy) or the named-subject case it was written for. No
+       test had asserted the exact phrasing reported live ("How does Usha Naika
+       operate?") — only the pronoun case, which would have passed with or without
+       the fix and proved nothing. Corrected the following session by wrapping every
+       structural word in its own `(?i:...)`, keeping `[A-Z]\w+` case-sensitive (the
+       one piece that must stay that way, to tell a name apart from "the system").
+       Regression test written first, confirmed to fail against the pre-fix code.
+       Redeployed and live-verified against the exact query that had been reported
+       broken: `Intent: BEHAVIORAL_PROFILE; resolved 'Usha Naika'`, matched
+       deterministically (8ms, confidence 0.9, zero QuickML calls spent).
+    3. **A near-miss that was caught before it became real data loss.** The prior
+       session's very last write — made as it hit its usage limit — truncated
+       `docs/WORK_LOG.md` from 1293 lines to a 2-line `PREPEND_MARKER` stub, mid-way
+       through what looks like an intended prepend-then-restore that never got the
+       old content back in. Never committed in that state, so `git restore` recovered
+       it with nothing lost — recorded here as the reason
+       `docs/STRATEGIC_RESET_2026-09-04.md` now exists as a durable artifact, rather
+       than leaning on a work-in-progress file (or a chat transcript alone) as the
+       only record of a long analysis session.
+  - **Test suite: 868 passed**, 2 skipped (environment-gated, pre-existing,
+    unrelated), up from 830. Deployed and live-verified end to end: `/health` warm
+    with the full dataset; the exact previously-broken behavioral-profile query now
+    answers correctly in production; the series-discovery and BNS fixes (deployed
+    earlier in the same overall pass) re-confirmed healthy post-redeploy.
+  - **Not done this pass, named rather than silently skipped**: Aequitas wired into
+    the live refresh cycle (still a script nobody runs on a schedule — a real
+    exposure, since "proactive prevention" invites the over-policing-bias question
+    directly and the mitigation must be verifiable, not scripted); minimal
+    graph/edge annotation; the fused proactive-prevention advisory (hotspot + trend
+    + signature → one bounded recommendation); and the LLM-authored distinctive MO
+    narrative that would upgrade the series-discovery signal from "structured facts
+    as a sentence" to genuinely idiosyncratic detail — **deliberately held**, not
+    forgotten, pending a look at real Catalyst billing-panel history now that the
+    spend guard is live, since it's the one blueprint item that would touch
+    meaningful QuickML call volume. `docs/CAPABILITY_TARGET_AND_GAPS.md` and
+    `docs/INDUSTRY_GAP_ANALYSIS.md` (both 2026-08-27) were not rewritten against
+    this pass's findings and remain their own dated snapshots — read
+    `docs/STRATEGIC_RESET_2026-09-04.md` for the current view.

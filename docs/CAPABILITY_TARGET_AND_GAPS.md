@@ -1,5 +1,12 @@
 # Veritas — Capability Target & Gap Analysis
 
+**Newer analysis exists.** `docs/STRATEGIC_RESET_2026-09-04.md` re-did this comparison
+2026-09-04/05 by reading the code a second time, and its conclusions about *current state*
+supersede this document's where they overlap — most notably, series discovery and behavioral
+profiling (flagged CRITICAL/missing below) were built in that pass. This document's own analysis
+of mature-platform practice and its earlier P0-P3 defect tracking remain independently useful;
+read both, trust the newer one for what's actually built today.
+
 **Purpose.** This document defines what Veritas should ultimately be — the target state of an
 industry-grade conversational investigation platform — and then systematically compares the
 current implementation against that target. It is a steering document, not a pitch and not an
