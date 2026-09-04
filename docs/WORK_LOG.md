@@ -1418,3 +1418,29 @@ already added, demo recording). The fused proactive-prevention advisory was scop
 the strategic-reset doc but not built. `docs/CAPABILITY_TARGET_AND_GAPS.md` and
 `docs/INDUSTRY_GAP_ANALYSIS.md` (both 2026-08-27) were not rewritten against this pass's
 findings — they remain their own dated snapshots.
+
+---
+
+## 2026-09-05 — Planning-only pass: state check, then the remaining-work plan written down
+
+No code changed this pass. On request: confirm nothing was left running from the prior
+session, and turn the "not done this session" list (Aequitas live-wiring, the fused
+prevention advisory, graph/edge annotation, the MO-narrative enrichment, the pitch
+rewrite) into a real plan of action rather than leaving it as a bullet list.
+
+**State check, done directly rather than assumed**: no background shell jobs, no
+subagents running, `git status` clean, live `/health` responding and idle (one
+incidental cold start from the health check itself — not an active job). Confirms
+the prior pass's redeploy (`52852000000389039`) is still the live version and
+nothing has drifted since.
+
+**The plan** is written as Part 9 of `docs/STRATEGIC_RESET_2026-09-04.md`, in
+priority order: (1) Aequitas wired into `/jobs/refresh`, CRITICAL, no blockers,
+~1 day; (2) the fused hotspot+trend+signature prevention advisory, DIFFERENTIATING,
+~1-2 days; (3) minimal graph-edge annotation reusing the existing board pin
+mechanism, SUPPORTING, ~1 day; (4) the AI-authored MO narrative, DIFFERENTIATING but
+still genuinely gated — re-checked live and QuickML remains at 0/300 calls used, so
+there is still no real billing history to decide against, and the recommendation is
+still to skip it for the competition unless a specific session is set aside to run a
+small capped test batch first; (5) the pitch/demo/README rewrite, done last once the
+feature set is final.

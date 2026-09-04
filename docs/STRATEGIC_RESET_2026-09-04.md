@@ -450,3 +450,104 @@ edge annotation), Phase 4 (LLM-authored MO narrative — deliberately gated on b
 scoped but not built. `docs/CAPABILITY_TARGET_AND_GAPS.md` and `docs/INDUSTRY_GAP_ANALYSIS.md`
 were not rewritten to reflect this pass's findings — they remain as their own dated snapshots;
 this document is the current source of truth for what changed 2026-09-04/05 specifically.
+
+---
+
+## Part 9 — Plan of action for the remaining work (as of 2026-09-05)
+
+**State at the start of this plan, verified directly, not assumed.** No background process,
+deploy, or subagent was running when this plan was written — checked directly: no shell jobs, no
+subagents, `git status` clean, live `/health` responding and idle (a single incidental cold-start
+from the health check itself, not an active job). The previous item on the roadmap
+(`BEHAVIORAL_PROFILE`'s named-subject routing fix) has since been corrected for real, tested,
+deployed, and confirmed live — see the entry above and `CLAUDE.md`'s v26 changelog. Five items
+remain, unchanged from Part 6/Part 8's "not done" list:
+
+### Item 1 — Aequitas wired into the live refresh cycle
+**Tier**: CRITICAL. **Blocker**: none — ready to build now.
+**What exists today**: `packages/ml_models/fairness_run_audit.py` is a real, working script —
+runs `run_fairness_audit()` against both `score_risk` and `predict_recidivism`, returns a report
+with a `disparate_impact_flagged` boolean — but nothing calls it except a person running it by
+hand.
+**Plan**: add it as its own isolated step inside `/jobs/refresh`, matching the per-step isolation
+pattern the four existing steps (`gds`, `stratus_graph`, `vector_index`, `aml`) already use —
+each in its own `try`/`except` so one failing step (as `series_scan` already had to be fixed to
+respect, per Part 8) can never silently cancel the others. Cache the resulting report the same
+way `series_detection`'s results are cached for `/alerts`. Surface it as a real, checkable status
+line in `/health` and in the console's System panel, not just a number sitting in Cache.
+**Why this order**: it's the one remaining CRITICAL item, it has zero external blockers, and
+"proactive crime prevention" (Item 2, next) directly invites the over-policing-bias question —
+better to have a live, checkable answer before building the feature that raises the question.
+**Estimated effort**: ~1 day.
+
+### Item 2 — Fused proactive-prevention advisory
+**Tier**: DIFFERENTIATING. **Blocker**: none (benefits from Item 1 being done first, not
+required).
+**What exists today**: hotspot detection (`detect_hotspots`), trend forecasting
+(`forecast_crime`), and the recurring-method signal (`series_detection`, built in Phase 1) all
+exist and work, but as three separate outputs an officer has to mentally combine.
+**Plan**: one new synthesis function that reads all three for a given district/window and
+produces a single bounded statement — "elevated likelihood of [pattern] in [place] over [window],
+based on [n] points" — with the Aequitas geographic-subgroup result (Item 1, once live) and the
+causal layer's confounder disclosure shown alongside it, not folded into the number. Advisory
+only; never a dispatch trigger; explicit about small-sample fragility per Part 6's original spec.
+**Estimated effort**: ~1–2 days.
+
+### Item 3 — Minimal graph/edge annotation
+**Tier**: SUPPORTING. **Blocker**: none.
+**What exists today**: `packages/rag_agent/rag_agent/board.py`'s `create_item()` already takes a
+generic `RefType`/`RefID` pair plus a content snapshot — it's built to be extensible, just never
+extended past case/person/evidence.
+**Plan**: add a `RefType` for a graph edge (`person-person` co-accusal, or any other edge already
+in `vx_graph_edge`), and one click target on `NetworkView.tsx` that opens the existing pin-a-note
+flow for the selected edge instead of only the selected node. No new backend mechanism — this is
+almost entirely a UI wiring task plus one new `RefType` case.
+**Estimated effort**: ~1 day.
+
+### Item 4 — AI-authored distinctive MO narrative
+**Tier**: DIFFERENTIATING. **Blocker**: a real one — see below.
+**What exists today**: `data/generator/build.py`'s `_MO_VARIANTS` gives each crime type 3
+hand-written narrative templates, chosen per-offender by a "signature" weighting — richer than
+one template, but still a closed set, which is why cross-case similarity currently reads as "same
+crime type + district + section" rather than a genuinely idiosyncratic shared detail (Part 1,
+"the CCA-theory gap").
+**Why it's gated, verified again this session**: live `/health` shows QuickML at **0 of 300**
+allowed calls used since it went live — meaning there is still no real billing history to check,
+because the deterministic paths have handled every query asked of the system so far. This isn't
+a new finding; it's the same gate from Part 8, re-confirmed rather than assumed still true.
+**Plan, two real options**:
+  - **(a)** Run a small, explicitly capped test batch (e.g., 50–100 cases) through QuickML,
+    watch the actual cost land in Catalyst's Settings → Billing panel, then decide whether to run
+    the full ~10,000-case batch.
+  - **(b)** Skip it for the competition. Nothing currently visible in the UI depends on it — it
+    would sharpen Series Discovery's matching quality, not unlock a new screen or answer a
+    question that's currently broken.
+  Recommendation unchanged from the prior session: given the explicit "don't send me a huge
+  bill" instruction, default to (b) unless a specific date is set aside to check (a) first.
+**Estimated effort if pursued**: ~1–2 days, mostly around validating generated narrative content
+never contradicts the case's own structured facts (crime type, section, outcome) before it's
+written — the same discipline `narrative_backfill.py` already applies for the BNS fix.
+
+### Item 5 — Pitch, demo, and documentation rewrite
+**Tier**: not a capability, but required for submission. **Blocker**: none — best done last, once
+the feature set is final.
+**Plan**: rewrite the README/submission document to lead with Series Discovery and the six
+conversational operations (per Part 1's finding that they're currently buried at changelog
+entries #24–25), not the Catalyst deployment engineering story — real work, but the wrong
+headline for a domain judge. Record the actual demo against the Part 7 hero scenario. Prepare
+short, honest answers in advance for the two hardest likely questions: "is this really
+conversational AI or just a search UI with an LLM bolted on" (the hybrid deterministic-first/
+LLM-fallback answer from Part 5, told as a design choice) and the over-policing-bias question
+(Item 1's live Aequitas result, once built).
+
+### Suggested build order
+1. Item 1 (Aequitas) — no blockers, closes a real exposure.
+2. Item 2 (fused advisory) — benefits from Item 1 landing first.
+3. Item 3 (graph annotation) — small, independent, can slot in anywhere.
+4. Item 4 (MO narrative) — hold pending the billing decision above.
+5. Item 5 (pitch/demo) — last, once the feature set going into the submission is final.
+
+Items 1–3 have no dependency on each other beyond the suggested ordering and could be
+parallelized if there were a reason to; given this project's own "batch deploys, don't deploy
+per-commit" lesson from Part 8, the more practical approach is to build all three, then deploy
+and live-verify once as a batch, the way Phase 0–2 already did.
