@@ -50,6 +50,14 @@ def test_new_intents_route_correctly_and_do_not_collide():
         ("Could this be a crime spree?", "SERIES_DISCOVERY"),
         ("Build a behavioral profile on him.", "BEHAVIORAL_PROFILE"),
         ("How does she operate?", "BEHAVIORAL_PROFILE"),
+        # Found live: a NAMED subject ("How does Usha Naika operate?") is the single
+        # most natural phrasing and the first one a real officer typed, but the
+        # original keyword list only matched a literal pronoun — this query scored
+        # below the LLM-routing threshold and fell to UNKNOWN. _BEHAVIORAL_PROFILE_SHAPE
+        # closes it; regression-tested here since the live-found fix (commit 9567318)
+        # had shipped with no test asserting the named-subject case specifically.
+        ("How does Usha Naika operate?", "BEHAVIORAL_PROFILE"),
+        ("How does Ramesh Gowda operate?", "BEHAVIORAL_PROFILE"),
     ]
     for query, expected in cases:
         assert intents.classify(query) == expected, query

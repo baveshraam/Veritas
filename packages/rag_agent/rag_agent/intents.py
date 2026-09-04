@@ -1023,15 +1023,23 @@ _RUNS_WITH = re.compile(
 # phrasing) scored below the LLM-routing threshold and the model itself also
 # missed it, same class of gap _RUNS_WITH exists to close for PERSON_NETWORK.
 # [A-Z] must stay case-SENSITIVE (a name starts with a capital; "how does the
-# system operate" must not match), so this is NOT compiled with re.I — the
-# pronoun half is wrapped in its own (?i:...) instead, the same technique
-# _NAMED_SUBJECT already uses for exactly this reason. The trailing negative
-# lookahead keeps this from swallowing _RUNS_WITH's own "how does X operate
-# WITH" (co-offending, a different population than a solo profile).
+# system operate" must not match), so the pattern as a whole is NOT compiled
+# with re.I — but classify() calls .search() against the RAW query (never
+# lowercased), and a real sentence starts with a capital "How". The first fix
+# (commit 9567318) wrapped only the pronoun alternative in (?i:...) and left
+# "how"/"does"/"do"/"operate" bare, so it silently matched NOTHING against real
+# input — caught by a regression test asserting the exact named-subject
+# phrasing that had been reported live, which the original fix shipped without.
+# Every structural word now gets its own (?i:...); [A-Z]\w+ is the one piece
+# that must stay case-sensitive, exactly as _NAMED_SUBJECT already does this.
+# The trailing negative lookahead keeps this from swallowing _RUNS_WITH's own
+# "how does X operate WITH" (co-offending, a different population than a solo
+# profile) — checked here for defense in depth even though _RUNS_WITH already
+# runs first in classify().
 _BEHAVIORAL_PROFILE_SHAPE = re.compile(
-    r"\bhow\s+(?:does|do)\s+(?:\w+\s+){0,3}"
+    r"(?i:\bhow\s+(?:does|do)\s+)(?:\w+\s+){0,3}"
     r"(?:(?i:he|she|they|him|her|them)|[A-Z]\w+)"
-    r"\s+operate\b(?!\s*(?:with|around|about))"
+    r"(?i:\s+operate\b)(?!\s*(?i:with|around|about))"
     r"|(?i:\b(?:behavio[u]?ral|m\.?o\.?)\s+profile\b)")
 
 
