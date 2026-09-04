@@ -1899,3 +1899,56 @@ volume justifies the training cost.
     actually help an officer" rather than by what was technically interesting to
     build — a different artifact from this file, written the same session on request.
   - **Test suite: 830 passed, 2 skipped** (14 new).
+
+- **v25 (two answers that read wrong out loud) — both found by reading the output,
+  not by reading the diff, and both were the same category error: reusing a helper
+  built for one question to answer a different one.**
+  - **Interrogation prep was briefing the officer on the officer's own paperwork.**
+    `INTERROGATION_PREP` was assembled from `_case_evidence_gaps`, which finds file
+    COMPLETENESS gaps — no arrest entry on record, no chargesheet after the stale
+    window. Those are real and they matter, but they are the investigating officer's
+    own record-keeping. Put to a suspect across an interview table — *"inquire about
+    the delay in filing the chargesheet for FIR 100171702202400012, which has not
+    been filed in 805 days"* — it is a question nobody in the room is in a position
+    to answer, and it was most of the briefing. `_interview_prep` now builds
+    questions the SUBJECT can speak to: their account of each open case (named,
+    dated, with its status), the co-accused the same file names alongside them, the
+    repetition their record shows, the convictions already settled (the ground to
+    establish before contested ground), and the graph associates flagged explicitly
+    as DERIVED rather than stated. It closes by saying which questions NOT to ask
+    and where they belong — `PREFILING_CHECK` still owns the file gaps, which is the
+    moment they genuinely matter.
+  - **Challenge-a-finding printed an empty quotation.** Live, after an associates
+    answer: `- The least-supported single point this rests on: "" (confidence 100%)`.
+    Three defects in one line. (1) `sessions._pack` sheds evidence BODIES on a large
+    turn while keeping ids and confidences, so `content` is empty on exactly the big
+    answers most worth challenging — the citation label survives and says the same
+    thing, so it falls back to that. (2) A point at 100% confidence is not the
+    least-supported anything; it is the minimum of a uniformly certain set, and
+    naming it as the weak link is the same false-positive class §8's contradiction
+    check exists to avoid. Only items below 0.8 are named now. (3) The case- and
+    person-id extraction knew nothing of `assoc:`/`same_as:`/`community:`, so a
+    `PERSON_NETWORK` answer — the most-challenged kind, since every associate in it
+    is derived — reached no case, no person, and therefore no structural check at
+    all. New `_network_challenges` names the two things that actually hold such an
+    answer up, both checkable: how many of the people named are multi-hop rather
+    than named on a shared file (live: *"16 of the 40"*), and the weakest
+    record-linkage score underneath the reconstructed subject (live: *"19 separate
+    accused entries linked into one identity … the weakest of them at 90%"*).
+  - **Console**: START HERE offers the case-scoped conversational operations when a
+    case is open (handoff, pre-filing, cross-station, standing watch, briefing) and
+    the general four when none is — they were reachable only from the follow-up rail,
+    so nobody saw them; asked cold they refuse (`intents.NEEDS_CASE`), and prefixing
+    an FIR number does not help because `FIR_LOOKUP` outscores them on the number.
+    The attach glyph was `U+1F4CE`, which Windows 11 draws as Clippy; now `U+1F4CC`.
+  - **Deployed and live-verified**: API deployment `52852000000399014`, console via
+    `scripts/deploy-console.sh`. Both fixed operations driven end to end against
+    production. 3 regression tests, each confirmed to fail against the pre-fix code.
+  - **One pre-existing failure this pass surfaced but did not fix**, named rather
+    than silently skipped: `scripts/verify_live_deployment.py` is 34/36 live, both
+    failures being Kannada turns that produce no final frame inside the gate's 90s
+    per-turn budget. Driven by hand with a longer budget they answer correctly — this
+    is v12's already-measured CPU-NLLB cost scaling with OUTPUT length (an 18-case
+    priors answer is the worst case), not a regression from this pass, which touched
+    only the two handlers above. Fixing it means a smaller/faster MT model or
+    streaming the translation, neither of which is a change to make on the way past.
