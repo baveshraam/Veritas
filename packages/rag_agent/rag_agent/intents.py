@@ -1018,6 +1018,22 @@ _RUNS_WITH = re.compile(
     r"offend\w*|operate[sd]?)\b"
     r"\s*(?:around|about)?\s*\bwith\b", re.I)
 
+# BEHAVIORAL_PROFILE's own keyword list only matches a literal "he"/"she" — found
+# live: "How does Usha Naika operate?" (a NAMED subject, the single most natural
+# phrasing) scored below the LLM-routing threshold and the model itself also
+# missed it, same class of gap _RUNS_WITH exists to close for PERSON_NETWORK.
+# [A-Z] must stay case-SENSITIVE (a name starts with a capital; "how does the
+# system operate" must not match), so this is NOT compiled with re.I — the
+# pronoun half is wrapped in its own (?i:...) instead, the same technique
+# _NAMED_SUBJECT already uses for exactly this reason. The trailing negative
+# lookahead keeps this from swallowing _RUNS_WITH's own "how does X operate
+# WITH" (co-offending, a different population than a solo profile).
+_BEHAVIORAL_PROFILE_SHAPE = re.compile(
+    r"\bhow\s+(?:does|do)\s+(?:\w+\s+){0,3}"
+    r"(?:(?i:he|she|they|him|her|them)|[A-Z]\w+)"
+    r"\s+operate\b(?!\s*(?:with|around|about))"
+    r"|(?i:\b(?:behavio[u]?ral|m\.?o\.?)\s+profile\b)")
+
 
 def classify(query: str) -> str:
     """Highest-scoring intent by keyword hits; UNKNOWN if nothing matches.
@@ -1102,6 +1118,8 @@ def classify(query: str) -> str:
         return "CASE_STATS"
     if _RUNS_WITH.search(query or ""):
         return "PERSON_NETWORK"
+    if _BEHAVIORAL_PROFILE_SHAPE.search(query or ""):
+        return "BEHAVIORAL_PROFILE"
     # Checked AFTER the timeline patterns on purpose: "why are these events
     # connected" is a two-entity timeline question and carries an involvement word
     # of its own.
