@@ -282,3 +282,68 @@ def test_draft_summary_tags_the_derived_figure(dataset):
     fir_id = ds.query('SELECT "CaseMasterID" FROM "CaseMaster" LIMIT 1')[0]["CaseMasterID"]
     brief = generate_copilot_brief(str(fir_id), "IG", "")
     assert "DERIVED" in brief.draft_summary
+
+
+# --- v25: two defects found by reading the answers out loud ----------------------
+
+def test_interrogation_prep_asks_the_subject_not_the_investigating_officer(dataset):
+    """Found live. The briefing was assembled from `_case_evidence_gaps`, which finds
+    file-completeness gaps — no arrest entry, no chargesheet after N days. Those are
+    the investigating officer's OWN record-keeping; put to a suspect across a table
+    ("explain the 805-day delay in filing your chargesheet") they are questions
+    nobody in the room can answer. PREFILING_CHECK still owns them."""
+    pid = sql_agent.ranked_offenders("IG", "", limit=1)[0]["person_id"]
+    state = _state("What should I ask him?")
+    state.intent = "INTERROGATION_PREP"
+    state.active_entities.active_person = pid
+
+    body = "\n".join(e.content for e in orchestrator._run_specialists(state, widen=False))
+    low = body.lower()
+    assert "no chargesheet has been filed in" not in low
+    assert "no arrest is recorded on this case" not in low
+    # and it must actually produce questions to put to the person
+    assert "ask" in low
+
+
+def test_challenge_never_quotes_an_empty_weakest_point():
+    """Found live: `- The least-supported single point this rests on: "" (confidence
+    100%)`. Two bugs in one line — `sessions._pack` sheds evidence BODIES on a large
+    turn, so `content` is empty on exactly the answers most worth challenging; and a
+    point at 100% confidence is not the least-supported anything."""
+    state = _state("Convince me this is wrong.")
+    state.intent = "CHALLENGE_FINDING"
+    prior = _prior_turn(
+        query="Who are the associates of X?",
+        citations=[{"index": 1, "evidence_id": "assoc:803", "label": "X is an associate"}],
+        # a truncated turn: identity kept, body shed — and confidence 1.0
+        evidence_items=[{"evidence_id": "assoc:803", "source_type": "GRAPH_RELATIONSHIP",
+                         "source_id": "803", "authoritative": False,
+                         "confidence": 1.0, "confidence_kind": "support"}])
+    saved_last_turn = orchestrator._last_turn
+    saved_query = orchestrator.ds.query
+    saved_net = orchestrator.graph_agent.person_network
+    orchestrator._last_turn = lambda sid: prior
+    orchestrator.ds.query = lambda sql, params=None: []
+    orchestrator.graph_agent.person_network = lambda pid, role: []
+    try:
+        orchestrator.node_retrieve(state)
+        orchestrator.node_evaluate(state)
+        orchestrator.node_synthesize(state)
+    finally:
+        orchestrator._last_turn = saved_last_turn
+        orchestrator.ds.query = saved_query
+        orchestrator.graph_agent.person_network = saved_net
+
+    assert '""' not in state.final_answer
+    assert "least-supported" not in state.final_answer.lower()
+
+
+def test_challenge_of_a_derived_network_names_the_derivation_it_rests_on(dataset):
+    """A PERSON_NETWORK answer's evidence ids are `assoc:`/`same_as:`, which the case-
+    and person-id extraction did not recognise — so the most-challenged kind of answer
+    got no structural check at all. Its real weaknesses are the multi-hop links and
+    the record linkage underneath every name (CLAUDE.md §0)."""
+    pid = sql_agent.ranked_offenders("IG", "", limit=1)[0]["person_id"]
+    lines = orchestrator._network_challenges(pid, "IG")
+    assert lines, "a resolved offender's network must have something checkable"
+    assert any("record linkage" in ln for ln in lines)

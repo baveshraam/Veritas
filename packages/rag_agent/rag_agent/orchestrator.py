@@ -1004,25 +1004,7 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
     elif intent == "INTERROGATION_PREP" and pid:
         rows = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)
         who = mask_person_name(role, _person_name(pid) or f"person {pid}")
-        prep: list[str] = []
-        if rows:
-            convicted = sum(1 for r in rows if (r.get("case_status") or "") == "Convicted")
-            prep.append(f"{who} is named as accused on {len(rows)} case(s) on record "
-                        f"within your access scope, {convicted} of which ended in "
-                        f"conviction.")
-            for r in rows[:5]:
-                for gap in _case_evidence_gaps(r["fir_id"], role, ps):
-                    prep.append(f"On FIR {r.get('fir_number') or r['fir_id']}: {gap}")
-        else:
-            prep.append(f"No case within your access scope names {who} as accused — "
-                        f"there is no prior record to prepare from.")
-        net = graph_agent.person_network(pid, role)
-        if net:
-            top = sorted(net, key=lambda r: r.get("hops", 99))[:3]
-            named = ", ".join(x for x in (mask_person_name(role, r.get("name_en") or "")
-                                          for r in top if r.get("name_en")) if x)
-            if named:
-                prep.append(f"Known associates worth asking about: {named}.")
+        prep = _interview_prep(pid, who, rows, role, ps)
         out += [EvidenceItem(
             evidence_id=f"interview:{pid}:{i}", source_type="CRIMINAL_RECORD",
             source_id=pid,
@@ -1319,6 +1301,140 @@ def _case_evidence_gaps(fir_id: str, role: str, ps: str) -> list[str]:
     elif "C" in types:
         gaps.append("A chargesheet on this case is already marked closed as undetected.")
     return gaps
+
+
+def _interview_prep(pid: str, who: str, rows: list[dict],
+                    role: str, ps: str) -> list[str]:
+    """Questions an officer can actually PUT TO THE PERSON, each grounded in a record.
+
+    Deliberately NOT `_case_evidence_gaps`. That helper finds file-completeness gaps —
+    no arrest entry, no chargesheet after N days — which are the investigating
+    officer's OWN record-keeping to answer for. Asked across an interview table
+    ("explain the 805-day delay in filing your chargesheet") it is a question nobody
+    in the room is in a position to answer, and it was the entire body of this
+    briefing until it was read out loud. Found live. Every line below is something
+    the subject themselves can speak to; PREFILING_CHECK still owns the file gaps,
+    which is the moment they genuinely matter.
+    """
+    if not rows:
+        return [f"No case within your access scope names {who} as accused — there is "
+                f"no prior record to prepare from, and nothing here to put to them."]
+
+    def _label(r: dict) -> str:
+        return f"FIR {r.get('fir_number') or r['fir_id']}"
+
+    convicted = [r for r in rows if (r.get("case_status") or "") == "Convicted"]
+    settled = {"convicted", "acquitted", "closed", "disposed"}
+    open_cases = [r for r in rows
+                  if (r.get("case_status") or "").strip().lower() not in settled]
+
+    out = [f"{who} is named as accused on {len(rows)} case(s) on record within your "
+           f"access scope — {len(convicted)} ended in conviction, {len(open_cases)} "
+           f"still open. Everything below is a question to put to them, each with "
+           f"the record it comes from; none of it asserts guilt."]
+
+    # 1. Their own account of each open case — the reason the interview is happening.
+    for r in open_cases[:3]:
+        out.append(f"Ask for their account of {_label(r)} — "
+                   f"{(r.get('crime_type') or 'offence not recorded')}, "
+                   f"{(r.get('district') or 'district not recorded')}, filed "
+                   f"{_fir_date(r.get('date_filed'))}, status "
+                   f"{(r.get('case_status') or 'not recorded')}: where they were, "
+                   f"who was with them, and what they say happened.")
+
+    # 2. Co-accused named on the SAME file. The strongest question in the room, and
+    #    it is a recorded fact rather than a derived one — the file names both.
+    pairs = 0
+    for r in rows[:6]:
+        if pairs >= 2:
+            break
+        try:
+            others = sql_agent.accused_on_case(r["fir_id"])
+        except Exception:
+            continue
+        names = [mask_person_name(role, o.get("CanonicalName") or "")
+                 for o in others if str(o.get("PersonUID")) != str(pid)]
+        names = [n for n in names if n][:3]
+        if names:
+            pairs += 1
+            out.append(f"{_label(r)} names them alongside {', '.join(names)} — ask "
+                       f"how they know each other and what each of them did.")
+
+    # 3. A repetition worth putting to them, stated as the count it is.
+    from collections import Counter
+    kinds = Counter((r.get("crime_type") or "").strip() for r in rows if r.get("crime_type"))
+    places = Counter((r.get("district") or "").strip() for r in rows if r.get("district"))
+    if kinds:
+        kind, n = kinds.most_common(1)[0]
+        if n > 1:
+            where = f" — {places.most_common(1)[0][0]} most often" if places else ""
+            out.append(f"Their record shows {n} case(s) of {kind}{where}. Ask them to "
+                       f"account for the repetition; it is a pattern in the file, not "
+                       f"a finding about them.")
+
+    # 4. Convictions they have already been through — establish what they accept
+    #    before asking about anything they do not.
+    if convicted:
+        out.append(f"Ask whether they accept the {len(convicted)} case(s) already "
+                   f"ending in conviction ({', '.join(_label(r) for r in convicted[:3])})"
+                   f" — settled record is the ground to establish before contested "
+                   f"ground.")
+
+    # 5. Associates reached through the co-offending graph. Flagged as derived,
+    #    because a graph associate is not the same claim as a co-accused on file.
+    net = graph_agent.person_network(pid, role)
+    if net:
+        top = sorted(net, key=lambda r: r.get("hops", 99))[:3]
+        named = [x for x in (mask_person_name(role, r.get("name_en") or "")
+                             for r in top if r.get("name_en")) if x]
+        if named:
+            out.append(f"Derived, not stated in any one file: {', '.join(named)} "
+                       f"appear in the same co-offending network. Ask about the "
+                       f"relationship — do not put it to them as an established fact.")
+
+    out.append("Do not raise gaps in our own file-keeping (a missing arrest entry, an "
+               "unfiled chargesheet) — those are for the investigating officer to "
+               "answer, not the subject. Ask 'would this case hold up?' for those.")
+    return out
+
+
+def _network_challenges(pid: str, role: str) -> list[str]:
+    """What would weaken a DERIVED co-offending answer, as opposed to a case file.
+
+    Two things genuinely hold such an answer up, and both are checkable: how many of
+    the people named are direct co-accused rather than transitively reached, and how
+    strong the record-linkage that reconstructed the subject actually was. Neither is
+    an opinion — CLAUDE.md §0 is explicit that the ER has no person, so every name in
+    a network answer sits on top of `vx_accused_identity`, and that is exactly the
+    assumption a defence would test first."""
+    out: list[str] = []
+    try:
+        net = graph_agent.person_network(pid, role)
+    except Exception:
+        net = []
+    if net:
+        indirect = [r for r in net if int(r.get("hops") or 1) > 1]
+        if indirect:
+            out.append(f"{len(indirect)} of the {len(net)} people named are not direct "
+                       f"co-accused — they were reached through someone else's case. A "
+                       f"multi-hop link places two people in one network; it is not "
+                       f"evidence that they know each other, and it is the first thing "
+                       f"to drop if you need only people named on a shared file.")
+    try:
+        links = ds.query('SELECT "MatchConfidence" FROM "vx_accused_identity" '
+                         'WHERE "PersonUID" = :pid', {"pid": int(pid)})
+    except Exception:
+        links = []
+    scores = [float(r["MatchConfidence"]) for r in links
+              if r.get("MatchConfidence") is not None]
+    if scores:
+        out.append(f"This person is not a row in the records — they are "
+                   f"{len(scores)} separate accused entries linked into one identity "
+                   f"by probabilistic record linkage, the weakest of them at "
+                   f"{min(scores):.0%}. If that one entry is a different person, the "
+                   f"cases it brought with it, and any associate reached only through "
+                   f"those cases, come out of this answer.")
+    return out
 
 
 def _person_pattern_gaps(pid: str, role: str, ps: str) -> list[str]:
@@ -2825,10 +2941,22 @@ def _challenge_explanation(prior, state: InvestigationState) -> str:
         # The pool named no case at all (e.g. every item is a board/summary line) —
         # the case still open in this session is the one the prior answer was about.
         fir_ids = [state.active_entities.active_fir]
+    # `assoc`/`same_as`/`community` were missing here, so a PERSON_NETWORK answer —
+    # the single most-challenged kind, since every associate in it is DERIVED —
+    # yielded no person, no case, and therefore no structural check at all. Found
+    # live: "Convince me this is wrong" after an associates answer printed one
+    # degenerate line and nothing else.
+    _PERSON_PREFIXES = ("accused", "priors", "offender", "assoc", "same_as",
+                        "community", "interview")
     person_ids = list(dict.fromkeys(
         e.get("evidence_id", "").split(":", 1)[1] for e in pool
-        if (e.get("evidence_id") or "").split(":", 1)[0] in ("accused", "priors", "offender")
+        if (e.get("evidence_id") or "").split(":", 1)[0] in _PERSON_PREFIXES
         and e.get("evidence_id", "").split(":", 1)[1].isdigit()))[:1]
+    # A derived-network answer is challenged at its DERIVATION, not at each
+    # associate's own file: the subject the graph was walked from is the session's
+    # own focus, which outlives the stored turn.
+    derived_net = any((e.get("evidence_id") or "").split(":", 1)[0] in ("assoc", "same_as")
+                      for e in pool)
 
     lines = [f'Looking for what would weaken the previous answer to "{prior.query}":']
     found = False
@@ -2841,16 +2969,36 @@ def _challenge_explanation(prior, state: InvestigationState) -> str:
             found = True
             lines.append(f"- {g}")
 
+    if derived_net and state.active_entities.active_person:
+        for g in _network_challenges(state.active_entities.active_person, role):
+            found = True
+            lines.append(f"- {g}")
+
+    # Two guards, both from one live output that read:
+    #   'The least-supported single point this rests on: "" (confidence 100%)'
+    #   1. `sessions._pack` sheds evidence BODIES on a large turn (it keeps ids and
+    #      confidences), so `content` is legitimately empty on exactly the big
+    #      answers most worth challenging — the citation label survives and says
+    #      the same thing, so fall back to it rather than quoting nothing.
+    #   2. A point at 100% confidence is not "the least-supported" anything; it is
+    #      the minimum of a set that is uniformly certain. Naming it as a weakness
+    #      is the same false-positive class §8's contradiction check exists to
+    #      avoid — an officer told a 100% item is the weak link stops reading.
+    labels = {c.get("evidence_id"): (c.get("label") or "") for c in (prior.citations or [])}
     scored = [e for e in pool
-             if not e.get("authoritative") and e.get("confidence") is not None]
+              if not e.get("authoritative") and e.get("confidence") is not None
+              and float(e["confidence"]) < 0.8]
     if scored:
         weakest = min(scored, key=lambda e: e["confidence"])
-        found = True
-        excerpt = (weakest.get("content") or "")[:160]
-        lines.append(
-            f'- The least-supported single point this rests on: "{excerpt}" '
-            f"(confidence {float(weakest['confidence']):.0%}). If that one does not "
-            f"hold, the rest of the finding is unaffected, but that specific point is.")
+        excerpt = ((weakest.get("content") or "")
+                   or labels.get(weakest.get("evidence_id")) or "").strip()[:160]
+        if excerpt:
+            found = True
+            lines.append(
+                f'- The least-supported single point this rests on: "{excerpt}" '
+                f"(confidence {float(weakest['confidence']):.0%}). If that one does "
+                f"not hold, the rest of the finding is unaffected, but that specific "
+                f"point is.")
 
     if not found:
         lines.append(
