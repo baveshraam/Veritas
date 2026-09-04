@@ -81,6 +81,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from data import cache
+
 log = logging.getLogger(__name__)
 
 MODEL = os.getenv("VERITAS_LLM_MODEL", "glm-4.7-flash")                     # display name
@@ -99,6 +101,20 @@ TIMEOUT = float(os.getenv("VERITAS_LLM_TIMEOUT", "30"))
 
 COOLDOWN_SECONDS = 70.0
 _TOKEN_SAFETY_MARGIN = 60.0  # refresh this many seconds before Zoho says it expires
+
+# A hard spend guard, independent of Zoho's own console-level budget alert (Settings ->
+# Billing -> budget limit, the authoritative control — set it there too). This is a
+# defense-in-depth backstop: it reacts the instant this process makes a call, rather than
+# waiting on an email alert, and it is deliberately a call-COUNT ceiling, not a rupee
+# figure, because QuickML's real per-call cost is not published anywhere this code can
+# read. Tune VERITAS_LLM_MAX_CALLS down once the Catalyst billing panel shows what a real
+# call actually costs on this account; 300 is a conservative placeholder, not a measured
+# number. Persisted in Cache (not a module-level counter) so it survives every redeploy
+# this project does routinely — a counter that resets on every deploy is not a cap.
+MAX_OUTPUT_TOKENS = int(os.getenv("VERITAS_LLM_MAX_TOKENS", "900"))
+MAX_CALLS = int(os.getenv("VERITAS_LLM_MAX_CALLS", "300"))
+_BUDGET_KEY = "quickml_call_budget_v1"
+_BUDGET_TTL_HOURS = 24 * 30  # long enough to span the whole competition window
 
 # The model's own reasoning trace is observed live (2026-08-28) to end with a bare
 # </think> marker but *no* matching opening <think> tag — an opening-tag regex like
@@ -129,9 +145,29 @@ def _configured() -> bool:
     return bool(CLIENT_ID and CLIENT_SECRET and REFRESH_TOKEN and PROJECT_ID and ORG_ID)
 
 
+def calls_used() -> int:
+    return int(cache.get(_BUDGET_KEY) or 0)
+
+
+def budget_exhausted() -> bool:
+    return calls_used() >= MAX_CALLS
+
+
+def _record_call() -> None:
+    """Count one real, billed QuickML request. Called only after `_raw_chat` gets an
+    actual HTTP response — a call that raised before reaching the network (unconfigured,
+    still cooling down) was never billed and must not count against the cap."""
+    cache.put(_BUDGET_KEY, calls_used() + 1, expiry_hours=_BUDGET_TTL_HOURS)
+
+
 def available() -> bool:
-    """True only if a call would plausibly succeed — configured AND not cooling down."""
+    """True only if a call would plausibly succeed — configured, not cooling down, and
+    under the call-budget cap. The budget check degrades exactly like every other
+    failure mode this module has: callers fall back to the deterministic path, which
+    already produces grounded, cited answers on its own."""
     if not _configured():
+        return False
+    if budget_exhausted():
         return False
     return time.monotonic() >= _degraded_until
 
@@ -140,11 +176,14 @@ def status() -> str:
     """Honest one-liner for /health. Never reports a model when it cannot be reached."""
     if not _configured():
         return "deterministic (QuickML not configured — no OAuth client/refresh token)"
+    if budget_exhausted():
+        return (f"deterministic (LLM call budget exhausted: {calls_used()}/{MAX_CALLS} — "
+                f"raise VERITAS_LLM_MAX_CALLS after checking real Catalyst billing)")
     if time.monotonic() < _degraded_until:
         return f"deterministic (LLM degraded: {_degraded_reason})"
     if not _ever_succeeded:
-        return f"quickml ({MODEL}) — configured, not yet contacted"
-    return f"quickml ({MODEL})"
+        return f"quickml ({MODEL}) — configured, not yet contacted, {calls_used()}/{MAX_CALLS} calls used"
+    return f"quickml ({MODEL}) — {calls_used()}/{MAX_CALLS} calls used"
 
 
 def _degrade(exc: Exception) -> LLMUnavailable:
@@ -244,9 +283,17 @@ def _raw_chat(messages: list[dict], temperature: float | None = None) -> str:
     <think> block and all — callers split it with `_split_think`."""
     global _ever_succeeded
 
+    if budget_exhausted():
+        raise LLMUnavailable(f"QuickML call budget exhausted ({calls_used()}/{MAX_CALLS})")
+
     try:
         token = _get_access_token()
-        body: dict = {"model": QUICKML_MODEL_ID, "messages": messages}
+        # max_tokens is not optional: the API has no default cap of its own (the model
+        # supports up to 128K tokens of output), so an uncapped request is an open-ended
+        # cost per call. Every caller here wants a paragraph or a small JSON object, never
+        # a document, so this is a real limit, not a formality.
+        body: dict = {"model": QUICKML_MODEL_ID, "messages": messages,
+                     "max_tokens": MAX_OUTPUT_TOKENS}
         if temperature is not None:
             body["temperature"] = temperature
         result = _http_post_json(
@@ -261,6 +308,10 @@ def _raw_chat(messages: list[dict], temperature: float | None = None) -> str:
         )
     except Exception as e:
         raise _degrade(e) from e
+
+    # Counted here, not in a wrapper: this is the one place a request actually reached
+    # QuickML and got a response back, which is the event that gets billed.
+    _record_call()
 
     text = result.get("response")
     if not isinstance(text, str):

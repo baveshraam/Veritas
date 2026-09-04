@@ -410,7 +410,7 @@ def test_a_successful_chat_call_is_parsed_and_marks_the_llm_available(monkeypatc
     monkeypatch.setattr(llm, "_http_post_json", fake_post)
     assert llm.generate("hello") == "a fluent answer"
     assert llm._ever_succeeded is True
-    assert llm.status() == f"quickml ({llm.MODEL})"
+    assert llm.status().startswith(f"quickml ({llm.MODEL})")
 
 
 def test_warm_mints_the_access_token_off_the_request_path(monkeypatch):

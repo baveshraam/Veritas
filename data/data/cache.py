@@ -60,14 +60,14 @@ def get(key: str) -> Any | None:
         return None
 
 
-def put(key: str, value: Any) -> None:
+def put(key: str, value: Any, expiry_hours: int = TTL_HOURS) -> None:
     raw = json.dumps(value, default=str)
     seg = _segment()
     if seg is None:
         _local[key] = raw
         return
     try:
-        seg.put(key, raw, expiry=TTL_HOURS)
+        seg.put(key, raw, expiry=expiry_hours)
     except Exception as e:                    # a cache that cannot write is not an outage
         log.debug("cache write failed for %s (%s)", key, e)
 

@@ -47,6 +47,20 @@ _DATASET_ENV: dict[str, str] = {}
 
 
 @pytest.fixture(autouse=True)
+def _reset_llm_call_budget():
+    """The QuickML call-budget guard (llm.py) persists its counter in Cache so it
+    survives a redeploy — which also means it survives across tests in the same
+    process unless reset here, the same cross-test-pollution concern `_bind_backend`
+    exists for below. Every test that calls llm.generate()/_raw_chat() (mocked or
+    real) increments the same key `_record_call()` writes to."""
+    from data import cache
+    from rag_agent import llm
+    cache.evict(llm._BUDGET_KEY)
+    yield
+    cache.evict(llm._BUDGET_KEY)
+
+
+@pytest.fixture(autouse=True)
 def _bind_backend(request):
     """Point `data.ds` at whichever database this test actually wants."""
     if not _DATASET_ENV:
