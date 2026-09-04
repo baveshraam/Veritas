@@ -24,6 +24,7 @@ from . import board as board_agent
 from . import intents
 from . import provenance
 from . import semantic_interpreter
+from . import series_detection
 from . import timeline as timeline_agent
 from .agents import (
     graph_agent, prediction_agent, sql_agent, synthesis_agent,
@@ -87,6 +88,11 @@ _SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
     # are not evidence for the specific gaps those branches already went and found.
     "INTERROGATION_PREP", "CASE_SIMILARITY_WATCH", "CASE_HANDOFF",
     "PREFILING_CHECK", "CROSS_STATION_LINKAGE",
+    # series_detection.find_series already IS a similarity search (built on
+    # copilot_brief.similar_cases_for) — the generic vector-search fallback would
+    # only add the exact kind of "same crime type" semantic padding this module's
+    # own MIN_MATCH_STRENGTH/distinctive-MO-match discipline exists to filter out.
+    "SERIES_DISCOVERY",
 }
 
 
@@ -1182,6 +1188,67 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                     confidence=0.9, authoritative=True))
             _trace(state, "SQL Agent (cross-station linkage)",
                    f"{len(links)} cross-station link(s)", t0)
+
+    elif intent == "SERIES_DISCOVERY" and state.active_entities.active_fir:
+        case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)
+        if case_rows:
+            case = case_rows[0]
+            result = series_detection.find_series(case)
+            if result is None:
+                out.append(EvidenceItem(
+                    evidence_id=f"series:{state.active_entities.active_fir}:none",
+                    source_type="FIR_RECORD", source_id=state.active_entities.active_fir,
+                    source_query="series_detection.find_series — cross-station MO/section "
+                                 "match, excluding cases already linked by a known accused",
+                    content="No structural pattern was found spanning other stations for "
+                            "this case. This checks for a specific kind of cross-jurisdiction "
+                            "match — a shared distinctive method with no common suspect yet "
+                            "— it is not a guarantee no connection exists.",
+                    confidence=0.85, authoritative=True))
+                _trace(state, "Series discovery", "no cross-station pattern found", t0)
+            else:
+                member_ids = [m.fir_id for m in result.members]
+                by_id = {c["fir_id"]: c for c in sql_agent.cases_by_ids(member_ids)}
+                out.append(EvidenceItem(
+                    evidence_id=f"series:{state.active_entities.active_fir}:summary",
+                    source_type="GEOSPATIAL_ANALYSIS", source_id=state.active_entities.active_fir,
+                    source_query="series_detection.find_series",
+                    content=(f"This case structurally matches {len(result.members)} other "
+                            f"case(s) across {len(result.stations)} station(s) in "
+                            f"{len(result.districts)} district(s) "
+                            f"({', '.join(result.districts) or 'district not recorded'}) — "
+                            f"nobody investigating any one of these cases would otherwise "
+                            f"see the others. This is a structural pattern, not a confirmed "
+                            f"common offender: none of these cases shares a known accused "
+                            f"with this one yet."),
+                    confidence=0.9, authoritative=True))
+                state.sql_query_results.append(case)
+                for m in result.members:
+                    viewable = can_view_fir(role, ps, m.ps_code)
+                    if viewable:
+                        out.append(EvidenceItem(
+                            evidence_id=f"series:{state.active_entities.active_fir}:{m.fir_id}",
+                            source_type="FIR_RECORD", source_id=m.fir_id,
+                            source_query="series_detection.find_series",
+                            content=(f"FIR {m.fir_number or m.fir_id} at "
+                                    f"{m.ps_name or m.ps_code} "
+                                    f"({m.district or 'district not recorded'}) — matches "
+                                    f"because: {'; '.join(m.matched_features) or 'unspecified'}."),
+                            confidence=m.similarity, confidence_kind="similarity"))
+                        if m.fir_id in by_id:
+                            state.sql_query_results.append(by_id[m.fir_id])
+                    else:
+                        out.append(EvidenceItem(
+                            evidence_id=f"series:{state.active_entities.active_fir}:{m.fir_id}",
+                            source_type="FIR_RECORD", source_id=m.fir_id,
+                            source_query="series_detection.find_series",
+                            content="A matching case exists at a station outside your "
+                                    "access scope — the pattern is real, that case cannot "
+                                    "be named here. Contact that station directly.",
+                            confidence=0.85, authoritative=True))
+                _trace(state, "Series discovery",
+                      f"{len(result.members)} cross-station match(es) across "
+                      f"{len(result.stations)} station(s)", t0)
 
     # Vector search complements the graph on narrative/MO semantics — but not when a
     # specialist has already produced the whole answer. Two shapes of that:

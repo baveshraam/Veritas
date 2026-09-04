@@ -46,6 +46,8 @@ def test_new_intents_route_correctly_and_do_not_collide():
         ("What would the defence argue?", "CHALLENGE_FINDING"),
         ("Who else should know about this?", "CROSS_STATION_LINKAGE"),
         ("Is another station working on this?", "CROSS_STATION_LINKAGE"),
+        ("Is this part of a pattern?", "SERIES_DISCOVERY"),
+        ("Could this be a crime spree?", "SERIES_DISCOVERY"),
     ]
     for query, expected in cases:
         assert intents.classify(query) == expected, query
@@ -175,6 +177,23 @@ def test_cross_station_linkage_never_names_a_case_outside_access_scope(dataset):
         orchestrator._officer_ps = saved
     assert any("outside your access scope" in e.content for e in out), (
         "an IO must not see a cross-station case named outright")
+
+
+# --- series discovery ---------------------------------------------------------------
+
+def test_series_discovery_runs_without_raising_and_reports_honestly(indexed):
+    """Needs the vector index (series_detection.find_series builds on
+    copilot_brief.similar_cases_for), unlike CROSS_STATION_LINKAGE above — hence
+    `indexed` rather than the bare `dataset` fixture."""
+    fir_id = ds.query('SELECT "CaseMasterID" FROM "CaseMaster" LIMIT 1')[0]["CaseMasterID"]
+    state = _state("Is this part of a pattern?")
+    state.intent = "SERIES_DISCOVERY"
+    state.active_entities.active_fir = str(fir_id)
+
+    out = orchestrator._run_specialists(state, widen=False)
+    assert out, "must produce either a real pattern or an honest absence"
+    assert all(e.evidence_id.startswith(f"series:{fir_id}:") for e in out)
+    _check_provenance(out)
 
 
 # --- poking holes in a finding ------------------------------------------------------

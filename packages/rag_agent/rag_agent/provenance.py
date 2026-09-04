@@ -1176,6 +1176,45 @@ def _explain_linkage(eid: str, item) -> Derivation:
         next_questions=["Who are this person's associates?", "Does this person have priors?"])
 
 
+def _explain_series(eid: str, item) -> Derivation:
+    content = _get(item, "content", "") or ""
+    negative = eid.endswith(":none")
+    is_summary = eid.endswith(":summary")
+    withheld = "outside your access scope" in content
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim=("No cross-station pattern was found for this case." if negative else
+              "This case is one of several that structurally match across different "
+              "police stations." if is_summary else
+              "This case matches the anchor case on crime type, act section(s), and "
+              "an identical modus-operandi clause." if not withheld else
+              "A matching case exists at another station, outside what you may see."),
+        steps=["Structurally-similar cases were retrieved the same way SIMILAR_CASES "
+               "does (crime type, shared act sections, district, and a direct match "
+               "on the case-specific MO clause in BriefFacts).",
+               "Candidates at the SAME station as this case were dropped — an "
+               "officer's own station already sees those; the gap this checks for "
+               "is the one nobody would otherwise cross-reference.",
+               "Candidates that already share a resolved accused with this case were "
+               "dropped — that overlap is what 'who else is this person named "
+               "with' already answers, not a new pattern.",
+               "What remains must match on the exact MO clause specifically, not "
+               "just crime type and sections — several crime types cite a fixed, "
+               "narrow set of sections, so those two alone are not distinctive.",
+               "At least three total cases (this one plus two more) are required "
+               "before this is reported as a pattern at all — one matching case "
+               "elsewhere is coincidence, not a series."],
+        qualifies=("A checked absence across other stations' open cases." if negative
+                   else "A structural pattern — shared distinctive method, geography "
+                        "and act sections — not a confirmed common offender."),
+        caveat="This does not mean the same person committed all of these — it means "
+               "nobody has yet ruled that in OR out, and right now nobody who is "
+               "investigating any one of these cases would know the others exist.",
+        next_questions=["Why do you think these are connected?",
+                        "Add this pattern to the case board.",
+                        "Should another station know about this?"])
+
+
 def _explain_no_accused(eid: str, item) -> Derivation:
     return Derivation(
         evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
@@ -1226,6 +1265,7 @@ _PREFIX = {
     "handoff":          lambda eid, it, c: _explain_handoff(eid, it),
     "filing":           lambda eid, it, c: _explain_filing(eid, it),
     "linkage":          lambda eid, it, c: _explain_linkage(eid, it),
+    "series":           lambda eid, it, c: _explain_series(eid, it),
 }
 
 # Every evidence_id prefix this system produces must have a handler above. The

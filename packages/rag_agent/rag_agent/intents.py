@@ -148,6 +148,17 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
                          "pre-filing check", "prefiling check", "is this case ready",
                          "would this case stand up", "case readiness check",
                          "is this case solid"), "none"),
+    # Unprompted cross-station pattern discovery (series_detection.py) — deliberately
+    # distinct phrasing from SIMILAR_CASES ("similar", "matching cases", "related
+    # cases") and CASE_SIMILARITY_WATCH ("cold case match", "check my open cases"):
+    # this asks whether the open case is part of a BROADER pattern spanning other
+    # jurisdictions, not whether it resembles one specific other case or the
+    # officer's own backlog.
+    "SERIES_DISCOVERY": (("part of a pattern", "part of a series", "is this a series",
+                          "could this be a series", "crime spree", "part of a spree",
+                          "connected to a bigger pattern",
+                          "happening in other districts too",
+                          "broader pattern", "wider pattern"), "map"),
 }
 
 # Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
@@ -180,7 +191,7 @@ NEEDS_CASE = {"CASE_CONTEXT", "CASE_PEOPLE", "NEXT_STEPS", "BRIEFING",
              "BOARD_VIEW", "BOARD_PIN_EVIDENCE", "BOARD_PIN_PERSON", "BOARD_ADD_LEAD",
              "BOARD_ADD_NOTE", "BOARD_LEAD_STATUS",
              "CASE_SIMILARITY_WATCH", "CASE_HANDOFF", "PREFILING_CHECK",
-             "CROSS_STATION_LINKAGE"}
+             "CROSS_STATION_LINKAGE", "SERIES_DISCOVERY"}
 
 # Operations that read or describe the PREVIOUS turn (or the system itself), rather
 # than making a fresh investigative ask of their own — a meta-turn, not a new
