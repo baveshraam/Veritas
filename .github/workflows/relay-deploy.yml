@@ -19,7 +19,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Is the signed URL still valid?
+        # A push that only MOVES this file (a branch merge into main, say) replays this
+        # job with a URL that was already consumed and has since expired - a 400 after a
+        # two-minute build. stsDate+stsExpiresAfter is the same expiry Stratus enforces,
+        # so check it here and skip instead of failing red on a deploy nobody asked for.
+        id: fresh
+        run: |
+          U=$(cat .github/relay-upload.url)
+          D=${U##*stsDate=}; D=${D%%&*}
+          T=${U##*stsExpiresAfter=}; T=${T%%&*}
+          EXP=$(( D / 1000 + T ))
+          if [ "$(date +%s)" -ge "$EXP" ]; then
+            echo "::notice::Signed URL expired at $(date -u -d @$EXP) - skipping relay. Mint a fresh one with scripts/deploy-api.py."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Build the deploy image and save to tar
+        if: steps.fresh.outputs.ok == 'true'
         # The runner applies Dockerfile.overlay — the published base plus THIS commit's
         # source — so a source-only change never needs a `docker push` from a developer
         # machine. The base is public, so the pull needs no credentials. See
@@ -38,6 +56,7 @@ jobs:
           docker save baveshraam/veritas-api:deploy -o "$RUNNER_TEMP/veritas.tar"
           ls -la "$RUNNER_TEMP/veritas.tar"
       - name: Upload tar to Catalyst signed URL
+        if: steps.fresh.outputs.ok == 'true'
         run: |
           URL=$(cat .github/relay-upload.url)
           curl -sS --fail-with-body -X PUT \
