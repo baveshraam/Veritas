@@ -142,7 +142,10 @@ export async function streamChat(
  *
  * Returns an abort function; call it on unmount to stop the stream.
  */
-export function streamAlerts(onAlert: (a: any) => void, onError?: () => void): () => void {
+export function streamAlerts(
+  onAlert: (a: any, kind: "alert" | "series") => void,
+  onError?: () => void,
+): () => void {
   const controller = new AbortController();
 
   (async () => {
@@ -161,12 +164,19 @@ export function streamAlerts(onAlert: (a: any) => void, onError?: () => void): (
         const frames = buffer.split("\n\n");
         buffer = frames.pop() ?? "";
         for (const frame of frames) {
-          const line = frame.split("\n").find((l) => l.startsWith("data:"));
-          if (!line) continue;
-          const payload = line.slice(5).trim();
+          const lines = frame.split("\n");
+          const eventLine = lines.find((l) => l.startsWith("event:"));
+          const dataLine = lines.find((l) => l.startsWith("data:"));
+          if (!dataLine) continue;
+          const payload = dataLine.slice(5).trim();
           if (!payload) continue;
+          // Two event kinds share this one stream: district-anomaly alerts (the
+          // original feed) and cross-station series discoveries. Untyped frames
+          // (SSE's own keep-alive comments, or an older server) default to "alert"
+          // so existing behaviour is unchanged if the event: line is ever absent.
+          const kind = eventLine?.slice(6).trim() === "series" ? "series" : "alert";
           try {
-            onAlert(JSON.parse(payload));
+            onAlert(JSON.parse(payload), kind);
           } catch {
             /* keep-alive / non-JSON frame */
           }

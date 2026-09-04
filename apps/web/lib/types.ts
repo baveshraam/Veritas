@@ -279,3 +279,26 @@ export type AnomalyAlert = {
   severity: "low" | "medium" | "high";
   detected_at: string;
 };
+
+export type SeriesMember = {
+  fir_id: string;
+  fir_number: string | null;
+  ps_code: string;
+  ps_name: string | null;
+  district: string | null;
+  date_filed: string | null;
+  case_status: string | null;
+  matched_features: string[];
+  similarity: number;
+};
+
+/** A cross-station series discovery (rag_agent.series_detection), pushed through
+ *  the same /alerts stream as AnomalyAlert. Unlike a district-anomaly alert this
+ *  is case-scoped: the "case" pane surfaces it, not a district. */
+export type SeriesAlert = {
+  anchor_fir_id: string;
+  anchor_ps_code: string;
+  members: SeriesMember[];
+  stations: string[];
+  districts: string[];
+};

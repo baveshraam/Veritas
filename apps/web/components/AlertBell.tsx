@@ -4,7 +4,7 @@ import { loadToken, streamAlerts } from "@/lib/api";
 import { districtName } from "@/lib/districts";
 import { useT } from "@/lib/i18n";
 import { anomalyReading } from "@/lib/metrics";
-import type { AnomalyAlert } from "@/lib/types";
+import type { AnomalyAlert, SeriesAlert } from "@/lib/types";
 
 const MAX_KEPT = 12;
 
@@ -22,6 +22,7 @@ const MAX_KEPT = 12;
 export default function AlertBell() {
   const t = useT();
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
+  const [series, setSeries] = useState<SeriesAlert[]>([]);
   const [seen, setSeen] = useState(0);
   const [open, setOpen] = useState(false);
 
@@ -33,7 +34,13 @@ export default function AlertBell() {
     const connect = () => {
       if (!loadToken()) return;   // unverified session — the feed is record-derived
       stop = streamAlerts(
-        (a: AnomalyAlert) => setAlerts((all) => [a, ...all].slice(0, MAX_KEPT)),
+        (item: AnomalyAlert | SeriesAlert, kind) => {
+          if (kind === "series") {
+            setSeries((all) => [item as SeriesAlert, ...all].slice(0, MAX_KEPT));
+          } else {
+            setAlerts((all) => [item as AnomalyAlert, ...all].slice(0, MAX_KEPT));
+          }
+        },
         // A backend restart must not silently end alerting for the rest of the
         // session — reconnect rather than leaving the feed dead.
         () => { if (!stopped) retry = setTimeout(connect, 5000); },
@@ -43,11 +50,12 @@ export default function AlertBell() {
     return () => { stopped = true; clearTimeout(retry); stop?.(); };
   }, []);
 
-  const unread = Math.max(0, alerts.length - seen);
+  const total = alerts.length + series.length;
+  const unread = Math.max(0, total - seen);
 
   const toggle = () => {
     setOpen((v) => {
-      if (!v) setSeen(alerts.length);
+      if (!v) setSeen(total);
       return !v;
     });
   };
@@ -102,6 +110,44 @@ export default function AlertBell() {
                 );
               })}
             </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
+              <span className="label">{t("Cross-station patterns")}</span>
+              <span className="prov prov-derived" style={{ marginLeft: "auto" }}>{t("Derived")}</span>
+            </div>
+            <div style={{ maxHeight: 240, overflowY: "auto" }} className="scroll">
+              {!series.length && (
+                <div className="meta" style={{ padding: "16px 12px" }}>
+                  {t("No cross-station pattern found in recently filed cases. This checks for a shared distinctive method across different stations with no common suspect yet.")}
+                </div>
+              )}
+              {series.map((s) => {
+                const named = s.members.find((m) => m.fir_number);
+                const why = named?.matched_features.find((f) => f.startsWith("matching modus operandi"))
+                  ?? named?.matched_features[0];
+                return (
+                  <div key={s.anchor_fir_id} className="alert"
+                    style={{ borderRadius: 0, border: 0, borderBottom: "1px solid var(--line)", boxShadow: "none", background: "none" }}>
+                    <span className="alert-bar" />
+                    <div className="alert-main">
+                      <div className="alert-head">
+                        <span className="alert-title">
+                          {t("FIR")} {s.anchor_fir_id} + {s.members.length} {t("more")}
+                        </span>
+                        <span className="pill pill-amber">{s.stations.length} {t("stations")}</span>
+                      </div>
+                      <div className="alert-body">
+                        <b style={{ color: "var(--t-2)" }}>
+                          {t("Spans")} {s.districts.length} {t("district(s)")}: {s.districts.join(", ")}
+                        </b>
+                        {why && <div className="meta">{t("Matches because")}: {why}</div>}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
             <div className="meta" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", color: "var(--t-4)" }}>
               {t("Decision support. Nothing here triggers an action on its own.")}
             </div>
