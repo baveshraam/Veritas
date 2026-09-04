@@ -20,6 +20,7 @@ from typing import Optional
 from data import ds, upsert_session_focus
 from policy import can_view_fir, mask_person_name
 
+from . import behavioral_profile
 from . import board as board_agent
 from . import intents
 from . import provenance
@@ -93,6 +94,10 @@ _SPECIALIST_SETTLES = _RELATIONAL_INTENTS | {
     # only add the exact kind of "same crime type" semantic padding this module's
     # own MIN_MATCH_STRENGTH/distinctive-MO-match discipline exists to filter out.
     "SERIES_DISCOVERY",
+    # A behavioral profile is a set of structural findings read across a person's
+    # OWN cases — semantic neighbours of that person are not evidence for whether
+    # their own incidents cluster by time, method, geography or severity.
+    "BEHAVIORAL_PROFILE",
 }
 
 
@@ -1018,6 +1023,29 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
                          "network, assembled for interview preparation",
             content=p, confidence=0.9, authoritative=True) for i, p in enumerate(prep)]
         _trace(state, "Copilot (interrogation prep)", f"{len(prep)} preparation point(s)", t0)
+
+    elif intent == "BEHAVIORAL_PROFILE" and pid:
+        rows = sql_agent.filter_viewable(sql_agent.person_record(pid), role, ps)
+        findings = behavioral_profile.build_profile(pid, rows)
+        if not findings:
+            out.append(EvidenceItem(
+                evidence_id=f"profile:{pid}:none", source_type="CRIMINAL_RECORD",
+                source_id=pid,
+                source_query="behavioral_profile.build_profile over person_record",
+                content="No recurring pattern clears the bar for a profile — either "
+                        "too few recorded cases, or nothing lines up across them. "
+                        "This is a checked absence, not a failed search.",
+                confidence=0.85, authoritative=True))
+            _trace(state, "Behavioral profile", "no pattern found", t0)
+        else:
+            out += [EvidenceItem(
+                evidence_id=f"profile:{pid}:{i}", source_type="CRIMINAL_RECORD",
+                source_id=pid,
+                source_query="behavioral_profile.build_profile over person_record",
+                content=f["claim"], confidence=0.88, authoritative=True)
+                for i, f in enumerate(findings)]
+            _trace(state, "Behavioral profile",
+                  f"{len(findings)} finding(s) from {len(rows)} case(s)", t0)
 
     elif intent == "CASE_SIMILARITY_WATCH" and state.active_entities.active_fir:
         case_rows = sql_agent.fir_by_id(state.active_entities.active_fir, role, ps)

@@ -159,6 +159,17 @@ INTENTS: dict[str, tuple[tuple[str, ...], str]] = {
                           "connected to a bigger pattern",
                           "happening in other districts too",
                           "broader pattern", "wider pattern"), "map"),
+    # Evidence-backed behavioral profile (behavioral_profile.py) — deliberately
+    # distinct wording from PERSON_HISTORY ("priors", "record") and PERSON_NETWORK
+    # ("associates", "network"): this asks for the recurring PATTERN across a
+    # person's own cases (method, timing, geography, escalation), not a list of
+    # cases or a list of associates.
+    "BEHAVIORAL_PROFILE": (("behavioral profile", "behaviour profile",
+                            "how does he operate", "how does she operate",
+                            "his mo profile", "her mo profile",
+                            "build a profile on him", "build a profile on her",
+                            "profile this person", "recurring behavior",
+                            "recurring behaviour"), "none"),
 }
 
 # Word-boundary matching, not substring — BUG-019: plain `k in q` matched "fir" inside
@@ -175,7 +186,7 @@ _KEYWORD_RE = {
 # "check whether the record exists in the system" — which is not why it failed. The
 # orchestrator short-circuits these instead, and says which subject is missing.
 NEEDS_SUBJECT = {"PERSON_HISTORY", "PERSON_NETWORK", "ALIAS_CHECK", "FINANCIAL", "RISK",
-                 "INTERROGATION_PREP"}
+                 "INTERROGATION_PREP", "BEHAVIORAL_PROFILE"}
 # BOARD_PIN_PERSON also needs a resolved person, but is NOT in NEEDS_SUBJECT: it is
 # also in NEEDS_CASE (a board belongs to a case), and the no_case gate runs first —
 # adding it here as well would make "no case, no person" report the wrong missing

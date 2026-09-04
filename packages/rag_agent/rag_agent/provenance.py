@@ -1215,6 +1215,34 @@ def _explain_series(eid: str, item) -> Derivation:
                         "Should another station know about this?"])
 
 
+def _explain_profile(eid: str, item) -> Derivation:
+    negative = eid.endswith(":none")
+    return Derivation(
+        evidence_id=eid, basis="derived", basis_meaning=BASIS_MEANING["derived"],
+        claim=("No recurring pattern was found across this person's recorded cases."
+              if negative else
+              "This is a recurring pattern read across this person's own cases, "
+              "not a fact any single record states."),
+        steps=["Every case this person is named as accused on was read (the same "
+               "identity-resolved history 'does this person have priors' reads).",
+               "Time of day, the case-specific method clause, incident location, "
+               "offence severity and co-accused were compared ACROSS those cases.",
+               "A pattern is only reported where it clears a real bar: a majority "
+               "of cases sharing a time window, an exact repeated method, an "
+               "actual severity increase per the record's own gravity "
+               "classification, or a co-accused on more than one case — never "
+               "from a single case or from demographic fields."],
+        qualifies=("A checked absence — either too few recorded cases or nothing "
+                   "lines up across them." if negative else
+                   "A behavioral pattern read from records, not a prediction and "
+                   "not a demographic inference — caste, religion and gender are "
+                   "never read by this or any model in this system."),
+        caveat="This describes what the record shows about past cases, not what "
+               "this person will do next — it is not a risk score and carries no "
+               "probability of reoffending.",
+        next_questions=["Does this person have priors?", "Who are this person's associates?"])
+
+
 def _explain_no_accused(eid: str, item) -> Derivation:
     return Derivation(
         evidence_id=eid, basis="record", basis_meaning=BASIS_MEANING["record"],
@@ -1266,6 +1294,7 @@ _PREFIX = {
     "filing":           lambda eid, it, c: _explain_filing(eid, it),
     "linkage":          lambda eid, it, c: _explain_linkage(eid, it),
     "series":           lambda eid, it, c: _explain_series(eid, it),
+    "profile":          lambda eid, it, c: _explain_profile(eid, it),
 }
 
 # Every evidence_id prefix this system produces must have a handler above. The

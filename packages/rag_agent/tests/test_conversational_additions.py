@@ -48,6 +48,8 @@ def test_new_intents_route_correctly_and_do_not_collide():
         ("Is another station working on this?", "CROSS_STATION_LINKAGE"),
         ("Is this part of a pattern?", "SERIES_DISCOVERY"),
         ("Could this be a crime spree?", "SERIES_DISCOVERY"),
+        ("Build a behavioral profile on him.", "BEHAVIORAL_PROFILE"),
+        ("How does she operate?", "BEHAVIORAL_PROFILE"),
     ]
     for query, expected in cases:
         assert intents.classify(query) == expected, query
@@ -193,6 +195,22 @@ def test_series_discovery_runs_without_raising_and_reports_honestly(indexed):
     out = orchestrator._run_specialists(state, widen=False)
     assert out, "must produce either a real pattern or an honest absence"
     assert all(e.evidence_id.startswith(f"series:{fir_id}:") for e in out)
+    _check_provenance(out)
+
+
+# --- behavioral profile --------------------------------------------------------------
+
+def test_behavioral_profile_runs_without_raising_and_reports_honestly(dataset):
+    row = sql_agent.ranked_offenders("IG", "", limit=1)
+    assert row, "fixture must have at least one resolved offender"
+    pid = row[0]["person_id"]
+    state = _state("How does he operate?")
+    state.intent = "BEHAVIORAL_PROFILE"
+    state.active_entities.active_person = pid
+
+    out = orchestrator._run_specialists(state, widen=False)
+    assert out, "must produce either real findings or an honest absence"
+    assert all(e.evidence_id.startswith(f"profile:{pid}:") for e in out)
     _check_provenance(out)
 
 
