@@ -180,29 +180,44 @@ def _run_narrative_backfill() -> None:
     """BUG-023's live fix: recompute `CaseMaster.BriefFacts` in place (no case added,
     removed, or renumbered; no accused/identity/financial/graph row touched — see
     `narrative_backfill`'s own docstring for why a full regeneration is not needed
-    here), then rebuild the vector index the new text feeds."""
+    here), then rebuild the vector index the new text feeds.
+
+    Runs the BNS section backfill FIRST: the narrative's "Offences registered under
+    section X" line reads straight out of ActSectionAssociation, so recomputing the
+    narrative against not-yet-corrected sections would faithfully re-cite the wrong
+    ones. Same isolation discipline as /jobs/refresh's own step list — one failing
+    must not silently skip the rest."""
     global _narrative_running
     from data.embeddings.index_job import run_all as reindex
     from data.generator.narrative_backfill import backfill_narratives
+    from data.generator.section_backfill import backfill_act_sections
 
+    out: dict = {}
     try:
-        updated = backfill_narratives()
-        indexed = reindex()
-        log.info("narrative backfill complete: %s cases updated, reindex=%s", updated, indexed)
-    except Exception:
+        out["sections"] = backfill_act_sections()
+    except Exception as exc:
+        log.exception("section backfill failed")
+        out["sections"] = f"failed: {type(exc).__name__}"
+    try:
+        out["narratives"] = backfill_narratives()
+        out["reindex"] = reindex()
+    except Exception as exc:
         log.exception("narrative backfill failed")
+        out["narratives"] = f"failed: {type(exc).__name__}"
     finally:
+        log.info("narrative/section backfill complete: %s", out)
         with _narrative_lock:
             _narrative_running = False
 
 
 @router.post("/jobs/regenerate_narratives")
 async def regenerate_narratives(x_veritas_job_token: str | None = Header(default=None)):
-    """One-time (or repeatable) fix for BUG-023, run where the SDK actually works —
-    inside AppSail's request context — because the same operation cannot be driven
-    from a developer machine: the Data Store SDK authenticates from per-request
-    Catalyst headers, which only exist inside a real AppSail request (see
-    `data.ds.bind_catalyst_request`), not from a bare local script."""
+    """One-time (or repeatable) fix for BUG-023 (narrative diversity) and the BNS
+    section-currency fix, run where the SDK actually works — inside AppSail's request
+    context — because the same operation cannot be driven from a developer machine:
+    the Data Store SDK authenticates from per-request Catalyst headers, which only
+    exist inside a real AppSail request (see `data.ds.bind_catalyst_request`), not
+    from a bare local script."""
     _authorise(x_veritas_job_token)
 
     global _narrative_running

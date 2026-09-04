@@ -65,3 +65,26 @@ def test_a_bns_case_never_cites_an_ipc_section_or_vice_versa(dataset):
     used = ds.query('SELECT DISTINCT "ActID", "SectionID" FROM "ActSectionAssociation"')
     for r in used:
         assert (r["ActID"], r["SectionID"]) in have, r
+
+
+def test_backfill_repairs_a_dataset_seeded_before_the_fix(dataset):
+    """A live, already-seeded dataset predates this fix and has every case citing the
+    IPC regardless of date — exactly what data.generator.section_backfill exists to
+    repair in place, without touching case/accused/identity/financial/graph rows."""
+    from data.generator.section_backfill import backfill_act_sections
+
+    case_ids = [r["CaseMasterID"] for r in ds.query('SELECT "CaseMasterID" FROM "CaseMaster"')]
+    ds.execute('DELETE FROM "ActSectionAssociation"')
+    ds.insert("ActSectionAssociation", [
+        {"CaseMasterID": cid, "ActID": "IPC", "SectionID": "379",
+         "ActOrderID": 1, "SectionOrderID": 1}
+        for cid in case_ids])
+    before_ids = {r["CaseMasterID"] for r in ds.query('SELECT "CaseMasterID" FROM "CaseMaster"')}
+
+    touched = backfill_act_sections()
+
+    assert touched > 0
+    codes = {r["ActID"] for r in ds.query('SELECT DISTINCT "ActID" FROM "ActSectionAssociation"')}
+    assert "BNS" in codes            # some cases in this dataset postdate the cutover
+    after_ids = {r["CaseMasterID"] for r in ds.query('SELECT "CaseMasterID" FROM "CaseMaster"')}
+    assert before_ids == after_ids   # no case added, removed, or renumbered
