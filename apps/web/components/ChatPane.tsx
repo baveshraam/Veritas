@@ -19,6 +19,17 @@ const OPENERS: { label: string; q: string }[] = [
   { label: "Forecast", q: "What are the crime trends?" },
 ];
 
+/** The case-scoped conversational operations (intents.NEEDS_CASE). Offered only
+ *  when a case is actually open — asked cold they refuse with "give me an FIR
+ *  number", and an opener whose first click refuses is worse than no opener. */
+const CASE_OPENERS: { label: string; q: string }[] = [
+  { label: "Case handoff", q: "Catch me up on this case" },
+  { label: "Pre-filing check", q: "Would this case hold up?" },
+  { label: "Cross-station linkage", q: "Who else should know about this?" },
+  { label: "Standing case watch", q: "Check my other cases for a match" },
+  { label: "Case briefing", q: "What happened in this case?" },
+];
+
 /** Follow-ups that are real questions this engine answers, phrased the way its
  *  own intent classifier expects. Never a generic "tell me more". */
 function followUps(focus: SessionFocusView | undefined, t: Turn): string[] {
@@ -119,7 +130,7 @@ export default function ChatPane({
               {t("Answers are drawn from the case records you are cleared to see, and every claim carries the record it came from. Where the records don't support a claim, Veritas says so rather than guessing.")}
             </p>
             <div className="label" style={{ marginBottom: 7 }}>{t("Start here")}</div>
-            {OPENERS.map((o) => (
+            {(focus?.case ? CASE_OPENERS : OPENERS).map((o) => (
               <button key={o.q} className="opening-q" onClick={() => send(o.q)}>
                 <b>{t(o.label)}</b>
                 {t(o.q)}
@@ -226,7 +237,7 @@ export default function ChatPane({
             {attaching && <span>{t("Reading file…")}</span>}
             {attachment && (
               <>
-                <span>📎 {attachment.filename}</span>
+                <span>📌 {attachment.filename}</span>
                 <button className="btn btn-quiet btn-sm" style={{ padding: "0 6px" }}
                   onClick={() => setAttachment(null)}>{t("Remove")}</button>
               </>
@@ -259,7 +270,7 @@ export default function ChatPane({
           <button className="btn btn-quiet btn-sm" type="button" disabled={busy || attaching}
             title={t("Attach a PDF or Word document as context")}
             onClick={() => fileRef.current?.click()}>
-            📎
+            📌
           </button>
           <button className="btn btn-sm btn-primary composer-ask" onClick={() => send()}
             disabled={busy || !text.trim()}>
