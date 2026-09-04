@@ -649,6 +649,11 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
         accused_list = _pick_accused(rng, people, complainant, dc, crews,
                                      prior.crime_type)
 
+        # Which act this case cites is a fact about WHEN it happened, not about the
+        # crime-type prior — see rd.act_and_sections_for's own docstring.
+        case_act, case_sections = rd.act_and_sections_for(
+            prior.crime_type, occ_from.date(), prior.ipc_sections)
+
         ds.rows("CaseMaster").append({
             "CaseMasterID": case_id,
             "CrimeNo": _crime_no(category, did, uid, year, serial[key]),
@@ -672,16 +677,19 @@ def generate(rng: random.Random, n_cases: int) -> Dataset:
                 rng, prior.crime_type, dname, filed, occ_from, len(accused_list),
                 station=unit["UnitName"],
                 locality=locality_name(lat, lng, dc),
-                sections=prior.ipc_sections,
+                sections=case_sections,
                 status=status,
                 signature=accused_list[0].uid if accused_list else None),
         })
 
-        # ActSectionAssociation — the ER's replacement for a TEXT[] of IPC sections.
-        act = rd.act_for(prior.crime_type)
-        for order, sec in enumerate(prior.ipc_sections, start=1):
+        # ActSectionAssociation — the ER's replacement for a TEXT[] of sections. Which
+        # act a case cites depends on ITS OWN offence date (act_and_sections_for): the
+        # BNS replaced the IPC for offences on or after 2024-07-01, so a case occurring
+        # after that date cites BNS sections even though the crime-type prior itself is
+        # written in IPC terms.
+        for order, sec in enumerate(case_sections, start=1):
             ds.rows("ActSectionAssociation").append({
-                "CaseMasterID": case_id, "ActID": act, "SectionID": sec,
+                "CaseMasterID": case_id, "ActID": case_act, "SectionID": sec,
                 "ActOrderID": 1, "SectionOrderID": order})
 
         ids["comp"] += 1
