@@ -179,6 +179,33 @@ def test_advisory_step_reads_the_series_and_fairness_caches_it_runs_after(monkey
     assert cache.get(jobs.ADVISORY_CACHE_KEY) == [{"district_code": "KA05", "headline": "test"}]
 
 
+def test_last_outcome_is_cached_for_health_to_read_when_sync_cant_be_trusted(steps):
+    """AppSail exposes no runtime logs, and sync=true can now outrun AppSail's own
+    request execution ceiling with fairness+advisory added to the step list — the
+    cached outcome is the only way left to see which step actually failed."""
+    from data import cache
+
+    jobs._refresh_running = True
+    jobs._run_refresh()
+
+    cached = cache.get(jobs.LAST_REFRESH_CACHE_KEY)
+    assert cached["gds"] == "gds-done"
+    assert "at" in cached
+
+
+def test_a_failed_step_s_message_is_cached_not_just_its_type(steps):
+    """A bare exception TYPE name is not enough to diagnose a live-only failure with
+    no server logs to fall back on — the message has to travel too."""
+    from data import cache
+
+    jobs._refresh_running = True
+    jobs._run_refresh()
+
+    cached = cache.get(jobs.LAST_REFRESH_CACHE_KEY)
+    assert cached["stratus_graph"].startswith("failed: RuntimeError")
+    assert "OAUTH_SCOPE_MISMATCH" in cached["stratus_graph"]
+
+
 def test_sync_returns_the_per_step_summary_rather_than_just_started(client, steps):
     """The whole point of the escape hatch: on this platform AppSail exposes
     bundle-creator logs and no RUNTIME logs, so a step that fails inside the background

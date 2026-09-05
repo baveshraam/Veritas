@@ -29,6 +29,7 @@ import hmac
 import logging
 import os
 import threading
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Header, HTTPException, status
 
@@ -39,6 +40,8 @@ _refresh_lock = threading.Lock()
 _refresh_running = False
 _narrative_lock = threading.Lock()
 _narrative_running = False
+
+LAST_REFRESH_CACHE_KEY = "last_refresh_v1"
 
 
 def _authorise(token: str | None) -> None:
@@ -114,12 +117,23 @@ def _run_refresh() -> dict:
                 # the traceback, or a failed step looks identical to a slow one from
                 # the outside.
                 log.exception("scheduled refresh step %r failed", name)
-                out[name] = f"failed: {type(exc).__name__}"
+                out[name] = f"failed: {type(exc).__name__}: {exc}"[:300]
         log.info("scheduled refresh complete: %s", out)
         return out
     finally:
         with _refresh_lock:
             _refresh_running = False
+        # AppSail exposes bundle-creator logs and no runtime logs, so the log line
+        # above is invisible from outside — and `sync=true`'s own response is no
+        # longer a reliable way to see it either, now that the full step list
+        # (with fairness + advisory added) can run past AppSail's own request
+        # execution ceiling (measured live: ~35s) even though the async path this
+        # `finally` always runs on has no such limit. Cached here so a human can
+        # read the last real outcome from `/health` without either.
+        from data import cache
+        cache.put(LAST_REFRESH_CACHE_KEY,
+                 {**out, "at": datetime.now(timezone.utc).isoformat()},
+                 expiry_hours=SERIES_CACHE_TTL_HOURS)
 
 
 SERIES_CACHE_KEY = "series_scan_v1"

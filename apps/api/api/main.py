@@ -179,6 +179,16 @@ async def health() -> dict:
     except Exception as e:
         status["fairness"] = f"unavailable: {type(e).__name__}"
 
+    # The last background /jobs/refresh's own per-step outcome, for the same reason
+    # as `fairness` above — AppSail exposes no runtime logs, and `sync=true` is no
+    # longer a reliable way to see this now that the full step list can outrun
+    # AppSail's own request execution ceiling.
+    try:
+        from data.cache import get as cache_get
+        status["last_refresh"] = cache_get(jobs.LAST_REFRESH_CACHE_KEY)
+    except Exception as e:
+        status["last_refresh"] = f"unavailable: {type(e).__name__}"
+
     # BUG-017: don't force a model load just to report on it — report what is
     # actually true of this container's state right now.
     #
