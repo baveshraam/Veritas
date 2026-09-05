@@ -108,8 +108,22 @@ def _run_refresh() -> dict:
         ("advisory", _run_advisory),
     )
     out: dict = {}
+    from data import cache
+    started_at = datetime.now(timezone.utc).isoformat()
     try:
         for name, step in steps:
+            # Written BEFORE the step runs, not just after the whole job finishes.
+            # Live verification (2026-09-05) found the async path can run for many
+            # minutes with `/health`'s `last_refresh` staying null the entire time —
+            # indistinguishable, from outside AppSail's no-runtime-logs constraint,
+            # between "still working", "stuck on one step", and "the container was
+            # recycled mid-run and the thread died with it". This makes the CURRENT
+            # step and when it started observable without waiting for completion.
+            cache.put(LAST_REFRESH_CACHE_KEY,
+                     {**out, "status": "running", "current_step": name,
+                      "started_at": started_at,
+                      "step_started_at": datetime.now(timezone.utc).isoformat()},
+                     expiry_hours=SERIES_CACHE_TTL_HOURS)
             try:
                 out[name] = step()
             except Exception as exc:
@@ -130,9 +144,9 @@ def _run_refresh() -> dict:
         # execution ceiling (measured live: ~35s) even though the async path this
         # `finally` always runs on has no such limit. Cached here so a human can
         # read the last real outcome from `/health` without either.
-        from data import cache
         cache.put(LAST_REFRESH_CACHE_KEY,
-                 {**out, "at": datetime.now(timezone.utc).isoformat()},
+                 {**out, "status": "complete", "started_at": started_at,
+                  "at": datetime.now(timezone.utc).isoformat()},
                  expiry_hours=SERIES_CACHE_TTL_HOURS)
 
 

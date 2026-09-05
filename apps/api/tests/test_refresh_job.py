@@ -193,6 +193,41 @@ def test_last_outcome_is_cached_for_health_to_read_when_sync_cant_be_trusted(ste
     assert "at" in cached
 
 
+def test_progress_is_visible_before_the_job_finishes(monkeypatch):
+    """Live verification (2026-09-05): the async job ran for minutes with `/health`'s
+    `last_refresh` staying null the whole time, and AppSail exposes no runtime logs to
+    tell "still working" apart from "stuck" or "the container recycled mid-run". Each
+    step must publish its own start, not just the job's own final outcome."""
+    from data import cache
+
+    seen_during_gds = {}
+
+    def slow_gds():
+        seen_during_gds.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
+        return "gds-done"
+
+    monkeypatch.setattr("data.gds.run_all", slow_gds, raising=False)
+    monkeypatch.setattr("data.graph.publish_graph", lambda: "stratus_graph-done",
+                        raising=False)
+    monkeypatch.setattr("data.embeddings.index_job.run_all",
+                        lambda: "vector_index-done", raising=False)
+    monkeypatch.setattr(jobs, "_rerun_detectors", lambda: "aml-done")
+    monkeypatch.setattr(jobs, "_scan_series", lambda: "series_scan-done")
+    monkeypatch.setattr(jobs, "_run_fairness", lambda: "fairness-done")
+    monkeypatch.setattr(jobs, "_run_advisory", lambda: "advisory-done")
+
+    jobs._refresh_running = True
+    jobs._run_refresh()
+
+    assert seen_during_gds["status"] == "running"
+    assert seen_during_gds["current_step"] == "gds"
+    assert "step_started_at" in seen_during_gds
+
+    final = cache.get(jobs.LAST_REFRESH_CACHE_KEY)
+    assert final["status"] == "complete"
+    assert final["gds"] == "gds-done"
+
+
 def test_a_failed_step_s_message_is_cached_not_just_its_type(steps):
     """A bare exception TYPE name is not enough to diagnose a live-only failure with
     no server logs to fall back on — the message has to travel too."""
