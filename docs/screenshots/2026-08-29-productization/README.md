@@ -1,13 +1,12 @@
 # 2026-08-29 — productization pass
 
 Supersedes `2026-08-27-investigation-board/` and the dark-shell shots in
-`2026-08-29-workstation-redesign/` (kept for history — the structural decisions
-they document are still in effect, now drawn in the light institutional theme).
+`2026-08-29-workstation-redesign/` (kept for history; same structural decisions,
+now in the light institutional theme).
 
-Captured by driving the real console over CDP at **1600 × 1000**, against a
-local API on the same 10,000-case dataset the deployment carries
-(`data/.veritas/ds.sqlite3`, 16,918 graph nodes, 13,835 indexed documents).
-Zero console errors in every session.
+Captured by driving the real console over CDP at **1600 × 1000**, against a local API
+on the same 10,000-case dataset the deployment carries (16,918 graph nodes, 13,835
+indexed documents). Zero console errors.
 
 | Shot | State | What to look at |
 |---|---|---|

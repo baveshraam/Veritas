@@ -73,26 +73,13 @@ microservices. Full detail: [CLAUDE.md §10](CLAUDE.md).
   explicit sign-off, purely to undo two accidental junk commits — that was a one-off
   correction, not a standing workflow. See "What happened this session" below.)
 
-## What happened this session (2026-07-23)
+## History note (2026-07-23)
 
-Two accidental commits (`chore: refresh repository metadata`, `nothing lol`) landed junk in
-`README.md` (a stray trailing `#` line) and `.gitignore` on `origin/main`. The repo owner had
-already run `git reset --hard` locally to undo them, but that only rewound the local branch —
-`origin/main` was still two commits ahead with the broken state. Diagnosed the divergence,
-confirmed with the owner, and force-pushed the clean local `main` (commit `110db34`) back over
-`origin/main` to restore the correct README.
-
-Also investigated a `claude` account showing up in the GitHub repo's Contributors sidebar.
-`git log --all` across every branch (checked before any branch deletion or `gc`) shows zero
-commits ever authored or committed by anything matching "Claude" or an anthropic.com address —
-only `Bavesh Raam S` / `baveshraam`. So there is nothing in this repo's git history to fix.
-That sidebar is GitHub's own cached contributor-stats table, which can lag behind actual
-history (especially after force-pushes / history rewrites) and isn't correctable via git.
-**Unresolved, not actionable from this environment** — no `gh` CLI or API token was available
-to query GitHub's side further. Next step for whoever picks this up: check
-**Settings → Collaborators** on the GitHub repo (rule out a literal collaborator invite, which
-*is* removable) and, if the Contributors widget still shows it after a few days, it's a
-GitHub Support ticket, not a code fix.
+A one-off force-push (commit `110db34`, owner sign-off obtained first) undid two accidental
+junk commits on `origin/main`. Unresolved, non-actionable loose end: GitHub's Contributors
+sidebar shows a `claude` entry despite `git log --all` having zero matching commits — likely a
+stale cached stats table; not a git-history problem. If it persists, check
+**Settings → Collaborators** first, then it's a GitHub Support ticket, not a code fix.
 
 ## Where to look when something breaks
 
@@ -103,5 +90,5 @@ GitHub Support ticket, not a code fix.
 - Deploy failures: bundle-creator logs via `GET .../appsail/{id}/deployment/{depid}/logs`,
   documented in CONTEXT.md.
 - "Why does X in CLAUDE.md say Y but the code does Z": CLAUDE.md is meant to be kept current —
-  if you find drift, fix the doc in the same PR as the code change, and append the delta to
-  its changelog rather than rewriting past entries.
+  if you find drift, fix the doc in the same PR as the code change, adding only a one-line
+  changelog entry there (full detail goes in `docs/WORK_LOG.md`).

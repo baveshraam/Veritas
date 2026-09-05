@@ -1,227 +1,179 @@
 # Veritas — Strategic Reset (2026-09-04/05)
 
 **Purpose.** A ground-up product/investigative/technical/domain audit, done on request, to
-answer one question before any more features get built: *what must Veritas become to be the
-strongest possible answer to the KSP/SCRB challenge, and something a real police professional
-would genuinely find useful* — not what's fastest to add to an already-long feature list.
+answer one question before more features get built: what must Veritas become to be the
+strongest answer to the KSP/SCRB challenge and something a real police professional would
+genuinely find useful — not what's fastest to add to an already-long feature list.
 
-**Method, and how to read this document.** The code was read directly, not trusted from
-`CLAUDE.md`'s own claims (which itself warns it can drift stale). Findings are tagged:
-- **[VERIFIED]** — confirmed directly against the live code or a live deploy, this pass.
-- **[SOURCE]** — external research, cited.
-- **[JUDGMENT]** — this document's own synthesis or recommendation, not independently checkable.
+**Method.** Code read directly, not trusted from `CLAUDE.md`'s own claims. Tags:
+**[VERIFIED]** confirmed against live code/deploy this pass; **[SOURCE]** external research,
+cited; **[JUDGMENT]** this document's own synthesis, not independently checkable.
 
-This document is a **point-in-time analysis**, not a steering document that gets kept current
-line-by-line the way `CLAUDE.md` is. `docs/CAPABILITY_TARGET_AND_GAPS.md` and
-`docs/INDUSTRY_GAP_ANALYSIS.md` already exist as living gap-analysis documents from an earlier
-pass (2026-08-27) and remain independently useful — this document supersedes their conclusions
-about current state where they overlap (this analysis is newer and was done by directly reading
-the code a second time), but does not replace them wholesale. Part 8 below records what was
-actually *built* against this document's own roadmap in the same session it was written —
-treat that section as the freshest, and re-verify against `CLAUDE.md`'s changelog before trusting
-it further, per that file's own stated discipline.
+This is a **point-in-time analysis**, not a steering document kept current line-by-line the way
+`CLAUDE.md` is. `docs/CAPABILITY_TARGET_AND_GAPS.md` and `docs/INDUSTRY_GAP_ANALYSIS.md` are
+earlier (2026-08-27) gap-analysis passes and remain independently useful; this document
+supersedes their conclusions about *current state* where they overlap. Part 8 records what was
+actually built against this document's own roadmap in the same session — re-verify against
+`CLAUDE.md`'s changelog before trusting it further.
 
 ---
 
 ## Part 1 — What Veritas genuinely does today
 
-### The load-bearing part is real
-**[VERIFIED]** `packages/ml_models/.../fellegi_sunter.py` is not decorative. It's a careful,
-correct implementation of the actual 1969 method: multi-level (not binary) field comparison, EM
-estimation of m/u with the non-identifiability of the prior handled correctly (fixing `p`
-because blocked pairs aren't a random sample), and — the most telling detail — a documented,
-fixed bug in the u-estimate (using co-accused-on-the-same-FIR pairs as guaranteed non-matches,
-because random pairs were secretly ~1% true matches and inflated the false-agreement rate 50x,
-silently killing recall). This is a team that understood the statistics, not one that called
-`import recordlinkage`. It's the one piece of the system defensible unconditionally to a
-data-science judge.
+**The load-bearing part is real. [VERIFIED]** `fellegi_sunter.py` correctly implements the
+1969 method: multi-level field comparison, EM estimation of m/u with the prior's
+non-identifiability handled correctly (fixing `p` because blocked pairs aren't a random
+sample), and a documented fixed bug in the u-estimate — random pairs were secretly ~1% true
+matches, inflating the false-agreement rate 50x and silently killing recall, until
+co-accused-on-the-same-FIR pairs were used as guaranteed non-matches instead. Defensible
+unconditionally to a data-science judge — this is not `import recordlinkage`.
 
-### The trust discipline is real, and it's been tested by breaking it
-**[VERIFIED]** The CRAG accept/widen/refuse loop, the provenance ("why is this here") chain, and
-the contradiction checker aren't a single clever feature — they're a discipline that's been
-through ~15 rounds of "found live, fixed, regression-tested" per `CLAUDE.md`'s own changelog
-(evidence padding a correct answer, a refusal shipping the evidence it just rejected, a
-citation-count heuristic painting a successful board pin as a failure). That history is a
-stronger signal than a clean first pass would be: the trust boundary keeps getting attacked and
-keeps getting repaired, not "never attacked."
+**The trust discipline has been tested by breaking it. [VERIFIED]** The CRAG accept/widen/
+refuse loop, the provenance chain, and the contradiction checker have been through ~15 rounds
+of "found live, fixed, regression-tested" per `CLAUDE.md`'s changelog (evidence padding a
+correct answer, a refusal shipping the evidence it just rejected, a citation-count heuristic
+painting a successful board pin as a failure). A boundary that keeps getting attacked and
+keeps getting repaired is a stronger signal than a clean first pass would be.
 
-### The six v24/25 conversational operations are the most under-sold part of the product
-**[VERIFIED]** Read `orchestrator.py`'s `CROSS_STATION_LINKAGE`, `INTERROGATION_PREP`,
-`CASE_HANDOFF`, `PREFILING_CHECK` handlers directly. `CROSS_STATION_LINKAGE` correctly reports a
-genuine cross-jurisdiction link even when RBAC forbids naming the other case ("the link is real,
-the case cannot be named here — contact that station directly") — a real, correct answer to a
-real policy tension, not a shortcut. `INTERROGATION_PREP` was rebuilt in v25 specifically because
-the first version briefed the officer on the officer's own paperwork gaps instead of questions a
-suspect could actually answer — a genuine, non-obvious product bug, caught and fixed. These six
-operations sit at entries #24-25 of a (then) 25-entry changelog dominated by Catalyst
-infrastructure war stories. That ordering is backwards for judging purposes.
+**The six v24/25 conversational operations are the most under-sold part of the product.
+[VERIFIED]** `CROSS_STATION_LINKAGE` correctly reports a genuine cross-jurisdiction link even
+when RBAC forbids naming the other case ("the link is real, the case cannot be named here —
+contact that station directly") — a real answer to a real policy tension. `INTERROGATION_PREP`
+was rebuilt in v25 because the first version briefed the officer on their own paperwork gaps
+instead of questions a suspect could answer. These six operations sat at entries #24-25 of a
+25-entry changelog dominated by Catalyst infrastructure war stories — backwards ordering for
+judging purposes.
 
-### A data-generation ceiling verified independently
-**[VERIFIED]** `_MO_VARIANTS` in `data/generator/build.py`, post the "BUG-023 fixed" claim: real,
-and a real improvement (all 20 crime types now have narrative content vs. 12 with none before) —
-but still 3 hand-written MO sentences per crime type, chosen per-offender via a "signature"
-weighting, plus slot-filled locality/time/section/status. Combinatorially richer than one
-template, but still a closed template space, not free narrative.
+**A data-generation ceiling verified independently. [VERIFIED]** `_MO_VARIANTS` post the
+"BUG-023 fixed" claim: real, and an improvement (all 20 crime types now have narrative content
+vs. 12 with none), but still only 3 hand-written sentences per crime type, chosen per-offender
+by a "signature" weighting plus slot-filled locality/time/section/status — combinatorially
+richer than one template, still a closed template space.
 
-**[SOURCE]** This matters because of what the academic cross-case-linkage literature says the
-diagnostic signal actually is: "for it to be possible to link crimes committed by the same
-offender, criminals must show consistent but *distinctive* behavior" (Burrell & Bull's
-foundational Comparative Case Analysis research; Davies 2019 review, *J. Investigative
-Psychology & Offender Profiling*). "Pickpocketing in a crowded market" is common, not
-distinctive — exactly the kind of MO statement CCA theory says doesn't discriminate one offender
-from another.
+**[SOURCE]** This matters because the academic literature says the diagnostic signal is
+*distinctiveness*: "for it to be possible to link crimes by the same offender, criminals must
+show consistent but distinctive behavior" (Burrell & Bull's CCA research; Davies 2019 review).
+"Pickpocketing in a crowded market" is common, not distinctive.
 
-**[JUDGMENT]** So the honest characterization: Veritas's "similar cases"/"case-similarity watch"
-features currently answer "same crime type + same district + same IPC/BNS sections, phrased as a
-sentence" — real and useful, but not yet the thing the challenge language ("modus operandi across
-time and station boundaries") and a ViCAP-modernization pitch actually claim. A sharp judge
-asking "show me two cases that look different on the surface but share a genuinely idiosyncratic
-detail" will find the well runs dry after three sentences. Fixable (Blueprint #4) — a
-data-generation fix now that QuickML is live, not a retrieval-code fix. **Deliberately deferred**
-this session pending a real look at Catalyst billing history (see Part 8) — it's the one
-blueprint item that touches meaningful LLM call volume.
+**[JUDGMENT]** Honest characterization: "similar cases"/"case-similarity watch" currently
+answer "same crime type + district + section, phrased as a sentence" — real and useful, but
+not yet what "modus operandi across time and station boundaries" and a ViCAP-modernization
+pitch actually claim. A sharp judge asking for two surface-different cases sharing an
+idiosyncratic detail will find the well runs dry after three sentences. Fixable (Blueprint #4)
+via generation-time LLM authoring now that QuickML is live — **deliberately deferred** pending
+a look at real Catalyst billing history (Part 8); it's the one blueprint item touching
+meaningful LLM call volume.
 
-### A domain-currency gap found and fixed this pass
-**[VERIFIED, now fixed — see Part 8]** `data/generator/refdata.py` populated every crime-section
-citation exclusively from "Indian Penal Code, 1860," despite `manifest.py` itself claiming an
-"IPC/BNS section mix" as a data source — an aspiration that had never been implemented.
-**[SOURCE]** The Bharatiya Nyaya Sanhita (BNS) 2023 replaced the IPC for all offences committed on
-or after 2024-07-01; FIRs registered through 2025-2026 legally cite BNS sections for anything
-post-transition. The dataset's own date range (generation anchor 2026-07-01, cases spanning back
-~3 years) means most generated cases fall after the transition and should cite a code the
-platform never generated. A real KSP officer would notice a citation to a defunct code in about
-four seconds.
+**A domain-currency gap found and fixed this pass. [VERIFIED, fixed — Part 8]**
+`data/generator/refdata.py` cited only "Indian Penal Code, 1860" for every case despite
+`manifest.py` claiming an "IPC/BNS mix" that had never been implemented. **[SOURCE]** BNS 2023
+replaced the IPC for offences on or after 2024-07-01; most generated cases (spanning ~3 years
+back from a 2026-07-01 anchor) fall after the transition and should cite BNS. A real KSP
+officer would notice a citation to a defunct code in seconds.
 
-### The rest, cross-checked against the project's own audits
-Everything spot-checked in `docs/QA_FUNCTIONALITY_MATRIX.md` held up, and `CLAUDE.md`'s v17-v25
-changelog closes most of what that document and `CAPABILITY_TARGET_AND_GAPS.md` flagged as open
-(QuickML live with sane cost-routing, the case board closing the "no cross-session memory" gap
-those docs called the single largest one, the explainability layer shipped, the PageRank display
-bug fixed). What's still honestly open, unchanged by this pass: real PDF export (blocked on a
-Catalyst identity requirement, not code), the GNN AML detector unverified against any true
-positive live, Aequitas fairness auditing still a standalone script nobody runs on a schedule.
+**The rest holds up.** Everything spot-checked in `docs/QA_FUNCTIONALITY_MATRIX.md` was
+confirmed, and `CLAUDE.md`'s v17-v25 changelog closes most of what that document and
+`CAPABILITY_TARGET_AND_GAPS.md` flagged open (QuickML live with cost-routing, the case board
+closing the cross-session-memory gap, explainability shipped, the PageRank display bug fixed).
+Still honestly open: real PDF export (blocked on a Catalyst identity requirement, not code),
+the GNN AML detector unverified against any true positive live, Aequitas still a standalone
+script.
 
 ---
 
 ## Part 2 — Research: what exists, what's missing, what's contested
 
-**[SOURCE]** CCTNS is fully deployed (all ~17,700+ stations) — the constraint is not data
-existence, it's analytics adoption: "not all states use all modules," rural
-infrastructure/training gaps persist. This validates Veritas's own framing ("a modern police
-force does not lack data, it drowns in it") — but the pitch should be precise: Veritas doesn't
-solve a data-*access* problem, it solves a data-*synthesis* problem.
+**[SOURCE]** CCTNS is fully deployed (~17,700+ stations) — the constraint is analytics
+adoption, not data existence ("not all states use all modules," rural infrastructure/training
+gaps). Validates Veritas's framing, but precisely: it solves a data-*synthesis* problem, not a
+data-*access* one.
 
-**[SOURCE]** ICJS (Police/Courts/Prisons/Forensics/Prosecution) is explicitly working toward
-"search and visual analytics" and "effective use of AI/ML tools," with mandatory digital
-recording under BNS/BNSS/BSS targeted from January 2027. Veritas sits ahead of, not adjacent to,
-this trajectory — worth stating explicitly in the pitch rather than implying disconnection from
-where Indian criminal-justice IT is actually headed.
+**[SOURCE]** ICJS is explicitly working toward "search and visual analytics" and "effective
+AI/ML use," with mandatory digital recording under BNS/BNSS/BSS targeted from January 2027.
+Veritas sits ahead of, not adjacent to, this trajectory — worth stating explicitly rather than
+implying disconnection from where Indian criminal-justice IT is headed.
 
-**[SOURCE]** Linkage blindness (Egger, 1984) — "a nearly total lack of sharing/coordinating of
-investigative information" across jurisdictions — is the canonical, named failure mode FBI ViCAP
-exists to fix; ViCAP's own literature names its own weakness as reliance on manual entry
-requiring trained expertise. **[JUDGMENT]** `CROSS_STATION_LINKAGE` is a genuine, if narrow,
-structural answer to this — narrower than full series detection, since (pre-Part-8) it only fires
-when the same person is already named on both cases; it could not find a series with no common
-suspect. That gap is exactly what Blueprint #1 / Part 8's Phase 1 addresses.
+**[SOURCE]** Linkage blindness (Egger, 1984) — near-total lack of cross-jurisdiction
+information sharing — is the canonical failure ViCAP exists to fix, with ViCAP itself naming
+manual-entry reliance as its own weakness. **[JUDGMENT]** `CROSS_STATION_LINKAGE` is a genuine
+but narrow structural answer (pre-Part-8: fires only when the same person is already named on
+both cases; can't find a series with no common suspect) — exactly the gap Part 8 Phase 1
+addresses.
 
-**[SOURCE]** India's actual deployed AI-policing tools (Delhi's FRS/CMAPS, UP's Trinetra,
-Punjab's PAIS) have a well-documented, specific failure mode: arrests made on an AI match with no
-corroborating evidence, no privacy assessment conducted before deployment, no governing
-regulatory framework (Wire/Pulitzer Center investigation; Vidhi Legal Policy; ORF). **[JUDGMENT]**
-This is the sharpest, most India-specific hook available for Veritas's responsible-AI story —
-sharper than the generic COMPAS/Aequitas reference already in the docs. Veritas's entire
-CRAG/refuse/provenance architecture is, structurally, "the tool built to be unable to do what
-Trinetra-style deployments have already been criticized for doing." Say this explicitly, by name,
-in the pitch.
+**[SOURCE]** India's deployed AI-policing tools (Delhi's FRS/CMAPS, UP's Trinetra, Punjab's
+PAIS) have a documented failure mode: arrests made on an AI match with no corroborating
+evidence, no privacy assessment, no governing regulatory framework (Wire/Pulitzer Center; Vidhi
+Legal Policy; ORF). **[JUDGMENT]** The sharpest, most India-specific hook for the
+responsible-AI story — sharper than the generic COMPAS/Aequitas reference. Veritas's
+CRAG/refuse/provenance stack is, structurally, "the tool built to be unable to do what
+Trinetra-style deployments have already been criticized for." Say this explicitly in the
+pitch.
 
-**[SOURCE]** A real competing Datathon 2026 submission (KAVACH 360, also on Catalyst) was pulled
-live for comparison: hotspot mapping, forecast-with-confidence, co-accused network mapping, an
-"operational risk index," and NL search — explicitly disclaiming "does not infer guilt."
-**[JUDGMENT]** This confirms map + graph + forecast + risk-score + chatbot is the default
-convergent solution every competent team lands on. It is table stakes, not a differentiator, and
-further polishing it has near-zero marginal judging value. Veritas already does this checklist
-better than that description suggests (real KDE/DBSCAN vs. a claimed "confidence score," real
-GDS-equivalent algorithms as a ranking signal, not decoration) — but "does it slightly better" is
-not a winning story against "does something else entirely."
+**[SOURCE]** A real competing submission (KAVACH 360, also on Catalyst) was pulled live for
+comparison: hotspot mapping, forecast-with-confidence, co-accused network mapping, an
+"operational risk index," NL search, disclaiming "does not infer guilt." **[JUDGMENT]**
+Confirms map+graph+forecast+risk-score+chatbot is the default convergent solution — table
+stakes, not a differentiator, near-zero marginal judging value from further polishing it.
+Veritas already does this checklist better (real KDE/DBSCAN vs. a claimed score, GDS-equivalent
+algorithms as a ranking signal, not decoration) — but "does it slightly better" isn't a winning
+story against "does something else entirely."
 
-**[SOURCE]** Predictive-policing bias research remains genuinely contested (PredPol-style studies
-showing 150-400% racial disproportion in a modeled deployment vs. Brantingham's real-LAPD
-counter-study finding none) — already correctly captured in the project's own docs.
-**[JUDGMENT]** The unresolved point going into this session: Veritas built the correct safeguard
-(Aequitas, geographic-subgroup audit, unmeasured-confounder disclosure) but never wired it into
-the running product. A capability that exists only as a script nobody runs is not a mitigation a
-judge can verify — it's a claim. **Still open** — see Part 6/Part 8 (Phase 3, not done this
-session).
+**[SOURCE]** Predictive-policing bias research remains genuinely contested (already captured
+correctly in the project's docs). **[JUDGMENT]** The unresolved point entering this session:
+Veritas built the correct safeguard (Aequitas, geographic-subgroup audit, confounder
+disclosure) but never wired it into the running product — a capability that exists only as a
+script nobody runs is a claim, not a verifiable mitigation. **Still open** — Part 9 Item 1.
 
 ---
 
 ## Part 3 — Four-way gap analysis, beneath the labels
 
-For each challenge capability: the operational test, then **A** (does the challenge ask for it),
-**B** (what an investigator actually needs), **C** (what mature systems/research say "good" looks
-like), **D** (what Veritas could do *before this session*, verified).
+For each capability: **A** (does the challenge ask for it), **B** (what an investigator needs),
+**C** (what mature systems/research say "good" looks like), **D** (what Veritas could do
+*before this session*, verified).
 
-### Crime pattern discovery
-**Test**: starting from one case, does it surface a previously-unknown related case nobody
-queried for, across station/time, and explain why?
-**D (before)**: Reactive only. `SIMILAR_CASES`/`CASE_SIMILARITY_WATCH` answer when asked, the
-latter only within the officer's own backlog/unsolved pool. The Isolation Forest alert feed is
-genuinely unprompted, but operates on district-level monthly counts, not case-level pattern
-content. **Verdict**: the "ask and it answers" half existed; the "it noticed and told you first"
-half — the actual differentiator ViCAP has lacked since 1985 — did not. **This was the single
-largest gap** between what the challenge language implies and what was built → became Part 8
-Phase 1.
+**Crime pattern discovery.** Test: starting from one case, does it surface a
+previously-unknown related case nobody queried for, across station/time, and explain why? **D:**
+reactive only — `SIMILAR_CASES`/`CASE_SIMILARITY_WATCH` answer when asked; the Isolation Forest
+alert feed is genuinely unprompted but operates on district-level counts, not case-level
+content. The "it noticed and told you first" half — ViCAP's actual missing piece since 1985 —
+didn't exist. **The single largest gap** → Part 8 Phase 1.
 
-### Criminal network analysis
-**Test**: genuine multi-hop association graph (not a labeled field), key-player identification
-via real centrality, not just a picture.
-**D**: genuinely strong. PageRank/Louvain/betweenness are computed and used as retrieval/ranking
-signal, not rendered for their own sake — research confirms most commercial link-analysis tools
-(i2, Gotham) treat the graph as a visualization surface for human judgment, not a ranking input
-the way Veritas does. Correctly refuses to invent a "gang" label. **Gap**: static per-query
-snapshot — no "is this community growing" temporal view, no edge annotation. Real but secondary
-(Blueprint #5, not done this session).
+**Criminal network analysis.** Test: genuine multi-hop graph, key-player ID via real
+centrality. **D:** genuinely strong — PageRank/Louvain/betweenness used as ranking signal, not
+decoration (most commercial tools treat the graph as a visualization surface only); correctly
+refuses to invent a "gang" label. **Gap:** static per-query snapshot, no temporal/edge-
+annotation view — real but secondary (Blueprint #5, not done this session).
 
-### Behavioral profiling
-**Test**: an evidence-backed picture of recurring behavior, not demographics.
-**D (before)**: implicit, not first-class. The generator's `_signature_choice` mechanism gives
-offenders a genuinely recurring habitual MO/detail across their own cases — real signal already
-sitting in the data — but no dedicated capability read as "here is this person's behavioral
-pattern." The challenge names this explicitly; the underlying signal existed and was unsurfaced.
-→ became Part 8 Phase 2.
+**Behavioral profiling.** Test: an evidence-backed picture of recurring behavior, not
+demographics. **D:** implicit, not first-class — the generator's `_signature_choice` gives
+offenders a genuinely recurring habitual detail, but nothing read it as "here is this person's
+pattern." Named explicitly by the challenge → became Part 8 Phase 2.
 
-### Proactive crime prevention intelligence
-**Test**: an emerging pattern, explained, with a location/time window and a decidable next
-action — not a chart.
-**D**: half-built, and the good half is genuinely good. The alert feed states observed vs.
-expected per district with real factors — honest, explainable anomaly detection, not an opaque
-score. **Gap**: it never fuses into a decision — hotspot geography, trend direction, and
-recurring signature stay three separate visualizations an officer has to mentally combine, and
-nothing states a bounded, actionable advisory. This is also exactly where the over-policing-bias
-question lands hardest, and Veritas's own mitigation (Aequitas) isn't live. **Still open**
-(Blueprint #3 / Part 6, not done this session).
+**Proactive crime prevention intelligence.** Test: an emerging pattern, explained, with a
+location/time window and a decidable next action. **D:** half-built — the alert feed states
+observed vs. expected per district with real factors, honest and explainable. **Gap:** never
+fuses into a decision — hotspot geography, trend direction, and recurring signature stay three
+separate visualizations, and Aequitas (the mitigation for exactly the bias question this
+capability invites) isn't live. **Still open** (Blueprint #3/Part 9 Item 2).
 
-### Hotspot / geospatial
-**D**: solid — real KDE/DBSCAN, real basemap, legend, scale. Checklist-parity-plus-execution-
-quality. Necessary, not differentiating (KAVACH 360 claims the same feature).
+**Hotspot / geospatial.** **D:** solid — real KDE/DBSCAN, real basemap, legend, scale.
+Checklist-parity-plus-execution-quality. Necessary, not differentiating (KAVACH 360 claims the
+same feature).
 
-### Cross-case / cross-station linkage
-**D (before)**: real but narrow (person-anchored only, via `CROSS_STATION_LINKAGE`). See "crime
-pattern discovery" above — the general case (a series with no common named suspect yet) was the
-gap, now addressed by Part 8 Phase 1's series discovery.
+**Cross-case / cross-station linkage.** **D (before):** real but narrow (person-anchored
+only). Same gap as "crime pattern discovery" above — addressed by Part 8 Phase 1.
 
-### Investigative lead generation / decision support
-**D**: genuinely strong and under-marketed. Capped-to-actionable leads, human-decides-not-system-
-decides throughout, and the six v24/25 operations are real workflow tools no competing
-"map+graph+chat" submission is likely to have built, because they require understanding
-investigative process, not just investigative data.
+**Investigative lead generation / decision support.** **D:** genuinely strong and
+under-marketed — capped-to-actionable leads, human-decides throughout, and the six v24/25
+operations are real workflow tools requiring understanding of investigative process, not just
+data, that no competing "map+graph+chat" submission is likely to have built.
 
 ---
 
 ## Part 4 — The product thesis
 
-Veritas is not "chatbot + graph + prediction + hotspot." Stated as one claim:
+Not "chatbot + graph + prediction + hotspot." Stated as one claim:
 
 > Veritas is the reasoning and memory layer that makes records the ER (and CCTNS/ICJS after it)
 > can only store into records that can be connected — reconstructing the identities,
@@ -229,325 +181,222 @@ Veritas is not "chatbot + graph + prediction + hotspot." Stated as one claim:
 > nobody explicitly searched for, and refusing to state anything the records don't support.
 
 Why a spreadsheet / CCTNS-search / generic-LLM doesn't already do this:
-- **CCTNS/ICJS store; they don't connect.** ICJS's own stated ambition ("search and visual
-  analytics... AI/ML tools") is what Veritas already does, years before that rollout completes —
-  on today's siloed data, not tomorrow's interoperable one.
+- **CCTNS/ICJS store; they don't connect.** ICJS's own stated ambition is what Veritas already
+  does, years before that rollout completes, on today's siloed data.
 - **A human analyst can't run Fellegi-Sunter in their head** across ten thousand FIRs to notice
-  "Ramesh Gowda" and "Ramesha Gouda" are the same man. Identity resolution is the mechanical
-  version of what a very patient analyst would eventually find manually.
+  "Ramesh Gowda" and "Ramesha Gouda" are the same man.
 - **A generic LLM pointed at an export will hallucinate a case number with total confidence,**
-  cannot enforce station-scoped access inside its own reasoning, and has no tamper-evident trail —
-  not hypothetical: it's the same failure class as the real West Midlands Police Microsoft
-  Copilot incident (a fabricated match used to justify a real banning order), the exact incident
-  `CLAUDE.md`'s v24 entry already cites as the reason the case-diary export tags derived claims.
-  Veritas's CRAG/provenance/audit stack exists to be *structurally incapable* of that failure, not
-  to promise it away in a system prompt.
+  can't enforce station-scoped access inside its own reasoning, and has no tamper-evident
+  trail — the same failure class as the real West Midlands Police Copilot incident (a
+  fabricated match used to justify a real banning order — `CLAUDE.md`'s v24 entry cites this as
+  the reason the case-diary export tags derived claims). Veritas's CRAG/provenance/audit stack
+  exists to be *structurally incapable* of that failure, not to promise it away in a system
+  prompt.
 
-**The loop**: a case or question enters → Veritas orients on the actual entity (never a fresh
-unscoped search) → retrieves across identity, graph, geography, and financial layers
-simultaneously → checks for what wasn't asked (a cross-station match, a structural filing gap, a
-recurring signature) → answers with explicit evidence and explicit uncertainty → the officer
-acts, corrects, or challenges it → that becomes permanent case memory available to the next
-officer, the next session, the next query.
+**The loop:** a case/question enters → Veritas orients on the actual entity → retrieves across
+identity, graph, geography, and financial layers simultaneously → checks for what wasn't asked
+(a cross-station match, a filing gap, a recurring signature) → answers with explicit evidence
+and uncertainty → the officer acts, corrects, or challenges it → that becomes permanent case
+memory for the next officer, session, or query.
 
-**What stays human, always**: every lead, every advisory, every flagged pattern is a *proposal*;
-nothing triggers an action. Not a hedge — the one point every serious framework surveyed (NIST AI
-RMF, the EU AI Act's predictive-policing carve-out, Palantir AIP's own "propose not decide"
-architecture) converges on, and the opposite of the failure mode already documented in India's
-own deployed FRS tools.
+**What stays human, always:** every lead, advisory, and flagged pattern is a *proposal*;
+nothing triggers an action — the one point NIST AI RMF, the EU AI Act's predictive-policing
+carve-out, and Palantir AIP's "propose not decide" architecture all converge on, and the
+opposite of India's own deployed FRS tools' documented failure mode.
 
 ---
 
 ## Part 5 — Ranking every capability
 
-### Existing capabilities
+### Existing
 
 | Capability | Rank | Why |
 |---|---|---|
-| Fellegi-Sunter identity resolution | **CRITICAL** | Nothing downstream works without it; the ER literally has no person |
-| CRAG refuse-or-widen + provenance/WHY chain | **CRITICAL** | The property that separates this from every LLM-wrapper submission |
-| RBAC at query-construction + audit hash chain | **CRITICAL** | Table stakes for any tool touching real police records; most hackathon teams do this worse |
-| Investigation Board (cross-session memory) | **CRITICAL** | Closes the exact gap the project's own earlier research called the largest one vs. i2/Gotham |
-| Six v24/25 conversational ops | **DIFFERENTIATING** | Real investigative-process tools no competing checklist submission is likely to build |
-| Co-offending graph w/ GDS-equivalent algorithms as ranking signal | **DIFFERENTIATING** | Confirmed by research to exceed how most commercial tools actually use their own graphs |
-| In-container Kannada ASR/MT | **DIFFERENTIATING** | Genuinely hard, genuinely real; most teams fake or skip this |
-| Hybrid deterministic-first/LLM-fallback interpretation | **DIFFERENTIATING**, if pitched honestly | A mature, defensible trust architecture — must be explained as a design choice, not glossed as "we have an LLM" |
-| Hotspot KDE/DBSCAN + real basemap | SUPPORTING | Necessary hygiene, checklist-parity with every competitor |
-| Forecast (Prophet+MinT), risk/recidivism (XGBoost/LightGBM) | SUPPORTING | Technically solid, not a differentiator — every competing team claims this |
-| Aequitas fairness audit (as built, pre-Part-8) | SUPPORTING, capped | Right idea, but a script nobody runs isn't a verifiable mitigation |
-| Catalyst platform-engineering hardening | NOISE for judging / necessary for eligibility | Invisible in a demo; further investment has ~zero marginal return on investigative value |
-| DoWhy causal layer | NOISE | Intellectually honest, essentially unused by any realistic officer workflow |
-| GNN AML detector | NOISE, currently | Unverified against any real positive case; a claim, not a demonstrated capability |
+| Fellegi-Sunter identity resolution | **CRITICAL** | Nothing downstream works without it; the ER has no person |
+| CRAG refuse-or-widen + provenance/WHY chain | **CRITICAL** | Separates this from every LLM-wrapper submission |
+| RBAC at query-construction + audit hash chain | **CRITICAL** | Table stakes for real police records; most hackathon teams do this worse |
+| Investigation Board (cross-session memory) | **CRITICAL** | Closes the gap earlier research called the largest one vs. i2/Gotham |
+| Six v24/25 conversational ops | **DIFFERENTIATING** | Real investigative-process tools unlikely in a checklist submission |
+| Co-offending graph w/ GDS-equivalent algorithms as ranking signal | **DIFFERENTIATING** | Exceeds how most commercial tools actually use their own graphs |
+| In-container Kannada ASR/MT | **DIFFERENTIATING** | Genuinely hard and real; most teams fake or skip this |
+| Hybrid deterministic-first/LLM-fallback | **DIFFERENTIATING**, if pitched honestly | A defensible trust architecture — must be explained as a design choice, not glossed as "we have an LLM" |
+| Hotspot KDE/DBSCAN + real basemap | SUPPORTING | Necessary hygiene, checklist-parity |
+| Forecast (Prophet+MinT), risk/recidivism (XGBoost/LightGBM) | SUPPORTING | Solid, not a differentiator — every competitor claims this |
+| Aequitas fairness audit (pre-Part-8) | SUPPORTING, capped | Right idea, but a script nobody runs isn't a verifiable mitigation |
+| Catalyst platform-engineering hardening | Necessary for eligibility, invisible in a demo | Further investment has ~zero marginal judging return |
+| DoWhy causal layer | NOISE | Honest, essentially unused by any realistic officer workflow |
+| GNN AML detector | NOISE, currently | Unverified against any real positive case |
 
-### Missing capabilities (status as of this document's writing, before Part 8's execution)
+### Missing (status before Part 8's execution)
 
 | Capability | Rank | Why |
 |---|---|---|
 | Unprompted cross-case/cross-station series discovery | **CRITICAL** | What "crime pattern discovery" and modernizing ViCAP actually mean |
-| First-class evidence-backed behavioral profile | **CRITICAL** | Named explicitly by the challenge; underlying signal already in the data |
+| First-class evidence-backed behavioral profile | **CRITICAL** | Named explicitly by the challenge; signal already in the data |
 | BNS section currency | **CRITICAL, cheap** | A real police panel catches this in seconds |
-| Aequitas wired into the live refresh cycle | **CRITICAL** | "Proactive prevention" invites the over-policing-bias question directly; the mitigation must be verifiable |
-| Genuinely distinctive (LLM-authored, non-templated) MO narrative | DIFFERENTIATING | Makes the existing similarity/linkage features actually true to their claim |
-| Fused proactive-prevention advisory | DIFFERENTIATING | Turns three charts an officer combines mentally into one decision-support statement |
-| Minimal graph/edge annotation | SUPPORTING | Closes the last i2/Gotham gap; smaller than it sounds given the board already exists |
+| Aequitas wired into the live refresh cycle | **CRITICAL** | Proactive prevention invites the bias question directly; the mitigation must be verifiable |
+| Genuinely distinctive (LLM-authored) MO narrative | DIFFERENTIATING | Makes existing similarity/linkage features true to their claim |
+| Fused proactive-prevention advisory | DIFFERENTIATING | Turns three mentally-combined charts into one decision-support statement |
+| Minimal graph/edge annotation | SUPPORTING | Closes the last i2/Gotham gap; smaller than it sounds given the board exists |
 | Full i2-style manual link-chart canvas | NOISE | The board already delivers the effect an officer wants |
-| Full OSINT/Maltego-style external fusion | NOISE | No external sources exist in this dataset or challenge scope |
+| Full OSINT/Maltego-style external fusion | NOISE | No external sources exist in this dataset/scope |
 | Kafka/Flink/Iceberg real-time ingestion | NOISE (now) | Correctly deferred; dataset scale doesn't justify it |
 
 ---
 
-## Part 6 — The winning blueprint (as proposed; see Part 8 for what was actually built)
+## Part 6 — The winning blueprint (see Part 8 for what was actually built)
 
-### 1. Unprompted series discovery — "the pattern nobody searched for"
-**Problem**: Five shop burglaries across three districts, all one IO each, no one connected —
-linkage blindness, ViCAP's own named weakness since 1985.
-**What it does**: A standing batch job scans open, unresolved-suspect cases for clusters sharing
-distinctive MO facts + geographic/temporal proximity + no common investigating officer, and
-writes ranked candidate series to an analyst queue.
-**Example**: Five "House Burglary" FIRs across Kolar, Chikkaballapur, and Bengaluru Rural, all
-rear-entry, all 2-4 AM, ~9-12 days apart, no shared suspect on file.
-**Officer sees/does**: "Candidate series — 5 cases, 3 districts, no shared IO. Shared: rear-entry
-method, 2-4 AM window, ~10-day interval." Clicks through, asks "why," pins it to a shared
-case-thread, notifies other stations via the existing cross-station-linkage RBAC pattern.
-**Built from**: existing graph/geo/temporal data, the existing WHY-chain, the existing
-analyst-alert SSE transport.
-**Evidence/limitation**: must state structural similarity, not confirmed common offender; capped
-confidence; never auto-merges cases.
-**Why differentiated**: no competing "map+graph+chat" submission is likely to build a *push*,
-cross-jurisdiction pattern detector — every one builds the query-driven version.
-**Status**: **Built, Part 8 Phase 1.**
+**1. Unprompted series discovery — "the pattern nobody searched for."** Problem: five shop
+burglaries across three districts, one IO each, unconnected — linkage blindness, ViCAP's own
+named weakness since 1985. Approach: a standing batch job scans open, unresolved-suspect cases
+for clusters sharing distinctive MO + geo/temporal proximity + no common IO, writing ranked
+candidates to an analyst queue — e.g. five "House Burglary" FIRs across Kolar, Chikkaballapur,
+and Bengaluru Rural, all rear-entry, all 2-4 AM, ~9-12 days apart, no shared suspect. Officer
+sees the shared factors, asks why, pins it, notifies other stations via the existing
+cross-station RBAC pattern. Built from existing graph/geo/temporal data, the WHY-chain, and the
+alert SSE transport; states structural similarity, never confirmed common offender, never
+auto-merges. Differentiated because no competing submission is likely to build the *push*
+version. **Status: Built, Part 8 Phase 1.**
 
-### 2. Evidence-backed behavioral profile
-**Problem**: "Behavioral profiling" is asked for explicitly; before this pass it was a risk
-number, not a readable pattern.
-**What it does**: For a resolved person, assembles (never demographic) a citable narrative:
-time-of-day pattern, method/weapon recurrence, escalation trajectory, geographic range,
-association stability — each line tagged DERIVED and traced to the specific cases it comes from.
-**Example**: "Across 6 recorded cases (2023-2026), incidents cluster 11PM-2AM (5 of 6); method
-has shifted from petty theft to burglary over 18 months; operates within a 12km radius of
-Malleshwaram; the same 2 associates appear on 4 of 6 cases."
-**Built from**: data already in `vx_person`/`Accused`/graph — no new model.
-**Limitation**: explicitly states small-N cases (fewer than ~3) don't support a "pattern," only a
-history.
-**Status**: **Built, Part 8 Phase 2.**
+**2. Evidence-backed behavioral profile.** Problem: "behavioral profiling" is asked for
+explicitly; before this pass it was a risk number. Approach: for a resolved person, assemble a
+citable narrative (never demographic) — time-of-day pattern, method/weapon recurrence,
+escalation, geographic range, association stability — each line tagged DERIVED and traced to
+its cases. E.g. "Across 6 cases (2023-2026), incidents cluster 11PM-2AM (5 of 6); method has
+shifted from petty theft to burglary over 18 months; operates within 12km of Malleshwaram; the
+same 2 associates appear on 4 of 6 cases." Built entirely from existing data — no new model.
+States small-N (<~3 cases) as a history, not a pattern. **Status: Built, Part 8 Phase 2.**
 
-### 3. Fused proactive-prevention advisory
-**Problem**: hotspot map, trend chart, and signature data are three things an officer combines in
-their head; no single bounded, actionable recommendation exists, and any "predictive" claim
-invites the bias question.
-**What it does**: Combines current hotspot geography + recent trend direction + recurring
-MO/signature into one statement: "elevated likelihood of [pattern] in [place] over [window],
-based on [n] points" — with the Aequitas geographic-subgroup check run live (not scripted) and
-stated alongside it, plus the causal layer's confounder disclosure in the same panel.
-**Limitation**: advisory only, never a dispatch trigger; explicit about small-sample fragility.
-**Status**: **Not built.** Named rather than silently skipped.
+**3. Fused proactive-prevention advisory.** Problem: hotspot map, trend chart, and signature
+data are three things an officer combines mentally; no single bounded recommendation exists,
+and any "predictive" claim invites the bias question. Approach: one statement — "elevated
+likelihood of [pattern] in [place] over [window], based on [n] points" — with the live Aequitas
+geographic-subgroup result and the causal layer's confounder disclosure shown alongside, never
+folded into the number. Advisory only, never a dispatch trigger. **Status: Not built.**
 
-### 4. Genuinely distinctive MO narrative (data-generation fix)
-**Problem**: current MO text is 3 templates per crime type — common, not distinctive, per CCA
-theory — so vector similarity is really a rephrased SQL filter.
-**What it does**: Use the now-live QuickML LLM at generation time to author per-case idiosyncratic
-detail, seeded by the case's real structured facts, so two cases can share a genuinely
-non-obvious detail an embedding — not a WHERE clause — would need to find.
-**Status**: **Deliberately held.** The one blueprint item touching meaningful QuickML volume;
-gated on watching a few real days of Catalyst billing-panel usage first (see Part 8's cost
-section). Not started.
+**4. Genuinely distinctive MO narrative (data-generation fix).** Problem: current MO text is 3
+templates per crime type — common, not distinctive, so vector similarity is really a rephrased
+WHERE clause. Approach: use the now-live QuickML LLM at generation time to author per-case
+idiosyncratic detail seeded by real structured facts. **Status: Deliberately held** — the one
+item touching meaningful QuickML volume, gated on a few real days of Catalyst billing data.
 
-### 5. Minimal graph/edge annotation
-**Problem**: the graph is read-only per query; an analyst's own judgment ("confirmed via
-informant," "coincidental, ruled out") has nowhere to live.
-**What it does**: extend the existing case-board pin mechanism to a specific graph edge or node.
-**Status**: **Not built.**
+**5. Minimal graph/edge annotation.** Problem: the graph is read-only per query; an analyst's
+own judgment has nowhere to live. Approach: extend the existing case-board pin mechanism to a
+graph edge or node. **Status: Not built.**
 
-### 6. BNS section currency
-**Status**: **Built, Part 8 Phase 0** — see below.
+**6. BNS section currency.** **Status: Built, Part 8 Phase 0.**
 
 ---
 
 ## Part 7 — The hero scenario (for the eventual demo)
 
-A routine FIR, deliberately unglamorous: a shop burglary in Chikkaballapur — shutter lock broken,
-cash box gone, no witness, no suspect named.
+A routine, deliberately unglamorous FIR: a shop burglary in Chikkaballapur — shutter lock
+broken, cash box gone, no witness, no suspect.
 
-1. Officer: *"What do we know about this case?"* → Veritas gives the case Overview: facts, no
-   leads yet, structural completeness check passes quietly.
-2. Officer: *"Anything similar we should know about?"* → the standing series-discovery job has
-   already flagged it: *"This case matches a pattern: 4 other shop burglaries across 3 districts
-   over 5 weeks — same rear-entry method, same 2-4AM window, roughly 10 days apart. No two of
-   these cases share an investigating officer."*
-3. Officer: *"Why do you think these are connected?"* → the WHY chain fires with the actual
-   shared distinctive detail (not "both are burglaries" — the entry method and time window), an
-   explicit confidence, and an explicit "what this does NOT establish: no shared suspect yet, no
-   forensic link — this is a behavioral pattern only."
-4. Officer: *"Who's likely involved?"* → honest answer: none of the five cases has a named
-   accused — "this is a pattern without a suspect, which is exactly the case series detection
-   exists to catch before an officer would ever think to cross-reference three other districts by
-   hand."
-5. Officer: *"Should we expect another one, and where?"* → the fused advisory (Blueprint #3, not
-   yet built): a bounded next-window/location projection, moderate confidence stated plainly.
-6. Officer: *"Poke holes in this."* (already built, v25) → Veritas names its own weak points:
-   only 5 data points, geographic progression assumed on straight-line distance not road network,
-   two of five cases still under investigation so their true MO attribution isn't final.
-7. Officer pins the pattern to a new shared thread; it's now visible to the other two stations'
-   officers the next time either opens their own case.
+1. *"What do we know about this case?"* → case Overview: facts, no leads yet, structural
+   completeness check passes quietly.
+2. *"Anything similar we should know about?"* → the series-discovery job already flagged it:
+   4 other shop burglaries across 3 districts over 5 weeks, same rear-entry method, same 2-4AM
+   window, ~10 days apart, no shared IO across any two.
+3. *"Why do you think these are connected?"* → WHY chain fires the actual shared detail (entry
+   method, time window — not "both are burglaries"), explicit confidence, and an explicit "what
+   this does NOT establish: no shared suspect yet, no forensic link — behavioral pattern only."
+4. *"Who's likely involved?"* → honest answer: none of the five cases has a named accused — "a
+   pattern without a suspect, exactly what series detection exists to catch before an officer
+   would think to cross-reference three other districts by hand."
+5. *"Should we expect another one, and where?"* → the fused advisory (Blueprint #3, not yet
+   built): a bounded next-window/location projection, moderate confidence stated plainly.
+6. *"Poke holes in this."* (already built, v25) → Veritas names its own weak points: only 5
+   data points, geographic progression assumed on straight-line distance not road network, two
+   of five cases still under investigation so MO attribution isn't final.
+7. Officer pins the pattern to a shared thread — visible to the other two stations' officers
+   the next time either opens their own case.
 
-This sequence shows discovery, explanation, uncertainty, a preventive recommendation, and
-self-skepticism — on a case an officer would otherwise have filed and forgotten — ending in
-something concretely actionable that five different desks didn't know to share.
-
-**The one-sentence answer** to "what makes a KSP officer understand this is genuinely useful and
-not just another AI demo": the moment Veritas tells them something true about their own open case
-that they did not ask for and could not have found by looking — a burglary in their own station
-quietly linked to four others across district lines nobody had connected — stated with the actual
-FIR numbers, the actual shared detail, and an explicit admission of what it doesn't yet prove.
+**The one-sentence answer** to "why is this genuinely useful, not just another AI demo": the
+moment Veritas tells an officer something true about their own open case that they didn't ask
+for and couldn't have found by looking — stated with the actual FIR numbers, the actual shared
+detail, and an explicit admission of what it doesn't yet prove.
 
 ---
 
 ## Part 8 — What was actually executed this session (2026-09-04/05)
 
-The roadmap from Part 6 was phased: Phase 0 (BNS fix, credibility) → Phase 1 (series discovery,
-flagship) → Phase 2 (behavioral profile) → Phase 3 (Aequitas live-wiring + graph annotation) →
-Phase 4 (LLM-authored MO narrative, cost-gated) → Phase 5 (pitch/demo docs). **Phases 0-2 were
-built and deployed this session; Phases 3-5 were not started.** Full commit-by-commit detail is
-in `CLAUDE.md`'s changelog (v26, once written) and `docs/WORK_LOG.md`'s dated entry for
-2026-09-04 — this section is a pointer, not a duplicate.
+Roadmap phasing: Phase 0 (BNS fix) → Phase 1 (series discovery) → Phase 2 (behavioral profile)
+→ Phase 3 (Aequitas wiring + graph annotation) → Phase 4 (LLM-authored MO narrative, cost-gated)
+→ Phase 5 (pitch/demo docs). **Phases 0-2 were built and deployed; Phases 3-5 were not
+started.** Full detail — the QuickML spend-cap fix, a caught `docs/WORK_LOG.md` near-miss, the
+`BEHAVIORAL_PROFILE` routing dead-code bug found and fixed, live-verification results — is in
+`CLAUDE.md`'s v26 changelog entry and `docs/WORK_LOG.md`'s 2026-09-04 entry; not duplicated
+here. Test suite reached 868 passed (from 830), 2 pre-existing environment-gated skips.
 
-**A real cost concern was raised and answered honestly, not with a guessed number.** Zoho does
-not publish a static QuickML rate card; pricing is account-specific. Rather than invent a figure,
-the session (a) pointed the user at Catalyst's own Settings → Billing panel, which shows real
-historical spend and supports a hard budget cap with alert thresholds — the authoritative
-control, enforced by the platform itself — and (b) added defense-in-depth in code regardless:
-every QuickML call was discovered to have **no `max_tokens` cap at all** (the model supports up
-to 128K tokens of output — a genuinely open-ended cost per call, independent of the budget
-conversation), fixed with a hard cap plus a persistent, Cache-backed call-count circuit breaker
-that degrades to the deterministic fallback path once a conservative ceiling is hit. This shipped
-ahead of the phase work, in its own commit.
-
-**One real near-miss this session caught and fixed, unrelated to the roadmap itself**: the prior
-session's last write, made as it hit its usage limit, truncated `docs/WORK_LOG.md` from 1293
-lines to a 2-line `PREPEND_MARKER` stub — mid-way through a prepend-new-entry operation. Caught
-before being committed; recovered with `git restore`. No content was actually lost (it was never
-committed in the truncated state), but it is the reason this document exists as a durable
-artifact rather than trusting the truncated file or the chat transcript alone.
-
-**One real bug in the roadmap's own execution, caught by writing the regression test the fix
-itself had skipped**: the live-found `BEHAVIORAL_PROFILE` routing fix (originally committed as
-`9567318`) turned out to be dead code — it wrapped only the pronoun alternative of its regex in
-`(?i:...)` and left the literal `how`/`does`/`operate` case-sensitive, while `classify()` matches
-against the *raw*, non-lowercased query. A real sentence starts with capital "How," so the "fix"
-matched nothing, for either the pronoun or the named-subject phrasing it was meant to catch. It
-had shipped without a test asserting the exact named-subject case reported live
-("How does Usha Naika operate?") — only the already-working pronoun case was tested, which would
-have passed either way and proved nothing. Found and corrected the same session, with a proper
-regression test added first (confirmed to fail against the pre-fix code), then deployed.
-
-**Full local test suite: 868 passed** at the end of this session (up from 830 at the start),
-0 skipped-that-matter (2 environment-gated skips, pre-existing). Deployed and live-verified —
-see `CLAUDE.md`'s v26 entry for the exact live checks run post-deploy.
-
-**Not done this session, named rather than left implicit**: Phase 3 (Aequitas live-wiring, graph
-edge annotation), Phase 4 (LLM-authored MO narrative — deliberately gated on billing data), Phase
-5 (pitch rewrite, demo recording). The fused proactive-prevention advisory (Blueprint #3) was
-scoped but not built. `docs/CAPABILITY_TARGET_AND_GAPS.md` and `docs/INDUSTRY_GAP_ANALYSIS.md`
-were not rewritten to reflect this pass's findings — they remain as their own dated snapshots;
-this document is the current source of truth for what changed 2026-09-04/05 specifically.
+**Not done this session:** Phase 3 (Aequitas wiring, graph edge annotation), Phase 4
+(LLM-authored MO narrative — gated on billing data), Phase 5 (pitch rewrite, demo recording).
+Blueprint #3 (fused advisory) was scoped, not built. `CAPABILITY_TARGET_AND_GAPS.md` and
+`INDUSTRY_GAP_ANALYSIS.md` were not rewritten against this pass's findings — they remain their
+own dated snapshots; this document is the current source of truth for 2026-09-04/05.
 
 ---
 
 ## Part 9 — Plan of action for the remaining work (as of 2026-09-05)
 
-**State at the start of this plan, verified directly, not assumed.** No background process,
-deploy, or subagent was running when this plan was written — checked directly: no shell jobs, no
-subagents, `git status` clean, live `/health` responding and idle (a single incidental cold-start
-from the health check itself, not an active job). The previous item on the roadmap
-(`BEHAVIORAL_PROFILE`'s named-subject routing fix) has since been corrected for real, tested,
-deployed, and confirmed live — see the entry above and `CLAUDE.md`'s v26 changelog. Five items
-remain, unchanged from Part 6/Part 8's "not done" list:
+**State verified directly at the start of this plan**: no background process, deploy, or
+subagent running; `git status` clean; live `/health` responding and idle. The
+`BEHAVIORAL_PROFILE` routing fix has since been corrected for real, tested, deployed, and
+confirmed live (`CLAUDE.md` v26). Five items remain from Part 6/8's "not done" list.
 
-### Item 1 — Aequitas wired into the live refresh cycle
-**Tier**: CRITICAL. **Blocker**: none — ready to build now.
-**What exists today**: `packages/ml_models/fairness_run_audit.py` is a real, working script —
-runs `run_fairness_audit()` against both `score_risk` and `predict_recidivism`, returns a report
-with a `disparate_impact_flagged` boolean — but nothing calls it except a person running it by
-hand.
-**Plan**: add it as its own isolated step inside `/jobs/refresh`, matching the per-step isolation
-pattern the four existing steps (`gds`, `stratus_graph`, `vector_index`, `aml`) already use —
-each in its own `try`/`except` so one failing step (as `series_scan` already had to be fixed to
-respect, per Part 8) can never silently cancel the others. Cache the resulting report the same
-way `series_detection`'s results are cached for `/alerts`. Surface it as a real, checkable status
-line in `/health` and in the console's System panel, not just a number sitting in Cache.
-**Why this order**: it's the one remaining CRITICAL item, it has zero external blockers, and
-"proactive crime prevention" (Item 2, next) directly invites the over-policing-bias question —
-better to have a live, checkable answer before building the feature that raises the question.
-**Estimated effort**: ~1 day.
+**Item 1 — Aequitas wired into the live refresh cycle.** Tier: CRITICAL. Blocker: none.
+`packages/ml_models/fairness_run_audit.py` is a real, working script — runs
+`run_fairness_audit()` against `score_risk` and `predict_recidivism`, returns a
+`disparate_impact_flagged` report — but nothing calls it except a person running it by hand.
+Plan: add it as its own isolated step inside `/jobs/refresh`, matching the per-step-isolation
+pattern the four existing steps already use (so one failing step can never silently cancel the
+others, per Part 8's own `series_scan` lesson); cache the report the way `series_detection`'s
+results are cached for `/alerts`; surface it as a real, checkable status line in `/health` and
+the console's System panel. Do this first: zero external blockers, and Item 2 directly invites
+the over-policing-bias question this closes. **Effort: ~1 day.**
 
-### Item 2 — Fused proactive-prevention advisory
-**Tier**: DIFFERENTIATING. **Blocker**: none (benefits from Item 1 being done first, not
-required).
-**What exists today**: hotspot detection (`detect_hotspots`), trend forecasting
-(`forecast_crime`), and the recurring-method signal (`series_detection`, built in Phase 1) all
-exist and work, but as three separate outputs an officer has to mentally combine.
-**Plan**: one new synthesis function that reads all three for a given district/window and
-produces a single bounded statement — "elevated likelihood of [pattern] in [place] over [window],
-based on [n] points" — with the Aequitas geographic-subgroup result (Item 1, once live) and the
-causal layer's confounder disclosure shown alongside it, not folded into the number. Advisory
-only; never a dispatch trigger; explicit about small-sample fragility per Part 6's original spec.
-**Estimated effort**: ~1–2 days.
+**Item 2 — Fused proactive-prevention advisory.** Tier: DIFFERENTIATING. Blocker: none
+(benefits from Item 1 first, not required). Hotspot detection, trend forecasting, and the
+recurring-method signal (`series_detection`, Phase 1) all exist but as three separate outputs
+an officer combines mentally. Plan: one new synthesis function reading all three for a given
+district/window, producing "elevated likelihood of [pattern] in [place] over [window], based on
+[n] points," with the Aequitas geographic-subgroup result (once Item 1 lands) and the causal
+layer's confounder disclosure shown alongside, not folded into the number. Advisory only, never
+a dispatch trigger. **Effort: ~1-2 days.**
 
-### Item 3 — Minimal graph/edge annotation
-**Tier**: SUPPORTING. **Blocker**: none.
-**What exists today**: `packages/rag_agent/rag_agent/board.py`'s `create_item()` already takes a
-generic `RefType`/`RefID` pair plus a content snapshot — it's built to be extensible, just never
-extended past case/person/evidence.
-**Plan**: add a `RefType` for a graph edge (`person-person` co-accusal, or any other edge already
-in `vx_graph_edge`), and one click target on `NetworkView.tsx` that opens the existing pin-a-note
-flow for the selected edge instead of only the selected node. No new backend mechanism — this is
-almost entirely a UI wiring task plus one new `RefType` case.
-**Estimated effort**: ~1 day.
+**Item 3 — Minimal graph/edge annotation.** Tier: SUPPORTING. Blocker: none. `board.py`'s
+`create_item()` already takes a generic `RefType`/`RefID` pair — built to be extensible, never
+extended past case/person/evidence. Plan: add a `RefType` for a graph edge, one click target on
+`NetworkView.tsx` opening the existing pin-a-note flow for the selected edge. Almost entirely UI
+wiring plus one new `RefType` case. **Effort: ~1 day.**
 
-### Item 4 — AI-authored distinctive MO narrative
-**Tier**: DIFFERENTIATING. **Blocker**: a real one — see below.
-**What exists today**: `data/generator/build.py`'s `_MO_VARIANTS` gives each crime type 3
-hand-written narrative templates, chosen per-offender by a "signature" weighting — richer than
-one template, but still a closed set, which is why cross-case similarity currently reads as "same
-crime type + district + section" rather than a genuinely idiosyncratic shared detail (Part 1,
-"the CCA-theory gap").
-**Why it's gated, verified again this session**: live `/health` shows QuickML at **0 of 300**
-allowed calls used since it went live — meaning there is still no real billing history to check,
-because the deterministic paths have handled every query asked of the system so far. This isn't
-a new finding; it's the same gate from Part 8, re-confirmed rather than assumed still true.
-**Plan, two real options**:
-  - **(a)** Run a small, explicitly capped test batch (e.g., 50–100 cases) through QuickML,
-    watch the actual cost land in Catalyst's Settings → Billing panel, then decide whether to run
-    the full ~10,000-case batch.
-  - **(b)** Skip it for the competition. Nothing currently visible in the UI depends on it — it
-    would sharpen Series Discovery's matching quality, not unlock a new screen or answer a
-    question that's currently broken.
-  Recommendation unchanged from the prior session: given the explicit "don't send me a huge
-  bill" instruction, default to (b) unless a specific date is set aside to check (a) first.
-**Estimated effort if pursued**: ~1–2 days, mostly around validating generated narrative content
-never contradicts the case's own structured facts (crime type, section, outcome) before it's
-written — the same discipline `narrative_backfill.py` already applies for the BNS fix.
+**Item 4 — AI-authored distinctive MO narrative.** Tier: DIFFERENTIATING. Blocker: real —
+`_MO_VARIANTS` gives each crime type 3 hand-written templates, chosen per-offender by signature
+weighting — richer than one template, still a closed set (why cross-case similarity currently
+reads as "same crime type + district + section," Part 1's CCA-theory gap). Re-confirmed this
+session: live `/health` shows QuickML at **0 of 300** allowed calls used since going live — no
+real billing history exists yet, because deterministic paths have handled every query so far.
+Two options: **(a)** run a small capped test batch (50-100 cases) through QuickML, watch the
+actual cost in Catalyst's Billing panel, then decide on the full ~10,000-case run; **(b)** skip
+it — nothing currently visible in the UI depends on it; it would sharpen series-discovery
+matching quality, not unlock a new screen. Recommendation unchanged: given the explicit "don't
+send me a huge bill" instruction, default to (b) unless a specific date is set aside to check
+(a) first. **Effort if pursued: ~1-2 days**, mostly validating generated narrative never
+contradicts the case's own structured facts before being written — the same discipline
+`narrative_backfill.py` already applies for the BNS fix.
 
-### Item 5 — Pitch, demo, and documentation rewrite
-**Tier**: not a capability, but required for submission. **Blocker**: none — best done last, once
-the feature set is final.
-**Plan**: rewrite the README/submission document to lead with Series Discovery and the six
-conversational operations (per Part 1's finding that they're currently buried at changelog
-entries #24–25), not the Catalyst deployment engineering story — real work, but the wrong
-headline for a domain judge. Record the actual demo against the Part 7 hero scenario. Prepare
-short, honest answers in advance for the two hardest likely questions: "is this really
-conversational AI or just a search UI with an LLM bolted on" (the hybrid deterministic-first/
-LLM-fallback answer from Part 5, told as a design choice) and the over-policing-bias question
-(Item 1's live Aequitas result, once built).
+**Item 5 — Pitch, demo, and documentation rewrite.** Not a capability, but required for
+submission. Blocker: none — best done last, once the feature set is final. Plan: rewrite the
+README/submission to lead with Series Discovery and the six conversational operations
+(currently buried at changelog entries #24-25), not the Catalyst engineering story — real work,
+wrong headline for a domain judge. Record the actual demo against the Part 7 hero scenario.
+Prepare honest answers for the two hardest likely questions: "is this really conversational AI
+or a search UI with an LLM bolted on" (the hybrid deterministic-first/LLM-fallback answer from
+Part 5, told as a design choice) and the over-policing-bias question (Item 1's live Aequitas
+result, once built).
 
-### Suggested build order
-1. Item 1 (Aequitas) — no blockers, closes a real exposure.
-2. Item 2 (fused advisory) — benefits from Item 1 landing first.
-3. Item 3 (graph annotation) — small, independent, can slot in anywhere.
-4. Item 4 (MO narrative) — hold pending the billing decision above.
-5. Item 5 (pitch/demo) — last, once the feature set going into the submission is final.
-
-Items 1–3 have no dependency on each other beyond the suggested ordering and could be
-parallelized if there were a reason to; given this project's own "batch deploys, don't deploy
-per-commit" lesson from Part 8, the more practical approach is to build all three, then deploy
-and live-verify once as a batch, the way Phase 0–2 already did.
+**Suggested build order:** Item 1 (no blockers, closes a real exposure) → Item 2 (benefits from
+Item 1) → Item 3 (small, independent, slots in anywhere) → Item 4 (hold pending the billing
+decision) → Item 5 (last, once the feature set is final). Items 1-3 have no dependency on each
+other beyond ordering; per Part 8's "batch deploys, don't deploy per-commit" lesson, build all
+three then deploy and live-verify once as a batch, the way Phases 0-2 already did.

@@ -2,14 +2,8 @@
 
 Captured live against the deployed console
 (`https://veritas-60077763394.development.catalystserverless.in/app/index.html?as=IG`)
-via headless Chrome driven over CDP, per `[[veritas-console-verification]]`. This is the
-first screenshot set committed to the repo — prior passes kept screenshots in the
-session scratchpad only (see `docs/QA_FUNCTIONALITY_MATRIX.md`'s older entries); this
-pass's mega-prompt asked for them to live here instead, as current evidence for the next
-session rather than something to re-derive.
-
-One continuous session (`?as=IG`, Shivakumar Kamath), one FIR (`100222201202600022`,
-Mandya, Hurt), driven turn by turn:
+via headless Chrome driven over CDP. One continuous session (`?as=IG`, Shivakumar
+Kamath), one FIR (`100222201202600022`, Mandya, Hurt), driven turn by turn:
 
 | File | Turn | What it shows |
 |---|---|---|
@@ -22,8 +16,6 @@ Mandya, Hurt), driven turn by turn:
 | `07-next-steps-leads.png` | "What should I investigate next?" | **New**: `NEXT_STEPS` — reuses the Copilot's own lead-generation (direct co-accused only, PageRank/community-cited) |
 | `08-explain-reasoning.png` | "Why are you showing me these people?" | **New**: `EXPLAIN_REASONING` — re-describes the PREVIOUS turn's own agent trace and citations, not a fresh retrieval |
 
-Not screenshotted this pass (curl-only, see `docs/QA_FUNCTIONALITY_MATRIX.md` RAG-29/31 and
-`docs/VERITAS_HANDOFF.md`): `EVIDENCE_FOR`, `BRIEFING`, the Kannada round-trip on
-`CASE_CONTEXT`, and the RBAC-boundary refusal (an IO asking about a case outside their
-station). All four were verified live via curl/SSE against the same deployment; the
-visual rendering of those specific turns was not additionally captured.
+Not screenshotted (curl/SSE-verified only, same deployment): `EVIDENCE_FOR`,
+`BRIEFING`, the Kannada round-trip on `CASE_CONTEXT`, and the RBAC-boundary refusal (an
+IO asking about a case outside their station).

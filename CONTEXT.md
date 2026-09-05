@@ -1,26 +1,18 @@
-# CONTEXT.md — session state snapshot (2026-07-15, STATE below superseded 2026-08-28)
+# CONTEXT.md — operational reference (STATE dated 2026-07-15, stale; rest re-confirmed 2026-08-28)
 
-Read this + CLAUDE.md at the start of any new thread. **This file's own "if they
-conflict, this is newer" claim stopped being true long ago** — it is dated 2026-07-15
-and was never updated while ~236 commits and roughly a dozen real passes landed on
-`main`. For current state, trust CLAUDE.md's changelog (newest entry wins) and
-`docs/WORK_LOG.md`/`docs/ENGINEERING_BRIEF.md` for pass-by-pass detail, not the STATE
-block below. The **DEPLOY PIPELINE, MEASURED PLATFORM CONSTRAINTS, WHAT FAILED, and
-STANDING USER DIRECTIVES sections below remain accurate** — re-confirmed working
-verbatim during the 2026-08-28 pass (a full `get-signature` → relay → `appsail/upsert`
-deploy cycle) — and are kept for that reason; only the dated STATE snapshot is stale.
+Read this + CLAUDE.md at the start of any new thread. The STATE block below is a dated
+snapshot and has drifted — trust CLAUDE.md's changelog and `docs/WORK_LOG.md`/
+`docs/ENGINEERING_BRIEF.md` for current state instead. **DEPLOY PIPELINE, MEASURED
+PLATFORM CONSTRAINTS, WHAT FAILED, and STANDING USER DIRECTIVES remain accurate** —
+re-confirmed verbatim during the 2026-08-28 deploy (`get-signature` → relay →
+`appsail/upsert`).
 
-## STATE (2026-07-15 snapshot — stale; see note above)
+## STATE
 
 - **API**: https://veritas-api-50043864344.development.catalystappsail.in
 - **Console**: https://veritas-60077763394.development.catalystserverless.in/app/index.html
-- `/health` (2026-08-28, current): firs=10000 · graph 16,918n/87,120e · vectors 13,835 docs
-  · llm=quickml(glm-4.7-flash) configured · datastore=catalyst · cache=catalyst
-- Verified live, 2026-08-28: `scripts/verify_live_deployment.py` 36/36,
-  `scripts/judge_flows.py` 26/26, both fresh against production.
-- **602 tests green locally** (this file's "190" was the 2026-07-15 count; see
-  CLAUDE.md for the current number, since this line will drift stale again).
-  All work committed & pushed to `main`.
+- Current test count, `/health` fields and deployment status: trust `CLAUDE.md`'s header
+  and changelog over anything dated in this file — this snapshot is not kept current.
 
 ## WHAT'S USABLE (features, live)
 
@@ -57,15 +49,19 @@ deploy cycle) — and are kept for that reason; only the dated STATE snapshot is
 
 ## MEASURED PLATFORM CONSTRAINTS (undocumented; cost days)
 
-1. **Bundle sandbox ~5GB holds 4 copies** (tar+blobs+staged+rootfs) → image ≤ ~1.3GB. 9.31GB & 4.66GB & 1.61GB all died. Don't gzip the tar (staging adds a copy). Models live OUTSIDE the image: File Store folder `models` id `52852000000195786`, 8×95MB chunks, streamed+spliced at cold start (`data/nlp/model_fetch.py`), never on disk as one tar.
-2. **SDK context = per-request X-ZC-\* headers**; bare `initialize()` → "Catalyst headers are empty". Middleware `ds.bind_catalyst_request(request)` captures it; background work reuses via `ds.catalyst_app()`.
-3. **Live ZCQL refuses ALL our JOINs** ("No relationship between tables" — ER relates by value). Reads run on a **sqlite mirror** (`/tmp/veritas_mirror.db`) hydrated once per container, atomic (`.hydrating` + os.replace). Writes: Data Store first, mirror second.
-4. **Pagination duplicates one row at page boundaries even under ORDER BY** → `_catalyst_select` dedupes on ROWID; hydration INSERT OR IGNOREs. (13 "phantom dups" once deleted by mistake were this artifact — restored from local sqlite.)
-5. **Live Data Store returns every value as a string** ("4" not 4) → schema-typed coercion in mirror + `int()` at auth call sites.
-6. **SDK JSON-serializes writes** → datetimes must be `"%Y-%m-%d %H:%M:%S"` strings (`ds._sdk_row`); raw datetime 500'd every audited endpoint.
-7. langgraph needs `typing_extensions>=4.13` (pinned in constraints.txt).
-8. Stratus bucket creation is scope-blocked over API (OAUTH_SCOPE_MISMATCH) — console-only. **Not needed**: File Store replaced it for models, mirror serves the graph.
-9. Hybrid auth: Catalyst session first, JWT fallback; SDK throws non-HTTP exception on cookie-less requests → mapped to 401 (`jwt_auth.current_officer`).
+The general shape of each of these is in `CLAUDE.md`'s "Platform gotchas" section — this
+list keeps only the exact paths/ids/commands that section doesn't carry:
+
+1. Bundle sandbox holds **4 copies** of the image simultaneously → real ceiling ≈1.3GB.
+   Don't gzip the tar (staging adds a copy). Models: File Store folder `models`, id
+   `52852000000195786`, 8×95MB chunks (`data/nlp/model_fetch.py`).
+2. sqlite mirror lives at `/tmp/veritas_mirror.db`, hydrated atomically (`.hydrating` +
+   `os.replace`).
+3. Live Data Store returns every value as a string (`"4"` not `4`) — schema-typed
+   coercion in the mirror, plus explicit `int()` at auth call sites.
+4. `langgraph` needs `typing_extensions>=4.13` (pinned in `constraints.txt`).
+5. Hybrid auth: Catalyst session first, JWT fallback; SDK throws a non-HTTP exception
+   on cookie-less requests, mapped to 401 in `jwt_auth.current_officer`.
 
 ## WHAT FAILED (don't retry these)
 
@@ -75,13 +71,11 @@ deploy cycle) — and are kept for that reason; only the dated STATE snapshot is
 - memory=4096 → "Invalid input value for memory". 2048 is org max.
 - Deleting "duplicate" Data Store rows → they were pagination artifacts, not dups.
 
-## KEY FILES TOUCHED THIS SESSION
+## CORE LIVE-FIX FILES
 
-- `data/data/ds.py` — mirror, dedupe, `_sdk_row`, `bind_catalyst_request` (the core live-fix file)
-- `data/data/nlp/model_fetch.py` — File Store chunk streaming
-- `apps/api/api/main.py` — context middleware + warm thread · `apps/api/api/auth/jwt_auth.py` — hybrid auth
-- `packages/ml_models/.../risk/scoring.py` — `_XGBShap` · `financial/gnn.py`, `causal/effects.py` — graceful degradation
-- `.github/workflows/relay-deploy.yml` · `constraints.txt` · README.md (layman rewrite) · CLAUDE.md v7+v8 changelogs
+`data/data/ds.py` (mirror, dedupe, `_sdk_row`, `bind_catalyst_request`) is where nearly
+every platform constraint above is actually worked around — read it before re-deriving
+one of them elsewhere.
 
 ## STANDING USER DIRECTIVES
 
