@@ -92,7 +92,6 @@ def dataset(tmp_path_factory):
         "VERITAS_DS_BACKEND": "sqlite",
         "VERITAS_SQLITE": str(tmp / "ds.sqlite3"),
         "VERITAS_AML_LABELS": str(tmp / "aml_labels.json"),
-        "VERITAS_VECTOR_INDEX": str(tmp / "vectors.npz"),
     })
     os.environ.update(_DATASET_ENV)
 

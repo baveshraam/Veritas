@@ -422,6 +422,27 @@ VX_TABLES: dict[str, list[Col]] = {
         Col("MarginalWorkerRate", "double"),
         Col("YouthRatio", "double"),
     ],
+    # The vector index's persistent storage. Stratus (the intended single-blob store,
+    # data.vectors's own module docstring) is scope-blocked on this org (OAUTH_SCOPE_
+    # MISMATCH, console-only fix — CLAUDE.md §2), and local disk turned out NOT to be a
+    # safe fallback either: live verification (2026-09-05) found AppSail restarts the
+    # container running a background /jobs/refresh far more often than assumed, wiping
+    # local-disk state every time and silently resetting the resumable reindex's
+    # progress back to whatever's baked into the current image. Data Store is the one
+    # storage layer already proven reliable across restarts throughout that whole
+    # investigation (the graph/AML/cache steps all depend on exactly that). One row per
+    # document; `EmbeddingKey` (f"{collection}:{source_id}") is the composite natural
+    # key data.ds.update() needs as a single column. `EmbeddingB64` is a base64-encoded
+    # float32 vector — 384 dims × 4 bytes = 1536 bytes → ~2048 base64 chars, comfortably
+    # under the text column's 10,000-char cap.
+    "vx_vector_embedding": [
+        Col("EmbeddingKey", "varchar", unique=True, mandatory=True),
+        Col("SourceID", "varchar", mandatory=True),
+        Col("Collection", "varchar", mandatory=True),
+        Col("Content", "text", mandatory=True),
+        Col("EmbeddingB64", "text", mandatory=True),
+        Col("UpdatedAt", "datetime"),
+    ],
 }
 
 TABLES: dict[str, list[Col]] = {**ER_TABLES, **VX_TABLES}

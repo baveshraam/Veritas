@@ -1,4 +1,4 @@
-"""Hybrid retrieval over the Stratus index.
+"""Hybrid retrieval over the vector index.
 
 pgvector is gone, and the reason the replacement is *hybrid* rather than pure dense is the
 thing worth testing: an officer types a crime number or an IPC section, and a dense model
@@ -6,6 +6,7 @@ has no notion of either. The lexical half is what makes an exact identifier find
 """
 import pytest
 
+from data import ds
 from data.vectors import build_index, embed, hybrid_search, load_index
 
 DOCS = [
@@ -21,9 +22,8 @@ DOCS = [
 
 
 @pytest.fixture(scope="module", autouse=True)
-def index(tmp_path_factory):
-    import os
-    os.environ["VERITAS_VECTOR_INDEX"] = str(tmp_path_factory.mktemp("v") / "idx.npz")
+def index():
+    ds.reset_for_tests()          # fresh in-memory Data Store, isolated from other suites
     load_index.cache_clear()
     assert build_index(DOCS)["written"] == 4
 
@@ -65,23 +65,17 @@ def test_scores_are_bounded_and_ranked():
 
 
 def test_an_empty_index_returns_nothing_rather_than_raising():
-    import numpy as np
-    from data import vectors
+    ds.reset_for_tests()          # a fresh Data Store has no vx_vector_embedding rows
     load_index.cache_clear()
-    original = vectors._bucket
-    vectors._bucket = lambda: None
     try:
-        import os
-        os.environ["VERITAS_VECTOR_INDEX"] = "/nonexistent/idx.npz"
-        vectors._LOCAL_INDEX = __import__("pathlib").Path("/nonexistent/idx.npz")
-        load_index.cache_clear()
         assert hybrid_search("anything") == []
     finally:
-        vectors._bucket = original
+        ds.reset_for_tests()
         load_index.cache_clear()
+        assert build_index(DOCS)["written"] == 4     # restore this module's shared index
 
 
-def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, tmp_path):
+def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch):
     """Live verification (2026-09-05): a single embed() call over ~13,729 documents
     reliably preceded the container itself resetting mid-computation on AppSail
     (/health's model_weights reverted to fresh-boot values while the job never
@@ -94,6 +88,9 @@ def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, t
 
     from data.vectors import EMBED_BATCH, build_index
 
+    ds.reset_for_tests()
+    load_index.cache_clear()
+
     rows = [{"collection": "fir_narrative", "source_id": str(i), "content": f"doc {i}"}
             for i in range(EMBED_BATCH + 3)]      # forces exactly two batches
 
@@ -104,9 +101,6 @@ def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, t
         return np.ones((len(texts), 4), dtype=np.float32)
 
     monkeypatch.setattr("data.vectors.embed", fake_embed)
-    monkeypatch.setattr("data.vectors._bucket", lambda: None)
-    monkeypatch.setenv("VERITAS_VECTOR_INDEX", str(tmp_path / "idx.npz"))
-    load_index.cache_clear()
 
     progress = []
     result = build_index(rows, on_progress=lambda done, total: progress.append((done, total)))
@@ -115,18 +109,24 @@ def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, t
     assert progress == [(EMBED_BATCH, EMBED_BATCH + 3), (EMBED_BATCH + 3, EMBED_BATCH + 3)]
     assert result == {"written": EMBED_BATCH + 3, "embedded": EMBED_BATCH + 3, "remaining": 0}
 
+    ds.reset_for_tests()
+    load_index.cache_clear()
+    assert build_index(DOCS)["written"] == 4         # restore this module's shared index
 
-def test_build_index_reuses_unchanged_embeddings_and_resumes_the_rest(monkeypatch, tmp_path):
+
+def test_build_index_reuses_unchanged_embeddings_and_resumes_the_rest(monkeypatch):
     """The resumable design's core guarantee: a row whose content hasn't changed since
     the last successful build must NOT be re-embedded (embed() must not even see it),
     and a batch_cap smaller than the backlog must leave the rest for a later call to
-    pick up rather than silently dropping it or blocking until it's all done."""
+    pick up rather than silently dropping it or blocking until it's all done. This is
+    also what makes the design survive AppSail restarting the container mid-refresh
+    (live-verified 2026-09-05): Data Store, not local disk, is what's actually reused
+    on the next call."""
     import numpy as np
 
     from data.vectors import build_index
 
-    monkeypatch.setattr("data.vectors._bucket", lambda: None)
-    monkeypatch.setenv("VERITAS_VECTOR_INDEX", str(tmp_path / "idx.npz"))
+    ds.reset_for_tests()
     load_index.cache_clear()
 
     seen_calls = []
@@ -167,3 +167,7 @@ def test_build_index_reuses_unchanged_embeddings_and_resumes_the_rest(monkeypatc
     load_index.cache_clear()
     idx = load_index()
     assert "4" not in set(idx["source_id"]), "a row no longer present must be dropped"
+
+    ds.reset_for_tests()
+    load_index.cache_clear()
+    assert build_index(DOCS)["written"] == 4         # restore this module's shared index

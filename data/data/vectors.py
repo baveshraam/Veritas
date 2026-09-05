@@ -10,14 +10,22 @@ retrieval hook, so HippoRAG's Personalized-PageRank seeding could not run inside
 the organizers' clarification — where no Catalyst service exists for a capability, an
 external or self-hosted implementation is permitted — the index stays ours.
 
-So it is a single **Stratus** object: one `.npz` holding the id/collection/content arrays
-and the embedding matrix. Search is `matrix @ query` in numpy, in-process.
+The index is one row per document in `vx_vector_embedding` (Data Store), not a single
+Stratus blob object as originally designed: Stratus bucket creation is scope-blocked on
+this org (OAUTH_SCOPE_MISMATCH, console-only fix — CLAUDE.md §2), and local disk turned
+out not to be a safe fallback either — live verification (2026-09-05) found AppSail
+restarts the container running a background `/jobs/refresh` far more often than assumed,
+silently wiping local-disk state and resetting the resumable reindex's progress back to
+whatever's baked into the current image, every time. Data Store is the one storage layer
+already proven reliable across restarts throughout that investigation (the graph/AML/
+cache steps all depend on exactly that). The whole index is still loaded into memory as
+one matrix for search — `EMBED_DIM=384 x 24k narratives` is ~37MB, trivial — this only
+changes where it's PERSISTED, not how it's searched. Search is `matrix @ query` in numpy,
+in-process.
 
-That is not a downgrade at this scale, it is the correct read of it. 24k narratives x 384
-float32 is ~37 MB — one blob fetch on a cold container, then every query is a dense
-matrix-vector product over RAM. An ANN index (HNSW, IVF) exists to avoid scanning the
-corpus; scanning this corpus takes single-digit milliseconds. Approximation would cost
-recall and buy nothing.
+That is not a downgrade at this scale, it is the correct read of it. An ANN index (HNSW,
+IVF) exists to avoid scanning the corpus; scanning this corpus takes single-digit
+milliseconds. Approximation would cost recall and buy nothing.
 
 # ponytail: exact brute-force cosine. It is O(N) per query and stops being free somewhere
 # north of a million documents — at which point the fix is an HNSW index inside this same
@@ -26,31 +34,24 @@ recall and buy nothing.
 """
 from __future__ import annotations
 
-import io
+import base64
 import logging
 import math
 import os
 import re
 from collections import Counter
+from datetime import datetime, timezone
 from functools import lru_cache
-from pathlib import Path
 from typing import Iterable
 
 import numpy as np
+
+from . import ds
 
 log = logging.getLogger(__name__)
 
 EMBED_MODEL = "BAAI/bge-small-en-v1.5"
 EMBED_DIM = 384
-
-_STRATUS_BUCKET = "veritas-cache"
-_INDEX_KEY = "vectors/document_embedding.npz"
-
-
-def _local_index() -> Path:
-    """Read from the environment on every call, not at import. A path frozen at import time
-    cannot be redirected by a test, and the offline backend is the one every test uses."""
-    return Path(os.getenv("VERITAS_VECTOR_INDEX", ".veritas/document_embedding.npz"))
 
 _TOKEN = re.compile(r"[a-z0-9]+")
 
@@ -84,14 +85,6 @@ def embed(texts: list[str]) -> np.ndarray:
 
 def embed_one(text_in: str) -> np.ndarray:
     return embed([text_in])[0]
-
-
-def _bucket():
-    try:
-        import zcatalyst_sdk
-        return zcatalyst_sdk.initialize().stratus().bucket(_STRATUS_BUCKET)
-    except Exception:
-        return None
 
 
 EMBED_BATCH = 512          # documents per embed() call — see build_index's own docstring
@@ -151,64 +144,68 @@ def build_index(rows: Iterable[dict], on_progress=None, batch_cap: int | None = 
         parts.append(embed(texts[start:start + EMBED_BATCH]))
         if on_progress is not None:
             on_progress(min(start + EMBED_BATCH, len(texts)), len(texts))
-    new_matrix = np.concatenate(parts, axis=0) if parts else None
-    kept_matrix = existing["matrix"][[i for _, i in kept]] if kept else None
-    # An empty side's fallback matches the OTHER side's actual width, not a hardcoded
-    # EMBED_DIM — tests substitute a fake embed() at a different width, and either side
-    # can legitimately be empty (nothing pending this call, or nothing existed before)
-    # while the other carries the real, current embedding width.
-    width = (new_matrix.shape[1] if new_matrix is not None
-            else kept_matrix.shape[1] if kept_matrix is not None else EMBED_DIM)
-    if new_matrix is None:
-        new_matrix = np.zeros((0, width), np.float32)
-    if kept_matrix is None:
-        kept_matrix = np.zeros((0, width), np.float32)
+    new_matrix = (np.concatenate(parts, axis=0) if parts
+                 else np.zeros((0, EMBED_DIM), np.float32))
 
-    final_rows = [r for r, _ in kept] + this_round
-    matrix = np.concatenate([kept_matrix, new_matrix], axis=0)
-    buf = io.BytesIO()
-    np.savez_compressed(
-        buf,
-        source_id=np.asarray([str(r["source_id"]) for r in final_rows]),
-        collection=np.asarray([str(r["collection"]) for r in final_rows]),
-        content=np.asarray([r["content"] for r in final_rows]),
-        matrix=matrix,
-    )
-    blob = buf.getvalue()
+    # `kept` rows are already correctly persisted — nothing to write for them. Only
+    # `this_round` (new or content-changed) needs a Data Store write, split into
+    # INSERT (a (collection, source_id) never seen before) vs UPDATE (content changed
+    # since the last successful embed) — ZCQL has no UPSERT.
+    now = datetime.now(timezone.utc)
+    new_db_rows, changed_db_rows = [], []
+    for r, vec in zip(this_round, new_matrix):
+        key = (r["collection"], str(r["source_id"]))
+        db_row = {
+            "EmbeddingKey": f"{key[0]}:{key[1]}",
+            "SourceID": key[1], "Collection": key[0], "Content": r["content"],
+            "EmbeddingB64": base64.b64encode(np.asarray(vec, np.float32).tobytes()).decode("ascii"),
+            "UpdatedAt": now,
+        }
+        (changed_db_rows if key in existing_by_key else new_db_rows).append(db_row)
 
-    b = _bucket()
-    if b is not None:
-        b.put_object(_INDEX_KEY, blob)
-    else:
-        path = _local_index()
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(blob)
+    if new_db_rows:
+        ds.insert("vx_vector_embedding", new_db_rows)
+    if changed_db_rows:
+        ds.update("vx_vector_embedding", "EmbeddingKey", changed_db_rows)
+
+    # A (collection, source_id) that existed before but isn't in the CURRENT live rows
+    # at all must be dropped — never an embedding that outlives the record it was made
+    # from. Rare in practice (case data mostly only grows), so one DELETE per key.
+    live_keys = {(r["collection"], str(r["source_id"])) for r in rows}
+    for key in existing_by_key:
+        if key not in live_keys:
+            ds.execute('DELETE FROM "vx_vector_embedding" WHERE "EmbeddingKey" = :k',
+                      {"k": f"{key[0]}:{key[1]}"})
 
     load_index.cache_clear()
-    return {"written": len(final_rows), "embedded": len(this_round),
+    return {"written": len(kept) + len(this_round), "embedded": len(this_round),
             "remaining": len(to_embed) - len(this_round)}
 
 
 @lru_cache(maxsize=1)
 def load_index() -> dict:
-    """The whole index, from Stratus on Catalyst and from disk locally. Cached per process."""
-    b = _bucket()
-    blob = None
-    if b is not None:
-        try:
-            blob = b.get_object(_INDEX_KEY).read()
-        except Exception as e:
-            log.warning("Stratus vector index miss (%s)", e)
-    path = _local_index()
-    if blob is None and path.exists():
-        blob = path.read_bytes()
-    if blob is None:
+    """The whole index, one row per document in `vx_vector_embedding` (Data Store) —
+    the storage layer proven reliable across AppSail container restarts (see the
+    module docstring). Cached per process; `build_index` clears this cache after a
+    write so the next call re-reads the current state."""
+    try:
+        rows = ds.query('SELECT "SourceID", "Collection", "Content", "EmbeddingB64" '
+                        'FROM "vx_vector_embedding"')
+    except Exception as e:
+        log.warning("vector index read failed (%s)", e)
+        rows = []
+    if not rows:
         return {"source_id": np.array([]), "collection": np.array([]),
                 "content": np.array([]), "matrix": np.zeros((0, EMBED_DIM), np.float32),
                 "idf": {}}
 
-    z = np.load(io.BytesIO(blob), allow_pickle=False)
-    idx = {k: z[k] for k in ("source_id", "collection", "content", "matrix")}
+    idx = {
+        "source_id": np.asarray([r["SourceID"] for r in rows]),
+        "collection": np.asarray([r["Collection"] for r in rows]),
+        "content": np.asarray([r["Content"] for r in rows]),
+        "matrix": np.stack([np.frombuffer(base64.b64decode(r["EmbeddingB64"]), dtype=np.float32)
+                            for r in rows]),
+    }
     idx["idf"] = _idf(idx["content"])
     return idx
 
