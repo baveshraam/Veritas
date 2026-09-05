@@ -75,11 +75,25 @@ def _reindex_with_progress() -> dict:
     from data.embeddings.index_job import fir_documents, profile_documents
     from data.vectors import _embedder, build_index
 
+    def _rss_mb() -> float | None:
+        # stdlib only, Linux-only (fine — this only ever runs inside the AppSail
+        # container). Live verification (2026-09-05): batching bounded PEAK memory
+        # per embed() call but the job still died around the same document count
+        # regardless of batch size — ambiguous between "memory climbs until an OOM
+        # kill" and "a fixed-duration platform kill unrelated to memory". Reporting
+        # actual RSS at each batch boundary settles which, on the very next run.
+        try:
+            import resource
+            return round(resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024, 1)
+        except Exception:
+            return None
+
     def _report(stage: str) -> None:
         current = cache.get(LAST_REFRESH_CACHE_KEY) or {}
         cache.put(LAST_REFRESH_CACHE_KEY,
                  {**current, "vector_index_stage": stage,
-                  "vector_index_stage_at": datetime.now(timezone.utc).isoformat()},
+                  "vector_index_stage_at": datetime.now(timezone.utc).isoformat(),
+                  "vector_index_rss_mb": _rss_mb()},
                  expiry_hours=SERIES_CACHE_TTL_HOURS)
 
     _report("querying records")
