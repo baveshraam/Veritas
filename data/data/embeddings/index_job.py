@@ -11,9 +11,12 @@ column — the method of operation is stated inside `BriefFacts`, so MO similari
 narrative similarity, and a second collection over the same text would only have been two
 names for one index.
 
-The whole index is rebuilt in one pass, never patched: `data.vectors.build_index` writes a
-single Stratus object, and an embedding that outlives the case it was made from is a
-citation to a deleted record.
+`data.vectors.build_index` is incremental and resumable (2026-09-05 — a single continuous
+embed pass over the whole corpus reliably died partway through live, AppSail restarting the
+background thread's container under sustained CPU-bound work): unchanged rows keep their
+existing embedding, only new/changed rows are (re-)embedded, bounded to a batch per call so
+one invocation finishes well within the container's observed restart window, and a row no
+longer present is dropped — never an embedding that outlives the case it was made from.
 
     python -m data.embeddings.index_job
 """

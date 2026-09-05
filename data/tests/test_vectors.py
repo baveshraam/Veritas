@@ -25,7 +25,7 @@ def index(tmp_path_factory):
     import os
     os.environ["VERITAS_VECTOR_INDEX"] = str(tmp_path_factory.mktemp("v") / "idx.npz")
     load_index.cache_clear()
-    assert build_index(DOCS) == 4
+    assert build_index(DOCS)["written"] == 4
 
 
 def test_embeddings_are_l2_normalised():
@@ -109,8 +109,61 @@ def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, t
     load_index.cache_clear()
 
     progress = []
-    n = build_index(rows, on_progress=lambda done, total: progress.append((done, total)))
+    result = build_index(rows, on_progress=lambda done, total: progress.append((done, total)))
 
     assert seen_calls == [EMBED_BATCH, 3], "must embed in EMBED_BATCH-sized chunks, not all at once"
     assert progress == [(EMBED_BATCH, EMBED_BATCH + 3), (EMBED_BATCH + 3, EMBED_BATCH + 3)]
-    assert n == EMBED_BATCH + 3
+    assert result == {"written": EMBED_BATCH + 3, "embedded": EMBED_BATCH + 3, "remaining": 0}
+
+
+def test_build_index_reuses_unchanged_embeddings_and_resumes_the_rest(monkeypatch, tmp_path):
+    """The resumable design's core guarantee: a row whose content hasn't changed since
+    the last successful build must NOT be re-embedded (embed() must not even see it),
+    and a batch_cap smaller than the backlog must leave the rest for a later call to
+    pick up rather than silently dropping it or blocking until it's all done."""
+    import numpy as np
+
+    from data.vectors import build_index
+
+    monkeypatch.setattr("data.vectors._bucket", lambda: None)
+    monkeypatch.setenv("VERITAS_VECTOR_INDEX", str(tmp_path / "idx.npz"))
+    load_index.cache_clear()
+
+    seen_calls = []
+
+    def fake_embed(texts):
+        seen_calls.append(list(texts))
+        return np.ones((len(texts), 4), dtype=np.float32)
+
+    monkeypatch.setattr("data.vectors.embed", fake_embed)
+
+    rows = [{"collection": "fir_narrative", "source_id": str(i), "content": f"doc {i}"}
+            for i in range(5)]
+    first = build_index(rows)
+    assert first == {"written": 5, "embedded": 5, "remaining": 0}
+    assert seen_calls == [[r["content"] for r in rows]]
+
+    # Same rows, nothing changed: a second call must embed NOTHING.
+    seen_calls.clear()
+    second = build_index(rows)
+    assert second == {"written": 5, "embedded": 0, "remaining": 0}
+    assert seen_calls == []
+
+    # One row changes, one is new, one is dropped (no longer present) -- and a
+    # batch_cap of 1 must embed only ONE of the two pending rows this call.
+    seen_calls.clear()
+    updated_rows = (
+        [{"collection": "fir_narrative", "source_id": "0", "content": "doc 0 EDITED"}]
+        + rows[1:4]        # unchanged; source_id "4" dropped
+        + [{"collection": "fir_narrative", "source_id": "5", "content": "doc 5"}]
+    )
+    third = build_index(updated_rows, batch_cap=1)
+    assert third["embedded"] == 1, "only one of the two pending (changed + new) rows"
+    assert third["remaining"] == 1, "the other pending row must wait for a later call"
+    assert third["written"] == 4, "3 unchanged/reused + 1 embedded this call; the " \
+        "still-pending 5th isn't in the index yet"
+    assert len(seen_calls) == 1 and len(seen_calls[0]) == 1
+
+    load_index.cache_clear()
+    idx = load_index()
+    assert "4" not in set(idx["source_id"]), "a row no longer present must be dropped"

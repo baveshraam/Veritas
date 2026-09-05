@@ -54,22 +54,24 @@ def _authorise(token: str | None) -> None:
 
 
 def _reindex_with_progress() -> dict:
-    """Same work as `data.embeddings.index_job.run_all`, but reports which of its
-    two phases (query / embed-and-write) is in flight, by merging into whatever
-    `LAST_REFRESH_CACHE_KEY` already holds rather than closing over `_run_refresh`'s
-    local state — so this stays a standalone, independently testable step function
-    like every other one in `steps` below.
+    """Same work as `data.embeddings.index_job.run_all`, but resumable and observable.
 
-    Live verification (2026-09-05): the async refresh reliably parked on
-    "vector_index" with no forward motion until the container itself reset (its
-    `model_weights`/`nllb_backend` health fields went back to fresh-boot values
-    between two checks, with zero other requests in between) — this step, and only
-    this step, is where it happens, every time it was tried. Embedding ~13,835
-    documents through the ONNX model is CPU-bound and was previously untimed
-    (this module's own docstring already flagged it as "the untimed remainder").
-    Splitting "querying" from "embedding N documents" turns one opaque multi-minute
-    step into two, so the next live run shows which phase a container reset
-    actually happens in, rather than "vector_index" and nothing more.
+    Live verification (2026-09-05): embedding the whole ~13,729-document corpus in one
+    continuous run reliably died at almost the same wall-clock point (~60-120s in)
+    across five separate attempts with different mitigations — a real SDK-context
+    threading bug (fixed regardless, `data.ds`'s app context is now thread-local), capped
+    ONNX threads, and bounded per-batch memory (RSS plateaued around 1.4-1.5GB, well
+    under the container's 2GB) — none of which let a single run finish, consistent with
+    AppSail restarting the background thread's container under sustained CPU-bound work
+    rather than a memory ceiling or a hang this session's earlier fixes could reach.
+
+    So `data.vectors.build_index` is now incremental and resumable: unchanged documents
+    keep their existing embedding (never re-embedded), and new/changed ones are embedded
+    only up to a bounded cap per call — comfortably inside the observed restart window.
+    A single `/jobs/refresh` cycle may therefore finish this step with real backlog still
+    `remaining`; the NEXT cycle (Cron's regular 6h cadence, or a manual retry) picks up
+    where it left off, converging over a few cycles rather than needing one uninterrupted
+    run. `vector_index_stage`/`_rss_mb` stay in the same cache entry other steps use.
     """
     from data import cache
     from data.embeddings.index_job import fir_documents, profile_documents
@@ -112,8 +114,8 @@ def _reindex_with_progress() -> dict:
         _report(f"computing embeddings: {done}/{total} documents")
 
     _report(f"computing embeddings: 0/{len(firs) + len(profiles)} documents")
-    n = build_index(firs + profiles, on_progress=_on_batch)
-    return {"fir_narrative": len(firs), "criminal_profile": len(profiles), "written": n}
+    result = build_index(firs + profiles, on_progress=_on_batch)
+    return {"fir_narrative": len(firs), "criminal_profile": len(profiles), **result}
 
 
 def _run_refresh() -> dict:

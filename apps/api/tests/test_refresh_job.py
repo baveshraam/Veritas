@@ -241,7 +241,7 @@ def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
 
     def fake_build_index(rows, on_progress=None):
         seen_during_embed.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
-        return len(rows)
+        return {"written": len(rows), "embedded": len(rows), "remaining": 0}
 
     monkeypatch.setattr("data.embeddings.index_job.fir_documents", lambda: [{"a": 1}])
     monkeypatch.setattr("data.embeddings.index_job.profile_documents", lambda: [{"b": 2}])
@@ -254,7 +254,8 @@ def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
         "loading embedding model (File Store fetch + ONNX load)"
     assert seen_during_embed["vector_index_stage"] == "computing embeddings: 0/2 documents"
     assert "vector_index_stage_at" in seen_during_embed
-    assert out == {"fir_narrative": 1, "criminal_profile": 1, "written": 2}
+    assert out == {"fir_narrative": 1, "criminal_profile": 1,
+                   "written": 2, "embedded": 2, "remaining": 0}
 
 
 def test_a_failed_step_s_message_is_cached_not_just_its_type(steps):

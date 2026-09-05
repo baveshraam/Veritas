@@ -94,46 +94,84 @@ def _bucket():
         return None
 
 
-EMBED_BATCH = 512   # documents per embed() call — see build_index's own docstring
+EMBED_BATCH = 512          # documents per embed() call — see build_index's own docstring
+INCREMENTAL_BATCH_CAP = int(os.getenv("VERITAS_REINDEX_BATCH_CAP", "1024"))
 
 # ------------------------------------------------------------------------------- build
-def build_index(rows: Iterable[dict], on_progress=None) -> int:
-    """rows: {collection, source_id, content}. Embeds every row and replaces the index.
+def build_index(rows: Iterable[dict], on_progress=None, batch_cap: int | None = None) -> dict:
+    """rows: {collection, source_id, content}. Embeds new/changed rows, keeps existing
+    embeddings for unchanged ones, drops rows no longer present, and replaces the index.
 
-    Rebuilt whole, never patched. The index is derived from the record layer, and an
-    embedding that outlives the FIR it was made from is a citation to a deleted record —
-    the one failure a citation-grounded system must never have.
+    Returns `{"written": total rows now in the index, "embedded": newly embedded THIS
+    call, "remaining": still-pending rows left for a later call}`.
 
-    Embeds in bounded-size batches, not one call over the whole corpus. Live verification
-    (2026-09-05): a single `embed()` call over ~13,729 documents reliably preceded the
-    container itself resetting (`/health`'s `model_weights` reverted to fresh-boot values
-    mid-computation, with the API otherwise staying responsive throughout — consistent
-    with the platform killing a process that spiked memory, not a hang). fastembed/
-    onnxruntime pads a batch to its longest sequence, so one all-at-once call's peak
-    memory scales with the SINGLE longest narrative in the whole corpus times the FULL
-    row count at once, on a container already documented as memory-constrained (whisper +
-    NLLB + the Data Store mirror already resident, "2048MB = FLOOR not ceiling" per
-    CLAUDE.md's cost posture). `on_progress(done, total)`, if given, is called after each
-    batch — the caller can use it to make this observable mid-run, since AppSail exposes
-    no runtime logs.
+    Incremental and resumable, not "rebuilt whole" as this used to be. Live verification
+    (2026-09-05): embedding the full ~13,729-document corpus in one continuous run —
+    even split into EMBED_BATCH-sized `embed()` calls — reliably died at almost the same
+    wall-clock point (~60-120s in) across five separate attempts with different
+    mitigations (a real SDK-context threading bug fixed along the way, capped ONNX
+    threads, bounded per-call memory), consistent with AppSail restarting the background
+    thread's container under sustained CPU-bound work rather than a memory ceiling (RSS
+    plateaued around 1.4-1.5GB, well under the container's 2GB). No single continuous
+    run can be trusted to finish, so the design changed: **each row keeps its existing
+    embedding when its content is unchanged, and only new/changed rows are embedded, up
+    to `batch_cap` per call** (default `INCREMENTAL_BATCH_CAP`, tunable without a
+    redeploy). A row whose (collection, source_id) no longer appears in `rows` is
+    dropped — never an embedding that outlives the record it was made from, the one
+    failure a citation-grounded system must never have. If more rows need embedding
+    than `batch_cap` allows, the remainder is left for the NEXT call (Cron's regular
+    cycle, or a manual retry) to pick up — `on_progress(done, total)` reports progress
+    within THIS call's own batch, not the full remaining backlog.
     """
     rows = [r for r in rows if r.get("content")]
     if not rows:
-        return 0
+        return {"written": 0, "embedded": 0, "remaining": 0}
+    cap = INCREMENTAL_BATCH_CAP if batch_cap is None else batch_cap
 
-    texts = [r["content"] for r in rows]
+    existing = load_index()
+    existing_by_key = {
+        (str(existing["collection"][i]), str(existing["source_id"][i])): i
+        for i in range(len(existing["source_id"]))
+    }
+
+    kept: list[tuple[dict, int]] = []
+    to_embed: list[dict] = []
+    for r in rows:
+        idx = existing_by_key.get((r["collection"], str(r["source_id"])))
+        if idx is not None and str(existing["content"][idx]) == r["content"]:
+            kept.append((r, idx))          # unchanged — reuse its existing embedding
+        else:
+            to_embed.append(r)             # new, or content changed since last embed
+
+    this_round = to_embed[:cap] if cap else to_embed
+
+    texts = [r["content"] for r in this_round]
     parts = []
     for start in range(0, len(texts), EMBED_BATCH):
         parts.append(embed(texts[start:start + EMBED_BATCH]))
         if on_progress is not None:
             on_progress(min(start + EMBED_BATCH, len(texts)), len(texts))
-    matrix = np.concatenate(parts, axis=0)
+    new_matrix = np.concatenate(parts, axis=0) if parts else None
+    kept_matrix = existing["matrix"][[i for _, i in kept]] if kept else None
+    # An empty side's fallback matches the OTHER side's actual width, not a hardcoded
+    # EMBED_DIM — tests substitute a fake embed() at a different width, and either side
+    # can legitimately be empty (nothing pending this call, or nothing existed before)
+    # while the other carries the real, current embedding width.
+    width = (new_matrix.shape[1] if new_matrix is not None
+            else kept_matrix.shape[1] if kept_matrix is not None else EMBED_DIM)
+    if new_matrix is None:
+        new_matrix = np.zeros((0, width), np.float32)
+    if kept_matrix is None:
+        kept_matrix = np.zeros((0, width), np.float32)
+
+    final_rows = [r for r, _ in kept] + this_round
+    matrix = np.concatenate([kept_matrix, new_matrix], axis=0)
     buf = io.BytesIO()
     np.savez_compressed(
         buf,
-        source_id=np.asarray([str(r["source_id"]) for r in rows]),
-        collection=np.asarray([str(r["collection"]) for r in rows]),
-        content=np.asarray([r["content"] for r in rows]),
+        source_id=np.asarray([str(r["source_id"]) for r in final_rows]),
+        collection=np.asarray([str(r["collection"]) for r in final_rows]),
+        content=np.asarray([r["content"] for r in final_rows]),
         matrix=matrix,
     )
     blob = buf.getvalue()
@@ -147,7 +185,8 @@ def build_index(rows: Iterable[dict], on_progress=None) -> int:
         path.write_bytes(blob)
 
     load_index.cache_clear()
-    return len(rows)
+    return {"written": len(final_rows), "embedded": len(this_round),
+            "remaining": len(to_embed) - len(this_round)}
 
 
 @lru_cache(maxsize=1)
@@ -236,7 +275,7 @@ if __name__ == "__main__":   # self-check: exact-identifier recall is why this i
         {"collection": "fir", "source_id": "3",
          "content": "Cheating case, accused Ramesh Gowda collected deposits in Mysuru."},
     ]
-    assert build_index(docs) == 3
+    assert build_index(docs)["written"] == 3
 
     hits = hybrid_search("motorcycle chain snatching", k=2)
     assert hits[0]["source_id"] == "1", hits
