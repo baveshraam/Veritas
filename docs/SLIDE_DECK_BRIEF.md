@@ -378,7 +378,7 @@ from case records" claim actually works, not just runs.
 **Scale of the live dataset**: 10,000 synthetic FIRs · knowledge graph 16,918 nodes / 87,120
 edges · vector index 13,835 indexed documents · 37 database tables, ~127,000+ total rows.
 
-**Test coverage / correctness**: **868 automated tests passing** (2 skipped), zero
+**Test coverage / correctness**: **879 automated tests passing** (2 skipped), zero
 database/Docker dependency to run them (`python -m pytest`). Two independent live-behavior
 gates run against the deployed system: `judge_flows.py` 26/26 realistic officer sessions,
 `verify_live_deployment.py` 36/36 adversarial scenarios. A 1,701-question corpus

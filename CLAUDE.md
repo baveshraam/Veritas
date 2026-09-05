@@ -16,7 +16,7 @@ in English or Kannada, get an answer where every claim traces to a specific reco
 - **Repo**: `github.com/baveshraam/Veritas`
 - **Runs on**: Zoho Catalyst (project `Veritas`, id `52852000000013048`, org `60077763394`)
 - **Schema**: the organizers' `Police_FIR_ER_Diagram.pdf`, reproduced verbatim
-- **Tests**: `python -m pytest` — 868 green, 2 skipped (`python -m pytest` prints the current
+- **Tests**: `python -m pytest` — 879 green, 2 skipped (`python -m pytest` prints the current
   count; this line has drifted stale before and is not to be trusted over that), no
   database or Docker required
 
@@ -740,7 +740,18 @@ every deploy ID) lives in `docs/WORK_LOG.md` and `docs/ENGINEERING_BRIEF.md`.
   turn's evidence pool" situation the Timeline tab's own pin already handled), tagged
   `ref_type="graph_edge"`. Item 4 (LLM-authored MO narrative) stays deliberately
   deferred — QuickML has no real billing history yet, unchanged from Part 9's own
-  recommendation. **874 tests, 2 skipped.**
+  recommendation. **Found live, while verifying Items 1-2**: the new `fairness`/
+  `advisory` `/jobs/refresh` steps completed but never populated their cache entries.
+  Root cause — `data.cache._segment()` independently called `zcatalyst_sdk.initialize()`
+  and memoized the result forever (`@lru_cache`); the SDK's context is thread-scoped,
+  not process-global, so whichever thread called it FIRST (main request or background)
+  froze its client in for the container's whole lifetime, and a background-thread
+  client silently failed every write thereafter (`put`'s own `except Exception`
+  swallows it). Fixed by routing `_segment()` through the same rebindable
+  `ds.catalyst_app()` Data Store already uses, un-memoized, so it always reflects the
+  binding `/jobs/refresh`'s background thread already rebinds for exactly this reason.
+  Likely also explains why `/alerts`' cross-station-series feed never showed live data.
+  **879 tests, 2 skipped.**
 
 ---
 
@@ -757,7 +768,14 @@ versions above and are easy to re-discover the expensive way otherwise.
 - **The Catalyst SDK's context is per-request headers (`X-ZC-*`), not environment
   variables.** A bare `zcatalyst_sdk.initialize()` raises "Catalyst headers are empty" in
   AppSail; the API middleware captures each request into the SDK
-  (`ds.bind_catalyst_request`), and background jobs reuse the captured app.
+  (`ds.bind_catalyst_request`), and background jobs reuse the captured app. **Any other
+  SDK client built independently of that one rebindable app object inherits none of
+  this** — `data.cache._segment()` called its own `zcatalyst_sdk.initialize()` and
+  memoized the result forever, so whichever thread happened to call it first (main
+  request or a `/jobs/refresh` background thread) locked its client in for the whole
+  container's life; a background thread's client then silently failed every write
+  (`put`'s own `except Exception` swallows it) for as long as the container lived.
+  Fixed by routing through the same `ds.catalyst_app()`, un-memoized, changelog v27.
 - **Live ZCQL refuses JOINs between value-related tables** (every JOIN in this codebase,
   since the ER relates by business key). Reads run off a **local sqlite mirror**
   hydrated from Data Store once per container; writes go to Data Store first, mirror

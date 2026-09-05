@@ -304,8 +304,9 @@ broken, cash box gone, no witness, no suspect.
 4. *"Who's likely involved?"* → honest answer: none of the five cases has a named accused — "a
    pattern without a suspect, exactly what series detection exists to catch before an officer
    would think to cross-reference three other districts by hand."
-5. *"Should we expect another one, and where?"* → the fused advisory (Blueprint #3, not yet
-   built): a bounded next-window/location projection, moderate confidence stated plainly.
+5. *"Should we expect another one, and where?"* → the fused advisory (Part 9 Item 2, built and
+   tested 2026-09-05 — CLAUDE.md v27): a bounded next-window/location projection, moderate
+   confidence stated plainly, only surfaced when hotspot and forecast genuinely agree.
 6. *"Poke holes in this."* (already built, v25) → Veritas names its own weak points: only 5
    data points, geographic progression assumed on straight-line distance not road network, two
    of five cases still under investigation so MO attribution isn't final.

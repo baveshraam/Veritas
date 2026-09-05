@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import json
 import logging
-from functools import lru_cache
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -31,12 +30,25 @@ TTL_HOURS = 6                # a session an officer has left for six hours is ov
 _local: dict[str, str] = {}
 
 
-@lru_cache(maxsize=1)
 def _segment():
-    """The Catalyst Cache segment, or None when Catalyst isn't configured."""
+    """The Catalyst Cache segment, or None when Catalyst isn't configured.
+
+    Routed through `data.ds.catalyst_app()` — the SAME app instance Data Store
+    uses — rather than an independent `zcatalyst_sdk.initialize()` call, and NOT
+    memoized (`ds.catalyst_app()` itself isn't either): the SDK's context is
+    thread-scoped, not process-global, so a bare `initialize()` succeeds only on
+    a thread AppSail has bound live request headers into. `/jobs/refresh`'s
+    background thread already captures and rebinds `ds._sdk_app` for exactly
+    this reason (CLAUDE.md's "Catalyst SDK context is per-request headers, not
+    environment variables" gotcha) — an independent cache client had no access
+    to that rebinding, so a cache write from that thread silently no-opped
+    (`put`'s own `except Exception` swallows a client that can't authenticate)
+    every cycle. Found live: `/jobs/refresh`'s new fairness/advisory steps never
+    populated their cache entries despite the job completing.
+    """
     try:
-        import zcatalyst_sdk
-        return zcatalyst_sdk.initialize().cache().segment(SEGMENT)
+        from data import ds
+        return ds.catalyst_app().cache().segment(SEGMENT)
     except Exception:
         return None
 

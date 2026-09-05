@@ -16,7 +16,7 @@ the records don't support an answer, Veritas says exactly that instead of invent
 | **Live API** | `https://veritas-api-50043864344.development.catalystappsail.in` |
 | **Live console** | `https://veritas-60077763394.development.catalystserverless.in/app/index.html` |
 | **Identity resolution** | **F1 0.989** (precision 0.997, recall 0.981) against the generator's answer key |
-| **Test suite** | 868 passing, 2 skipped, no database or Docker required — `python -m pytest` |
+| **Test suite** | 879 passing, 2 skipped, no database or Docker required — `python -m pytest` |
 | **Live footprint** | 10,000 FIRs · ~105k rows · graph of 16,918 nodes / 87,120 edges · 13,835 indexed documents |
 | **Platform** | Zoho Catalyst — one AppSail container, Data Store, File Store, Cache, QuickML LLM, Cron |
 
@@ -57,6 +57,7 @@ Every one of these runs today, against live data, with citations.
 | *"Who does he operate with?"* | A co-offending network with community detection, labelled honestly as *derived communities* since the records name no gangs. |
 | *"Trace the money from this account."* | Follows transactions through the financial layer as a Sankey diagram, flagged by both a court-auditable rule detector and a graph neural network. |
 | *"Will burglaries rise next month in this district?"* | A statistical forecast with uncertainty bands, reconciled so a district's forecast equals the sum of its stations'. |
+| *(pushed proactively, not asked)* | A fused prevention advisory only fires when a real hotspot AND a rising forecast genuinely agree — never on either signal alone — with the confounder disclosure and any fairness-audit flag shown alongside the headline, never folded into it. |
 | *"ಕೊಲಾರದಲ್ಲಿ ನಿನ್ನೆ ಏನಾಯಿತು?"* | Kannada in, Kannada out — speech-to-text and translation run inside our own container; police text never reaches a third-party API. |
 | *"Give me everything on this open case."* | The Investigation Copilot: a chronological timeline, the five most similar past cases and outcomes, ranked leads, and a paste-ready case-diary paragraph. |
 | *"Pin this to the case board."* | A persistent, editable Investigation Board per case — pinned evidence, findings, leads, notes — that survives a refresh, a new session, a new officer's login. |
@@ -66,6 +67,40 @@ Every one of these runs today, against live data, with citations.
 Every answer carries numbered citation chips into a floating evidence drawer, an expandable
 Reasoning Trace shows how the answer was assembled, and every interaction lands in a
 tamper-evident audit log.
+
+### Six more things an officer can ask an open case directly
+
+Built on the same case/person-scoped record layer as everything above — no new data, no new
+inference, just the questions an investigator actually asks while working a case:
+
+| Ask | Veritas does |
+|---|---|
+| *"Prep me to question him."* | Priors, structural case gaps, and direct associates, assembled before an interrogation — never the officer's own paperwork gaps. |
+| *"Any similar cases I should know about?"* | `SIMILAR_CASES` narrowed to this officer's own backlog and the unsolved pool. |
+| *"Catch me up on this case."* | The Copilot brief fused with the investigation board's own state into one handoff narrative for a new officer. |
+| *"Poke holes in this."* | A meta-turn that actively looks for what would **weaken** the previous answer, not how it was reached. |
+| *"Is this ready to file?"* | The same structural-gap check as interrogation prep, run proactively before a case goes up the chain. |
+| *(reported automatically)* | If this case's accused is also named at another station, the link is always reported — the other case is named only where the asking officer's own access allows it. |
+
+---
+
+## What's not built here, and why
+
+Every gap below is a deliberate scope decision, stated plainly rather than left for a judge
+to discover:
+
+- **The GNN AML detector** ships in the deployed image but is unverified against a real
+  positive case live — the rule-based structuring detector is the one confirmed against real
+  ground truth (see [CLAUDE.md's Financial Intelligence phase](./CLAUDE.md)).
+- **Real PDF export** is blocked on a Catalyst SmartBrowz identity no automated session can
+  drive interactively; the console downloads a printable, citation-carrying HTML copy instead
+  and says so, rather than silently degrading.
+- **LLM-authored case-narrative variety** (richer than the current 3-template-per-crime-type
+  set) is deliberately deferred: QuickML has no real billing history yet, and running a
+  ~10,000-case batch through it first, to see the actual cost, was judged more responsible
+  than guessing.
+- The production-scaling items (Kafka/Flink, Iceberg, Keycloak/OPA, a spatio-temporal GNN
+  forecaster) are covered below, under "Where it goes next."
 
 ---
 
@@ -179,7 +214,7 @@ service receives, which is why the RBAC rules run on every commit.
 - Kannada and English, voice input, live district-anomaly alerts over SSE.
 - PDF export is BLOCKED, honestly: SmartBrowz needs a Catalyst User Management identity this
   environment can't drive interactively; the console falls back to a printable HTML copy.
-- **868 tests green, 2 skipped**, locally, with no stack required.
+- **879 tests green, 2 skipped**, locally, with no stack required.
 
 ---
 
@@ -202,7 +237,7 @@ The live console, driven headlessly end to end. Full pass-by-pass sets live unde
 ## Run it locally
 
 ```bash
-python -m pytest                                      # 868 tests (2 skipped), no stack needed
+python -m pytest                                      # 879 tests (2 skipped), no stack needed
 cd data && python -m data.generator.run --cases 10000 # generate a synthetic dataset
 cd apps/api && uvicorn api.main:app --reload          # the API (SQLite backend locally)
 cd apps/web && npm run dev                            # the Command Console
