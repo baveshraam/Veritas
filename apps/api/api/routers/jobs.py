@@ -73,7 +73,7 @@ def _reindex_with_progress() -> dict:
     """
     from data import cache
     from data.embeddings.index_job import fir_documents, profile_documents
-    from data.vectors import build_index
+    from data.vectors import _embedder, build_index
 
     def _report(stage: str) -> None:
         current = cache.get(LAST_REFRESH_CACHE_KEY) or {}
@@ -84,11 +84,20 @@ def _reindex_with_progress() -> dict:
 
     _report("querying records")
     firs, profiles = fir_documents(), profile_documents()
+    # A fresh container has never called `_embedder()` before, and it does two very
+    # different things the moment it's asked for on this platform: `ensure_models()`
+    # (a multi-chunk File Store download, network-bound, holding its own lock the
+    # NLLB/whisper warm-up thread also waits on) and loading the ONNX model itself
+    # (CPU-bound). Both were previously invisible inside one "embedding N documents"
+    # label — separating them tells the NEXT live run which one a stuck run is
+    # actually stuck in, rather than "vector_index" and nothing more.
+    _report("loading embedding model (File Store fetch + ONNX load)")
+    _embedder()
+    _report(f"computing embeddings for {len(firs) + len(profiles)} documents")
     # `build_index` embeds AND writes the blob in one call — no hook point inside
     # it — so this is the last observable phase boundary before either the next
     # step's own "current_step" write or the final "complete" write (whichever
     # this run reaches) shows this one finished.
-    _report(f"embedding {len(firs) + len(profiles)} documents")
     n = build_index(firs + profiles)
     return {"fir_narrative": len(firs), "criminal_profile": len(profiles), "written": n}
 

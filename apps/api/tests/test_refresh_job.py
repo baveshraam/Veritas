@@ -229,11 +229,15 @@ def test_progress_is_visible_before_the_job_finishes(monkeypatch):
 
 def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
     """Live verification (2026-09-05): the job always parked on "vector_index" until
-    the container itself reset, with no way to tell querying apart from the CPU-bound
-    embedding pass over ~13,835 documents. Each phase must be independently visible."""
+    the container itself reset, with no way to tell querying apart from loading the
+    embedding model (a File Store fetch, network-bound) apart from the CPU-bound
+    embedding pass itself. Each phase must be independently visible."""
     from data import cache
 
-    seen_during_embed = {}
+    seen_during_load, seen_during_embed = {}, {}
+
+    def fake_embedder():
+        seen_during_load.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
 
     def fake_build_index(rows):
         seen_during_embed.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
@@ -241,11 +245,14 @@ def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
 
     monkeypatch.setattr("data.embeddings.index_job.fir_documents", lambda: [{"a": 1}])
     monkeypatch.setattr("data.embeddings.index_job.profile_documents", lambda: [{"b": 2}])
+    monkeypatch.setattr("data.vectors._embedder", fake_embedder)
     monkeypatch.setattr("data.vectors.build_index", fake_build_index)
 
     out = jobs._reindex_with_progress()
 
-    assert seen_during_embed["vector_index_stage"] == "embedding 2 documents"
+    assert seen_during_load["vector_index_stage"] == \
+        "loading embedding model (File Store fetch + ONNX load)"
+    assert seen_during_embed["vector_index_stage"] == "computing embeddings for 2 documents"
     assert "vector_index_stage_at" in seen_during_embed
     assert out == {"fir_narrative": 1, "criminal_profile": 1, "written": 2}
 
