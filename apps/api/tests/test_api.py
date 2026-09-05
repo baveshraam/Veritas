@@ -90,6 +90,15 @@ def test_health_reports_what_is_actually_up(client, dataset):
         "ctranslate2 (VERITAS_NLLB_CT2_DIR present — local/baked directory)",
         "transformers (HF cache — File Store or baked, see model_weights)",
     )
+    # STRATEGIC_RESET Part 9, Item 1: the Aequitas audit used to be a script nobody
+    # scheduled — /health must say whether it has ever run, not just that the script
+    # exists somewhere in the repo.
+    from api.routers.jobs import FAIRNESS_CACHE_KEY
+    from data import cache
+    cache.evict(FAIRNESS_CACHE_KEY)
+    assert client.get("/health").json()["fairness"] == "not yet run"
+    cache.put(FAIRNESS_CACHE_KEY, {"flagged": True, "reports": {}})
+    assert client.get("/health").json()["fairness"] == "DISPARATE IMPACT FLAGGED"
 
 
 def test_an_io_sees_only_their_own_stations_cases(client, officers):

@@ -351,6 +351,59 @@ def test_pin_with_a_target_absent_from_the_prior_turn_reconstructs_it_not_grabs_
     assert target_event["description"] in item["content"]
 
 
+def test_pin_a_network_edge_reconstructs_it_from_the_graph_not_a_chat_citation(
+        dataset, monkeypatch):
+    """STRATEGIC_RESET Part 9, Item 3: NetworkView.tsx's edge click sends an
+    `edge:{source}|{type}|{target}` id that was never part of any chat turn's own
+    evidence pool (it comes from the graph payload, not an EvidenceItem) — same
+    situation as a Timeline-tab event, so it gets the same reconstruction
+    treatment rather than falling through to 'nothing to pin'."""
+    from data import SessionFocus
+    import rag_agent.orchestrator as orch
+
+    a, b = _co_accused_pair(dataset)
+    fir_id = _case_with_accused(dataset)
+    target_id = f"edge:person:{a}|CO_ACCUSED_WITH|person:{b}"
+
+    class _Prior:
+        evidence_items: list = []
+        citations: list = []
+
+    monkeypatch.setattr(orch, "_last_turn", lambda session_id: _Prior())
+
+    st = _state(original_query="Pin this connection.", intent="BOARD_PIN_EVIDENCE",
+               active_entities=SessionFocus(active_fir=fir_id), active_evidence_id=target_id)
+    orch.node_retrieve(st)
+
+    assert st.board_result and st.board_result["ok"], st.board_result
+    item = st.board_result["item"]
+    assert item["ref_type"] == "graph_edge"
+    assert item["ref_id"] == target_id
+    assert "CO_ACCUSED_WITH" in item["content"]
+
+
+def test_pin_an_edge_with_no_such_connection_reports_nothing_to_pin(dataset, monkeypatch):
+    """A stale or fabricated edge id must refuse honestly, not fall back to
+    pinning something unrelated — the same discipline the timeline-target test
+    above already holds the "timeline:" branch to."""
+    from data import SessionFocus
+    import rag_agent.orchestrator as orch
+
+    fir_id = _case_with_accused(dataset)
+
+    class _Prior:
+        evidence_items: list = []
+        citations: list = []
+
+    monkeypatch.setattr(orch, "_last_turn", lambda session_id: _Prior())
+
+    st = _state(original_query="Pin this connection.", intent="BOARD_PIN_EVIDENCE",
+               active_entities=SessionFocus(active_fir=fir_id),
+               active_evidence_id="edge:person:999999|CO_ACCUSED_WITH|person:888888")
+    orch.node_retrieve(st)
+    assert st.board_result and st.board_result["ok"] is False
+
+
 def test_timeline_connection_after_case_people_resolves_both_without_asking(
         dataset, monkeypatch):
     """Found live: 'Show me events involving both of them' right after a 2-accused

@@ -302,3 +302,15 @@ export type SeriesAlert = {
   stations: string[];
   districts: string[];
 };
+
+/** The fused hotspot+forecast+series-linkage advisory (STRATEGIC_RESET Part 9,
+ *  Item 2), pushed through the same /alerts stream. Advisory only — it never
+ *  triggers a dispatch or automated action. */
+export type AdvisoryAlert = {
+  district_code: string;
+  district: string;
+  headline: string;
+  expected_total_incidents: number;
+  hotspot_intensity: number;
+  disclosures: string[];
+};

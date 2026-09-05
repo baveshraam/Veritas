@@ -344,6 +344,11 @@ subagent running; `git status` clean; live `/health` responding and idle. The
 `BEHAVIORAL_PROFILE` routing fix has since been corrected for real, tested, deployed, and
 confirmed live (`CLAUDE.md` v26). Five items remain from Part 6/8's "not done" list.
 
+**Items 1-3 built this session (CLAUDE.md v27), tested (874 tests, 2 skipped), not yet
+redeployed as of this edit** — see the v27 changelog entry for what each closed. Item 4
+stays deliberately deferred (unchanged recommendation: no real QuickML billing history
+yet). Item 5 (pitch/demo rewrite) is next, once these three are live-verified.
+
 **Item 1 — Aequitas wired into the live refresh cycle.** Tier: CRITICAL. Blocker: none.
 `packages/ml_models/fairness_run_audit.py` is a real, working script — runs
 `run_fairness_audit()` against `score_risk` and `predict_recidivism`, returns a

@@ -56,7 +56,7 @@ def _run_refresh() -> dict:
     from data.gds import run_all as run_gds
     from data.graph import publish_graph
 
-    # Each step is isolated. These four rebuild INDEPENDENT derived layers over the
+    # Each step is isolated. These rebuild INDEPENDENT derived layers over the
     # same record layer — none is an input to the next — so one failing must not
     # cancel the rest. Under a single try/except the first raise silently skipped
     # everything after it, and that is not hypothetical: `publish_graph()` writes to
@@ -94,6 +94,15 @@ def _run_refresh() -> dict:
         # layer) and caches the result; /alerts reads the cache, it never recomputes.
         # Placed after vector_index above so it searches against fresh embeddings.
         ("series_scan", _scan_series),
+        # Aequitas bias audit (STRATEGIC_RESET Part 9, Item 1). Was a script nobody
+        # scheduled — `fairness_run_audit.py` existed and worked, but an unscheduled
+        # mitigation is a claim, not a verifiable safeguard. Runs last: it audits the
+        # risk/recidivism models themselves, not anything the steps above produce.
+        ("fairness", _run_fairness),
+        # The fused proactive-prevention advisory (STRATEGIC_RESET Part 9, Item 2).
+        # Placed last because it reads the two caches the steps above just wrote
+        # (series_scan, fairness) to attach their results as disclosures.
+        ("advisory", _run_advisory),
     )
     out: dict = {}
     try:
@@ -129,6 +138,49 @@ def _scan_series() -> dict:
     cache.put(SERIES_CACHE_KEY, [r.model_dump(mode="json") for r in results],
              expiry_hours=SERIES_CACHE_TTL_HOURS)
     return {"candidates": len(results)}
+
+
+FAIRNESS_CACHE_KEY = "fairness_audit_v1"
+FAIRNESS_CACHE_TTL_HOURS = 24   # same reasoning as SERIES_CACHE_TTL_HOURS above
+
+
+def _run_fairness() -> dict:
+    """Aequitas disparate-impact audit over both risk models, cached for `/health` and
+    the console's System panel to read cheaply instead of retraining/re-scoring on
+    every request. Geographic + gender subgroups only — never caste/religion, which
+    are stored for schema conformance but never reach a model (CLAUDE.md §6/§9)."""
+    from data import cache
+    from ml_models.serving import run_fairness_audit
+
+    reports = {m: run_fairness_audit(m).model_dump(mode="json")
+              for m in ("score_risk", "predict_recidivism")}
+    flagged = any(r["disparate_impact_flagged"] for r in reports.values())
+    cache.put(FAIRNESS_CACHE_KEY, {"reports": reports, "flagged": flagged},
+             expiry_hours=FAIRNESS_CACHE_TTL_HOURS)
+    return {"flagged": flagged}
+
+
+ADVISORY_CACHE_KEY = "advisory_v1"
+ADVISORY_CACHE_TTL_HOURS = 24   # same cadence reasoning as SERIES_CACHE_TTL_HOURS above
+
+
+def _run_advisory() -> dict:
+    """One fused hotspot+forecast+series-linkage read per district, cached for
+    GET /alerts to push cheaply (STRATEGIC_RESET Part 9, Item 2) instead of running
+    KDE/DBSCAN and Prophet per officer per poll."""
+    from data import cache
+    from data.districts import all_districts
+    from rag_agent.agents.prediction_agent import advisory_for
+
+    series = cache.get(SERIES_CACHE_KEY) or []
+    fairness = cache.get(FAIRNESS_CACHE_KEY)
+    flagged = bool(fairness and fairness.get("flagged"))
+
+    advisories = [a for d in all_districts()
+                 if (a := advisory_for(d.code, series_candidates=series,
+                                       fairness_flagged=flagged)) is not None]
+    cache.put(ADVISORY_CACHE_KEY, advisories, expiry_hours=ADVISORY_CACHE_TTL_HOURS)
+    return {"advisories": len(advisories)}
 
 
 def _rerun_detectors() -> dict:

@@ -841,3 +841,55 @@ AI-authored MO narrative — re-checked live, QuickML remains at 0/300 calls use
 there's still no billing history to decide against; still recommended to skip for the
 competition unless a session is set aside for a small capped test batch; (5) the
 pitch/demo/README rewrite, done last once the feature set is final.
+
+---
+
+## 2026-09-05 — Part 9, Items 1-3 built and tested (not yet deployed)
+
+Started by re-verifying the state Part 9 itself claimed rather than trusting it: ran
+the full suite (clean, 868/2 skipped, matching the recorded baseline) before touching
+anything, per this session's own "fix bugs first" instruction. No regressions found —
+nothing to fix. Moved straight to the three unblocked items.
+
+**Item 1 — Aequitas.** `packages/ml_models/fairness_run_audit.py` was real and working
+but never called except by hand. Added `("fairness", _run_fairness)` as its own
+isolated step in `/jobs/refresh` (`apps/api/api/routers/jobs.py`), caching both
+models' reports plus a combined `flagged` bool (`FAIRNESS_CACHE_KEY`,
+`fairness_audit_v1`, 24h TTL — same reasoning as the series-scan cache). `/health`
+now reports `"not yet run"` / `"clear"` / `"DISPARATE IMPACT FLAGGED"`, and the
+console's System panel (`TopBar.tsx`) prints the same line. 4 new/changed tests in
+`test_refresh_job.py` and `test_api.py`.
+
+**Item 2 — fused prevention advisory.** New `prediction_agent.advisory_for()` reads
+hotspot detection + trend forecasting for a district and returns `None` unless they
+actually agree (a real cluster AND a rising forecast) — a hotspot with a flat/falling
+forecast isn't news. When it fires, the headline names the district, the window, and
+the point count; separate `disclosures` entries carry the confounder caveat (kept
+static — a live DoWhy run per district per refresh cycle would price out for a line
+of text that doesn't change day to day), a cross-station series-linkage count (joined
+on district name, which `series_detection.SeriesResult.districts` and
+`data.districts.canonical_name` already share), and the Item 1 fairness flag when set.
+New `("advisory", _run_advisory)` step (runs last, after fairness/series so it can
+read both caches), new `advisory_v1` cache key, pushed through the existing `/alerts`
+SSE stream as a new `advisory` event (`AlertBell.tsx` gained a third "Prevention
+advisories" section). 4 tests in `packages/rag_agent/tests/test_advisory.py`, 1 in
+`test_refresh_job.py`.
+
+**Item 3 — graph-edge annotation.** `NetworkView.tsx`'s force-graph `click` handler
+already distinguished node clicks from empty-canvas clicks; added the third case
+(`p.dataType === "edge"`) and a small card with a "Pin this connection" button, wired
+through the same `onPinEvidence` callback the evidence rail already uses. The id sent
+(`edge:{source}|{type}|{target}`) is graph structure, not an `EvidenceItem`, so it was
+never going to be in a prior chat turn's own evidence pool — gave
+`orchestrator._pin_evidence_from_context` a new branch, parallel to the existing
+`timeline:` branch, that re-derives the edge directly from `data.graph.load_graph()`
+and tags the board item `ref_type="graph_edge"`. 2 tests in `test_timeline.py`
+(one genuine confluence, one stale/fabricated edge id refusing honestly).
+
+**Verification**: full suite green at 874 tests (868 + 6), 2 skipped, unchanged from
+baseline; `apps/web` typechecks (`tsc --noEmit`) and production-builds
+(`next build`) cleanly with the new components.
+
+**Not done**: not yet deployed/live-verified (next step); Item 4 (LLM-authored MO
+narrative) stays deliberately deferred — unchanged from Part 9's own recommendation,
+no real QuickML billing history yet; Item 5 (pitch/demo/README rewrite) untouched.

@@ -130,6 +130,9 @@ export default function TopBar({
                 <div className="syspop-row"><span>{t("Indexed documents")}</span><b>{n(health.indexed_documents)}</b></div>
                 <div className="syspop-row"><span>{t("Record store")}</span><b>{health.datastore}</b></div>
                 <div className="syspop-row"><span>{t("Language model")}</span><b>{health.llm}</b></div>
+                {health.fairness && (
+                  <div className="syspop-row"><span>{t("Fairness audit")}</span><b>{health.fairness}</b></div>
+                )}
               </>
             ) : (
               <div className="meta">

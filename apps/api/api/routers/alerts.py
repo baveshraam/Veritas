@@ -39,7 +39,7 @@ from policy import can_view_fir
 from sse_starlette.sse import EventSourceResponse
 
 from ..auth.jwt_auth import Officer, current_officer
-from .jobs import SERIES_CACHE_KEY
+from .jobs import ADVISORY_CACHE_KEY, SERIES_CACHE_KEY
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -80,6 +80,13 @@ def _cached_series() -> list[dict]:
     return cache.get(SERIES_CACHE_KEY) or []
 
 
+def _cached_advisories() -> list[dict]:
+    """Same read-only contract as `_cached_series` — the fused hotspot/forecast/
+    series-linkage advisory (STRATEGIC_RESET Part 9, Item 2) is computed once per
+    refresh cycle, never per poll."""
+    return cache.get(ADVISORY_CACHE_KEY) or []
+
+
 def _scoped_series(series: dict, role: str, ps: str) -> dict | None:
     """The same partial-visibility discipline SERIES_DISCOVERY's conversational
     handler applies, here for the push feed: an officer never sees this at all if
@@ -103,6 +110,7 @@ async def alerts(request: Request, officer: Officer = Depends(current_officer)):
     async def stream():
         seen: set[str] = set()
         seen_series: set[str] = set()
+        seen_advisory: set[str] = set()
         loop = asyncio.get_running_loop()
         try:
             while True:
@@ -130,6 +138,13 @@ async def alerts(request: Request, officer: Officer = Depends(current_officer)):
                         continue          # can't see the anchor case at all
                     seen_series.add(anchor)
                     yield {"event": "series", "data": json.dumps(scoped)}
+
+                for advisory in await loop.run_in_executor(None, _cached_advisories):
+                    dc = advisory.get("district_code")
+                    if not dc or dc in seen_advisory:
+                        continue
+                    seen_advisory.add(dc)
+                    yield {"event": "advisory", "data": json.dumps(advisory)}
 
                 await asyncio.sleep(POLL_SECONDS)
         except asyncio.CancelledError:

@@ -33,6 +33,7 @@ export async function listOfficers(): Promise<Officer[]> {
 export type Health = {
   api: string; llm: string; datastore: string; firs: number;
   graph_nodes: number; graph_edges: number; indexed_documents: number;
+  fairness?: string;
 };
 
 /** Powers the status readout in the command bar. What is loaded is a fact about the
@@ -143,7 +144,7 @@ export async function streamChat(
  * Returns an abort function; call it on unmount to stop the stream.
  */
 export function streamAlerts(
-  onAlert: (a: any, kind: "alert" | "series") => void,
+  onAlert: (a: any, kind: "alert" | "series" | "advisory") => void,
   onError?: () => void,
 ): () => void {
   const controller = new AbortController();
@@ -170,11 +171,13 @@ export function streamAlerts(
           if (!dataLine) continue;
           const payload = dataLine.slice(5).trim();
           if (!payload) continue;
-          // Two event kinds share this one stream: district-anomaly alerts (the
-          // original feed) and cross-station series discoveries. Untyped frames
-          // (SSE's own keep-alive comments, or an older server) default to "alert"
-          // so existing behaviour is unchanged if the event: line is ever absent.
-          const kind = eventLine?.slice(6).trim() === "series" ? "series" : "alert";
+          // Three event kinds share this one stream: district-anomaly alerts (the
+          // original feed), cross-station series discoveries, and the fused
+          // prevention advisory. Untyped frames (SSE's own keep-alive comments, or
+          // an older server) default to "alert" so existing behaviour is unchanged
+          // if the event: line is ever absent.
+          const kindRaw = eventLine?.slice(6).trim();
+          const kind = kindRaw === "series" || kindRaw === "advisory" ? kindRaw : "alert";
           try {
             onAlert(JSON.parse(payload), kind);
           } catch {

@@ -34,7 +34,7 @@ const MAX_STATIC_LABELS = 12;
  *  twenty-node network can be read one person at a time instead of all at once.
  */
 export default function NetworkView({
-  data, onAsk, subjectLabel, reading, sessionId,
+  data, onAsk, subjectLabel, reading, sessionId, onPinEvidence,
 }: {
   data: { nodes: RawNode[]; edges: RawEdge[] };
   onAsk?: (q: string) => void;
@@ -48,6 +48,10 @@ export default function NetworkView({
   subjectLabel?: string | null;
   /** Who is named in the record and who was reached through shared cases. */
   reading?: NetworkReading | null;
+  /** Same callback Workspace already wires to the evidence rail's pin button —
+   *  a click on an edge opens the identical pin-a-note flow (STRATEGIC_RESET
+   *  Part 9, Item 3), just for a connection instead of a card. */
+  onPinEvidence?: (id: string) => void;
 }) {
   const t = useT();
   // The engine sends node ids as numbers and edge endpoints as numbers, while
@@ -67,6 +71,8 @@ export default function NetworkView({
   // selection: a chain left open from the previous person would be read as
   // this one's, which is exactly the misattribution the panel exists to stop.
   const [why, setWhy] = useState(false);
+  const [selectedEdge, setSelectedEdge] =
+    useState<{ source: string; target: string; type: string } | null>(null);
 
   const directIds = useMemo(
     () => new Set((reading?.direct ?? []).map((c) => c.id)),
@@ -219,8 +225,16 @@ export default function NetworkView({
         onEvents={{
           click: (p: any) => {
             setWhy(false);
-            if (p.dataType === "node") setSelected((s) => (s === p.data.id ? null : p.data.id));
-            else setSelected(null);
+            if (p.dataType === "node") {
+              setSelected((s) => (s === p.data.id ? null : p.data.id));
+              setSelectedEdge(null);
+            } else if (p.dataType === "edge") {
+              setSelected(null);
+              setSelectedEdge({ source: p.data.source, target: p.data.target, type: p.data.rel });
+            } else {
+              setSelected(null);
+              setSelectedEdge(null);
+            }
           },
         }}
       />
@@ -294,6 +308,30 @@ export default function NetworkView({
           </div>
         </div>
       )}
+
+      {selectedEdge && !sel && (() => {
+        const from = nodes.find((n) => n.id === selectedEdge.source);
+        const to = nodes.find((n) => n.id === selectedEdge.target);
+        return (
+          <div className="node-card">
+            <div className="node-card-name">
+              {displayName(from ?? { id: selectedEdge.source, label: selectedEdge.source, pagerank: 0 })}
+              {" ↔ "}
+              {displayName(to ?? { id: selectedEdge.target, label: selectedEdge.target, pagerank: 0 })}
+            </div>
+            <div className="meta" style={{ marginTop: 2 }}>{selectedEdge.type}</div>
+            <div className="probe-acts">
+              {onPinEvidence && (
+                <button className="btn btn-sm" onClick={() =>
+                  onPinEvidence(`edge:${selectedEdge.source}|${selectedEdge.type}|${selectedEdge.target}`)}>
+                  {t("Pin this connection")}
+                </button>
+              )}
+              <button className="btn btn-sm btn-quiet" onClick={() => setSelectedEdge(null)}>{t("Clear")}</button>
+            </div>
+          </div>
+        );
+      })()}
 
       <div className="viz-legend">
         {named && (

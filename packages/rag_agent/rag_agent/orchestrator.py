@@ -3238,6 +3238,32 @@ def _pin_evidence_from_context(state: InvestigationState, fir_id: str, role: str
                      "source_query": item.source_query}
                 break
 
+    if not ev and target and target.startswith("edge:"):
+        # NetworkView.tsx's own edge click (STRATEGIC_RESET Part 9, Item 3) — an
+        # edge is graph structure, not an EvidenceItem, so it has no citation to
+        # read from a prior turn's own pool. Same reasoning as the "timeline:"
+        # branch above: re-derived directly from the graph itself rather than
+        # requiring it to have already passed through /chat as a citation.
+        parts = target[len("edge:"):].split("|")
+        if len(parts) == 3:
+            src, etype, dst = parts
+            from data.graph import load_graph
+            g = load_graph()
+            candidates = g.get_edge_data(src, dst) or {}
+            match = next((d for d in candidates.values() if d.get("rel") == etype),
+                        next(iter(candidates.values()), None))
+            if match:
+                def _label(node_id: str) -> str:
+                    if node_id.startswith("person:"):
+                        return _person_name(node_id.split(":", 1)[1]) or node_id
+                    return node_id
+                weight = match.get("weight")
+                content = (f"{_label(src)} and {_label(dst)} are linked via {etype}"
+                          + (f" (weight {weight:.2f})" if weight is not None else "") + ".")
+                ev = {"evidence_id": target, "source_type": "graph_edge",
+                     "source_id": target, "content": content,
+                     "confidence": None, "authoritative": False, "source_query": None}
+
     if not ev and prior and not target:
         # No specific card was selected — "pin this" meaning "whatever you just
         # showed me". Only reached with no target at all; a target that failed to

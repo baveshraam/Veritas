@@ -95,6 +95,73 @@ def risk(person_id: str):
     return r, ev
 
 
+ADVISORY_HOTSPOT_WINDOW_DAYS = 90
+
+
+def advisory_for(district_code: str, series_candidates: list[dict] | None = None,
+                 fairness_flagged: bool = False) -> dict | None:
+    """Fuses hotspot detection, trend forecasting, and cross-station series linkage
+    into one proactive read for a district (STRATEGIC_RESET Part 9, Item 2) — today
+    an officer combines these three separately-computed outputs mentally. Returns
+    None when they don't actually agree on anything: a hotspot with a flat or
+    falling forecast isn't news, and neither is a forecast alone without a real
+    spatial cluster behind it.
+
+    Advisory only — this never triggers a dispatch or any automated action.
+    """
+    from data.districts import canonical_name
+
+    ml = _ml()
+    end = date.today()
+    polys = ml.detect_hotspots(district_code, (end - timedelta(days=ADVISORY_HOTSPOT_WINDOW_DAYS), end))
+    if not polys:
+        return None
+    top = max(polys, key=lambda p: p.intensity)
+
+    fc = ml.forecast_crime(district_code, HORIZON_DAYS)
+    if not fc.series:
+        return None
+    rising = fc.series[-1][1] > fc.series[0][1]
+    if not rising:
+        return None
+
+    place = canonical_name(district_code) or district_code
+    linked = [s for s in (series_candidates or []) if place in (s.get("districts") or [])]
+
+    headline = (f"Elevated likelihood of continued incidents near the known hotspot "
+               f"in {place} over the next {HORIZON_DAYS} days, based on "
+               f"{top.crime_count} recorded points.")
+
+    # Shown alongside the number, never folded into it — an advisory that hides its
+    # own caveats inside a confidence figure is the failure this project's whole
+    # provenance design exists to avoid.
+    disclosures = [
+        # ponytail: a static, already-documented disclosure (CLAUDE.md §9) rather
+        # than a fresh DoWhy causal run per district per refresh cycle — the
+        # confounder itself doesn't change day to day. Upgrade to a live causal
+        # estimate here if a district-level policing-intensity figure ever exists.
+        "Not adjusted for police strength — not published per district in India; "
+        "residual confounding in this reading cannot be ruled out.",
+    ]
+    if linked:
+        disclosures.append(
+            f"{len(linked)} open cross-station series already touch this district — "
+            "see Series Discovery for the linked cases.")
+    if fairness_flagged:
+        disclosures.append(
+            "The risk model's own Aequitas audit currently flags a disparate-impact "
+            "concern — read any risk-based reasoning about this district with that in mind.")
+
+    return {
+        "district_code": district_code,
+        "district": place,
+        "headline": headline,
+        "expected_total_incidents": round(sum(p for _, p, _, _ in fc.series)),
+        "hotspot_intensity": round(top.intensity, 2),
+        "disclosures": disclosures,
+    }
+
+
 def recidivism(person_id: str):
     ml = _ml()
     r = ml.predict_recidivism(person_id)

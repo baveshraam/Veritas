@@ -164,6 +164,21 @@ async def health() -> dict:
     from data.cache import _segment
     status["cache"] = "catalyst" if _segment() is not None else "in-process"
 
+    # Aequitas bias audit, run and cached by /jobs/refresh's own "fairness" step
+    # (STRATEGIC_RESET Part 9, Item 1) — a mitigation nobody can check is a claim,
+    # not a safeguard, so it gets a real status line here rather than living only in
+    # a script's own stdout.
+    try:
+        from data.cache import get as cache_get
+        fairness = cache_get(jobs.FAIRNESS_CACHE_KEY)
+        if fairness is None:
+            status["fairness"] = "not yet run"
+        else:
+            status["fairness"] = ("DISPARATE IMPACT FLAGGED" if fairness["flagged"]
+                                  else "clear")
+    except Exception as e:
+        status["fairness"] = f"unavailable: {type(e).__name__}"
+
     # BUG-017: don't force a model load just to report on it — report what is
     # actually true of this container's state right now.
     #

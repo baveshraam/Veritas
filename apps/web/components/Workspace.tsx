@@ -715,7 +715,7 @@ export default function Workspace({
         next = { label: t("Examine {name}", { name: net.extended[0].name }), q: `Does ${net.extended[0].name} have priors?` };
       }
       body = <NetworkView data={d} onAsk={onAsk} subjectLabel={person} reading={net}
-               sessionId={sessionId} />;
+               sessionId={sessionId} onPinEvidence={onPinEvidence} />;
       flush = true;
     } else if (networkSubject) {
       // Auto-preload (above) is already asking this; this is only the frame

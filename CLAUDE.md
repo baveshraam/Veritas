@@ -722,6 +722,25 @@ every deploy ID) lives in `docs/WORK_LOG.md` and `docs/ENGINEERING_BRIEF.md`.
   escalation — never demographic, by construction). Backfilled real BNS section
   citations onto the live dataset. Added a hard QuickML spend cap + call-count circuit
   breaker. **868 tests, 2 skipped.**
+- **v27 (Part 9, Items 1-3)**: closed the three unblocked items from
+  `STRATEGIC_RESET`'s remaining-work plan. **Aequitas wiring** — the bias audit was a
+  real, working script nobody scheduled; it is now its own isolated `/jobs/refresh`
+  step (cached, so a fresh Cron cycle can't silently skip it the way a blocked Stratus
+  publish once cancelled the AML sweep), surfaced as a real `/health` status line and
+  in the console's System panel. **Fused prevention advisory** — hotspot detection,
+  trend forecasting, and cross-station series linkage existed as three outputs an
+  officer combined mentally; `prediction_agent.advisory_for` fuses them into one
+  proactive read per district (only when a real hotspot AND a rising forecast agree —
+  a hotspot with a flat/falling forecast isn't news), cached by the same refresh step
+  and pushed through the existing `/alerts` SSE feed as a new `advisory` event, with
+  the confounder disclosure and any Aequitas flag shown as separate caveats, never
+  folded into the headline number. **Graph-edge annotation** — `NetworkView.tsx`'s
+  edge click now opens the same pin-a-note flow a node already had; the backend
+  reconstructs the edge directly from the graph (the same "not part of any chat
+  turn's evidence pool" situation the Timeline tab's own pin already handled), tagged
+  `ref_type="graph_edge"`. Item 4 (LLM-authored MO narrative) stays deliberately
+  deferred — QuickML has no real billing history yet, unchanged from Part 9's own
+  recommendation. **874 tests, 2 skipped.**
 
 ---
 

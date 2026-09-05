@@ -4,7 +4,7 @@ import { loadToken, streamAlerts } from "@/lib/api";
 import { districtName } from "@/lib/districts";
 import { useT } from "@/lib/i18n";
 import { anomalyReading } from "@/lib/metrics";
-import type { AnomalyAlert, SeriesAlert } from "@/lib/types";
+import type { AdvisoryAlert, AnomalyAlert, SeriesAlert } from "@/lib/types";
 
 const MAX_KEPT = 12;
 
@@ -23,6 +23,7 @@ export default function AlertBell() {
   const t = useT();
   const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
   const [series, setSeries] = useState<SeriesAlert[]>([]);
+  const [advisories, setAdvisories] = useState<AdvisoryAlert[]>([]);
   const [seen, setSeen] = useState(0);
   const [open, setOpen] = useState(false);
 
@@ -34,9 +35,11 @@ export default function AlertBell() {
     const connect = () => {
       if (!loadToken()) return;   // unverified session — the feed is record-derived
       stop = streamAlerts(
-        (item: AnomalyAlert | SeriesAlert, kind) => {
+        (item: AnomalyAlert | SeriesAlert | AdvisoryAlert, kind) => {
           if (kind === "series") {
             setSeries((all) => [item as SeriesAlert, ...all].slice(0, MAX_KEPT));
+          } else if (kind === "advisory") {
+            setAdvisories((all) => [item as AdvisoryAlert, ...all].slice(0, MAX_KEPT));
           } else {
             setAlerts((all) => [item as AnomalyAlert, ...all].slice(0, MAX_KEPT));
           }
@@ -50,7 +53,7 @@ export default function AlertBell() {
     return () => { stopped = true; clearTimeout(retry); stop?.(); };
   }, []);
 
-  const total = alerts.length + series.length;
+  const total = alerts.length + series.length + advisories.length;
   const unread = Math.max(0, total - seen);
 
   const toggle = () => {
@@ -146,6 +149,36 @@ export default function AlertBell() {
                   </div>
                 );
               })}
+            </div>
+
+            <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 12px", borderTop: "1px solid var(--line)", borderBottom: "1px solid var(--line)" }}>
+              <span className="label">{t("Prevention advisories")}</span>
+              <span className="prov prov-derived" style={{ marginLeft: "auto" }}>{t("Derived")}</span>
+            </div>
+            <div style={{ maxHeight: 240, overflowY: "auto" }} className="scroll">
+              {!advisories.length && (
+                <div className="meta" style={{ padding: "16px 12px" }}>
+                  {t("No district currently combines a real hotspot with a rising forecast. This fuses hotspot detection, trend forecasting, and cross-station series linkage — nothing here is a new source of data on its own.")}
+                </div>
+              )}
+              {advisories.map((a) => (
+                <div key={a.district_code} className="alert"
+                  style={{ borderRadius: 0, border: 0, borderBottom: "1px solid var(--line)", boxShadow: "none", background: "none" }}>
+                  <span className="alert-bar" />
+                  <div className="alert-main">
+                    <div className="alert-head">
+                      <span className="alert-title">{a.district}</span>
+                      <span className="pill pill-amber">{t("Advisory")}</span>
+                    </div>
+                    <div className="alert-body">
+                      <b style={{ color: "var(--t-2)" }}>{t(a.headline)}</b>
+                      {a.disclosures.map((d, i) => (
+                        <div key={i} className="meta">{t(d)}</div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              ))}
             </div>
 
             <div className="meta" style={{ padding: "8px 12px", borderTop: "1px solid var(--line)", color: "var(--t-4)" }}>

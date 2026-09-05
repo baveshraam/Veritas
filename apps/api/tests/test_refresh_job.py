@@ -43,6 +43,8 @@ def steps(monkeypatch):
                         raising=False)
     monkeypatch.setattr(jobs, "_rerun_detectors", ok("aml"))
     monkeypatch.setattr(jobs, "_scan_series", ok("series_scan"))
+    monkeypatch.setattr(jobs, "_run_fairness", ok("fairness"))
+    monkeypatch.setattr(jobs, "_run_advisory", ok("advisory"))
     return called
 
 
@@ -52,7 +54,8 @@ def test_a_blocked_stratus_publish_does_not_cancel_the_aml_sweep(steps, caplog):
     jobs._refresh_running = True
     jobs._run_refresh()
 
-    assert steps == ["gds", "stratus_graph", "vector_index", "aml", "series_scan"], (
+    assert steps == ["gds", "stratus_graph", "vector_index", "aml", "series_scan",
+                     "fairness", "advisory"], (
         "every step must be attempted — a failing cache publish cancelled the two "
         "record-layer rebuilds after it")
 
@@ -118,6 +121,64 @@ def test_one_bad_account_does_not_cost_the_whole_sweep(monkeypatch):
     assert out == {"accounts": 5, "flagged": 4, "failed": 1}
 
 
+def test_fairness_step_caches_a_flagged_report_for_health_to_read(monkeypatch):
+    """STRATEGIC_RESET Part 9, Item 1: the audit existed as a script nobody scheduled.
+    `/health` must be able to tell a flagged model apart from a clean one without
+    re-running the audit, so this is what /jobs/refresh now caches for it to read."""
+    from data import cache
+
+    class _Report:
+        def __init__(self, flagged):
+            self._flagged = flagged
+
+        def model_dump(self, mode="json"):
+            return {"disparate_impact_flagged": self._flagged}
+
+    def fake_audit(model_name):
+        return _Report(flagged=(model_name == "predict_recidivism"))
+
+    monkeypatch.setattr("ml_models.serving.run_fairness_audit", fake_audit)
+    cache.evict(jobs.FAIRNESS_CACHE_KEY)
+
+    out = jobs._run_fairness()
+    assert out == {"flagged": True}, "either model flagging must flag the whole audit"
+
+    cached = cache.get(jobs.FAIRNESS_CACHE_KEY)
+    assert cached["flagged"] is True
+    assert cached["reports"]["score_risk"]["disparate_impact_flagged"] is False
+    assert cached["reports"]["predict_recidivism"]["disparate_impact_flagged"] is True
+
+
+def test_advisory_step_reads_the_series_and_fairness_caches_it_runs_after(monkeypatch):
+    """STRATEGIC_RESET Part 9, Item 2: the advisory is only useful if it can attach
+    what the two steps before it just computed — prove it actually reads them rather
+    than silently defaulting to 'no series, not flagged' every cycle."""
+    from data import cache
+
+    class _District:
+        code = "KA05"
+
+    monkeypatch.setattr("data.districts.all_districts", lambda: [_District()])
+    cache.put(jobs.SERIES_CACHE_KEY, [{"districts": ["Kolar"]}])
+    cache.put(jobs.FAIRNESS_CACHE_KEY, {"flagged": True})
+
+    captured = {}
+
+    def fake_advisory_for(code, series_candidates=None, fairness_flagged=False):
+        captured["code"] = code
+        captured["series_candidates"] = series_candidates
+        captured["fairness_flagged"] = fairness_flagged
+        return {"district_code": code, "headline": "test"}
+
+    monkeypatch.setattr("rag_agent.agents.prediction_agent.advisory_for", fake_advisory_for)
+
+    out = jobs._run_advisory()
+    assert out == {"advisories": 1}
+    assert captured == {"code": "KA05", "series_candidates": [{"districts": ["Kolar"]}],
+                        "fairness_flagged": True}
+    assert cache.get(jobs.ADVISORY_CACHE_KEY) == [{"district_code": "KA05", "headline": "test"}]
+
+
 def test_sync_returns_the_per_step_summary_rather_than_just_started(client, steps):
     """The whole point of the escape hatch: on this platform AppSail exposes
     bundle-creator logs and no RUNTIME logs, so a step that fails inside the background
@@ -135,7 +196,7 @@ def test_sync_returns_the_per_step_summary_rather_than_just_started(client, step
     # Every step is reported, and the one that blew up says so by name instead of
     # vanishing into a log nobody can read.
     assert set(body["steps"]) == {"gds", "stratus_graph", "vector_index", "aml",
-                                  "series_scan"}
+                                  "series_scan", "fairness", "advisory"}
     assert body["steps"]["stratus_graph"].startswith("failed: RuntimeError")
     assert body["steps"]["aml"] == "aml-done"
     assert jobs._refresh_running is False
