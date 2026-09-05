@@ -1,5 +1,5 @@
 "use client";
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext } from "react";
 
 /* ============================================================================
  * THE KANNADA TOGGLE
@@ -764,5 +764,17 @@ export function translate(s: string, lang: Lang, vars?: Record<string, string | 
  *  context. Use inside any component rendered under `<LangProvider>`. */
 export function useT() {
   const lang = useLang();
-  return (s: string, vars?: Record<string, string | number>) => translate(s, lang, vars);
+  // MEMOISED, and that is load-bearing rather than an optimisation. This used to
+  // return a fresh closure on every render, and `t` is a natural thing to list in
+  // a useEffect dependency array — so any effect depending on it re-ran on every
+  // render. WhyChain does exactly that, and its effect begins with `setD(null)`:
+  // the "why is this here?" panel cleared itself, refetched, rendered, and cleared
+  // itself again, forever. On screen that is a chain that flashes up for a frame
+  // and vanishes, over and over, plus one /explain request per frame (found live
+  // 2026-09-06). One useCallback fixes it for every consumer instead of asking
+  // each of them to remember to leave `t` out of their deps.
+  return useCallback(
+    (s: string, vars?: Record<string, string | number>) => translate(s, lang, vars),
+    [lang],
+  );
 }

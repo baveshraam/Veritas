@@ -84,6 +84,14 @@ function fmtDate(d?: string | null): string {
   return t.toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+/** How to name this case in a question. The 18-digit CrimeNo is what the engine's
+ *  FIR_NUMBER_RE actually matches; the internal fir_id is only a fallback, and one
+ *  the engine will not recognise as an identifier — so a point with no crime_no
+ *  produces a question that resolves through the session instead. */
+function firRef(p: { crime_no?: string | null; fir_id: string | number }): string {
+  return String(p.crime_no ?? p.fir_id);
+}
+
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
 }
@@ -498,18 +506,33 @@ export default function MapView({
               {t(why ? "Hide chain" : "Why is this here?")}
             </button>
             {onAsk && (
+              /* Every one of these NAMES the case it is about.
+               *
+               * They used to send bare, subject-less strings — "Who are all
+               * involved?", "Show me the timeline.", "Find similar cases." — which
+               * resolve against whatever case the SESSION happens to have in focus,
+               * not the pin the officer just clicked. Click a case on the map with
+               * no case open and they refuse; click one while a different case is
+               * open and they answer confidently about the wrong case, which is
+               * worse. "What happened here?" was also mislabelled: it sent "What is
+               * the status of FIR X" — a one-line status field, not what happened.
+               * (Found live 2026-09-06.) Naming the FIR makes the pin the subject,
+               * which is what pointing at it meant. */
               <>
                 <button className="btn btn-sm"
-                  onClick={() => onAsk(`What is the status of FIR ${selectedPoint.crime_no ?? selectedPoint.fir_id}?`)}>
+                  onClick={() => onAsk(`What happened in FIR ${firRef(selectedPoint)}?`)}>
                   {t("What happened here?")}
                 </button>
-                <button className="btn btn-sm" onClick={() => onAsk("Who are all involved?")}>
+                <button className="btn btn-sm"
+                  onClick={() => onAsk(`Who is involved in FIR ${firRef(selectedPoint)}?`)}>
                   {t("Who was involved?")}
                 </button>
-                <button className="btn btn-sm" onClick={() => onAsk("Show me the timeline.")}>
+                <button className="btn btn-sm"
+                  onClick={() => onAsk(`Show me the timeline of FIR ${firRef(selectedPoint)}.`)}>
                   {t("Timeline")}
                 </button>
-                <button className="btn btn-sm" onClick={() => onAsk("Find similar cases.")}>
+                <button className="btn btn-sm"
+                  onClick={() => onAsk(`Find cases similar to FIR ${firRef(selectedPoint)}.`)}>
                   {t("Related cases")}
                 </button>
                 <button className="btn btn-sm"

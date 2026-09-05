@@ -396,6 +396,35 @@ def node_retrieve(state: InvestigationState) -> InvestigationState:
                "Question is about the previous answer, not the records", t0)
         return state
 
+    # A question that NAMES an FIR number is about that case, whatever else is (or is
+    # not) open in the session.
+    #
+    # Only the FIR_LOOKUP branch resolved a named FIR number, so every other
+    # case-scoped question that named one was refused for want of the case it had just
+    # been given: "Who is involved in FIR 100242401202300001?" answered "give me an FIR
+    # number, or open one first", and "Show me the timeline of FIR …" answered "a
+    # timeline needs a case or a person to build it around". Found live 2026-09-06 by
+    # clicking a case on the map — every action offered on the pin except one refused,
+    # and the map's own buttons are exactly where an officer names a case by pointing
+    # at it rather than by typing.
+    #
+    # Placed here, above the TIMELINE/CASE_LOCATIONS short-circuits and the NEEDS_CASE
+    # gate, so one resolution serves all of them. Policy-scoped: a number the officer
+    # may not see resolves to nothing and the ordinary refusal stands. It never
+    # OVERRIDES a case already resolved by the semantic layer for this turn — that one
+    # came from the officer's own words too, and re-deriving it here would be a second,
+    # silently different reading of the same sentence.
+    if not state.active_entities.active_fir:
+        _m = FIR_NUMBER_RE.search(state.original_query or "")
+        if _m:
+            _rows = sql_agent.fir_by_number(
+                _m.group(1), state.officer_role, _officer_ps(state.officer_id))
+            if _rows:
+                state.active_entities.active_fir = _rows[0]["fir_id"]
+                _trace(state, "Orchestrator",
+                       f"Question names FIR {_m.group(1)} — treating that case as the "
+                       f"subject", t0)
+
     # "Where are those cases concentrated" names no subject of its own — "those" refers
     # to whatever case list the previous turn showed (e.g. SIMILAR_CASES). This tallies
     # districts over that specific list rather than running a fresh, unscoped HOTSPOT

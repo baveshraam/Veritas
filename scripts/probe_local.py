@@ -1,3 +1,5 @@
+import sys, io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 """Drive the LangGraph engine locally against the sqlite dataset.
 
 `python scripts/probe_local.py --file qs.txt` or with questions as argv.

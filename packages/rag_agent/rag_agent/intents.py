@@ -1188,7 +1188,19 @@ def classify(query: str) -> str:
     # "Find cases similar to FIR 100222201202600022" scored CRIME_SEARCH 2 ("find",
     # "cases") against SIMILAR_CASES 1 ("similar") and was answered with five unrelated
     # criminal profiles. It is the fallback intent, so it behaves like one.
-    specific = {i: n for i, n in scores.items() if i != "CRIME_SEARCH"}
+    # FIR_LOOKUP is scored last for the same reason CRIME_SEARCH is, and it is the
+    # same mistake: "FIR" is a SCOPING word, not a topic. Naming a case does not say
+    # what is being asked about it. On a keyword tie the registration-order rule
+    # handed every one of these to FIR_LOOKUP, so "Catch me up on FIR 1002424…",
+    # "Would FIR 1002424… hold up?", "What should I investigate next on FIR 1002424…"
+    # and "Prepare a briefing for FIR 1002424…" all came back as the same one-line
+    # record lookup — four distinct capabilities collapsed into one by the presence
+    # of the identifier that made them answerable (found live 2026-09-06). A query
+    # naming both an FIR and an operation is asking for THAT OPERATION about THAT
+    # CASE; a query naming only an FIR is the lookup, which is what the
+    # `if has_identifier` fallback below already says.
+    specific = {i: n for i, n in scores.items()
+                if i not in ("CRIME_SEARCH", "FIR_LOOKUP")}
     if specific:
         return max(specific, key=lambda i: (specific[i], -list(INTENTS).index(i)))
     # The converse of the rule above: an officer who pastes a bare record identifier

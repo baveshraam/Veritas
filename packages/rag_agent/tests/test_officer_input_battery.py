@@ -327,3 +327,53 @@ def test_a_kannada_question_is_not_dropped_on_the_floor(query):
     English. What must never happen is the raw Kannada scoring a topical intent by
     accident — a confident answer to a question nobody understood."""
     assert classify(query) in ("UNKNOWN", "CRIME_SEARCH", "CASE_PEOPLE", "HOTSPOT")
+
+
+# --------------------------------------------------------------------------- #
+# naming a case by its FIR number IS opening it                                #
+# --------------------------------------------------------------------------- #
+
+def test_naming_an_fir_does_not_collapse_every_question_into_a_record_lookup():
+    """"FIR" is a scoping word, not a topic. On a keyword tie, registration order
+    handed every case-scoped question that named its case to FIR_LOOKUP — so
+    "Catch me up on FIR …", "Who is involved in FIR …" and "Prepare a briefing for
+    FIR …" all returned the same one-line record. Naming a case says WHICH case,
+    never WHAT is being asked about it."""
+    from rag_agent.intents import classify
+
+    n = "100242401202300001"
+    assert classify(f"Catch me up on FIR {n}") == "CASE_HANDOFF"
+    assert classify(f"Who is involved in FIR {n}?") == "CASE_PEOPLE"
+    assert classify(f"Show me the timeline of FIR {n}.") == "TIMELINE"
+    assert classify(f"Find cases similar to FIR {n}.") == "SIMILAR_CASES"
+    assert classify(f"What should I investigate next on FIR {n}?") == "NEXT_STEPS"
+    assert classify(f"Prepare a briefing for FIR {n}") == "BRIEFING"
+    assert classify(f"Is FIR {n} part of a pattern?") == "SERIES_DISCOVERY"
+    assert classify(f"Who else should know about FIR {n}?") == "CROSS_STATION_LINKAGE"
+    # …and a query that names ONLY the record still is the lookup.
+    assert classify(f"What is the status of FIR {n}?") == "FIR_LOOKUP"
+    assert classify(n) == "FIR_LOOKUP"
+
+
+def test_a_named_fir_opens_the_case_for_every_case_scoped_question(dataset):
+    """The console's map probe names the case the officer clicked. Only the
+    FIR_LOOKUP branch resolved a named FIR number, so those questions were refused
+    for want of the case they had just been given ("give me an FIR number, or open
+    one first")."""
+    import uuid
+
+    from data.ds import query as ds_query
+    from rag_agent import InvestigationState, run_investigation
+
+    crime_no = ds_query("SELECT CrimeNo FROM CaseMaster LIMIT 1")[0]["CrimeNo"]
+    for q in (f"Who is involved in FIR {crime_no}?",
+              f"Show me the timeline of FIR {crime_no}.",
+              f"Find cases similar to FIR {crime_no}."):
+        r = run_investigation(InvestigationState(
+            original_query=q, session_id=str(uuid.uuid4()), officer_id="301",
+            officer_role="IG", language="en"))
+        # The property is that the case was OPENED, not that every question finds
+        # something — "no similar case exists" is a legitimate answer on a small
+        # dataset, "you did not give me a case" is not.
+        assert str(r.active_entities.active_fir or ""), f"{q!r} resolved no case"
+        assert r.refusal_reason != "no_case", f"{q!r}: {r.final_answer}"
