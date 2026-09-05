@@ -85,19 +85,40 @@ def _bucket():
         return None
 
 
+EMBED_BATCH = 512   # documents per embed() call — see build_index's own docstring
+
 # ------------------------------------------------------------------------------- build
-def build_index(rows: Iterable[dict]) -> int:
+def build_index(rows: Iterable[dict], on_progress=None) -> int:
     """rows: {collection, source_id, content}. Embeds every row and replaces the index.
 
     Rebuilt whole, never patched. The index is derived from the record layer, and an
     embedding that outlives the FIR it was made from is a citation to a deleted record —
     the one failure a citation-grounded system must never have.
+
+    Embeds in bounded-size batches, not one call over the whole corpus. Live verification
+    (2026-09-05): a single `embed()` call over ~13,729 documents reliably preceded the
+    container itself resetting (`/health`'s `model_weights` reverted to fresh-boot values
+    mid-computation, with the API otherwise staying responsive throughout — consistent
+    with the platform killing a process that spiked memory, not a hang). fastembed/
+    onnxruntime pads a batch to its longest sequence, so one all-at-once call's peak
+    memory scales with the SINGLE longest narrative in the whole corpus times the FULL
+    row count at once, on a container already documented as memory-constrained (whisper +
+    NLLB + the Data Store mirror already resident, "2048MB = FLOOR not ceiling" per
+    CLAUDE.md's cost posture). `on_progress(done, total)`, if given, is called after each
+    batch — the caller can use it to make this observable mid-run, since AppSail exposes
+    no runtime logs.
     """
     rows = [r for r in rows if r.get("content")]
     if not rows:
         return 0
 
-    matrix = embed([r["content"] for r in rows])
+    texts = [r["content"] for r in rows]
+    parts = []
+    for start in range(0, len(texts), EMBED_BATCH):
+        parts.append(embed(texts[start:start + EMBED_BATCH]))
+        if on_progress is not None:
+            on_progress(min(start + EMBED_BATCH, len(texts)), len(texts))
+    matrix = np.concatenate(parts, axis=0)
     buf = io.BytesIO()
     np.savez_compressed(
         buf,

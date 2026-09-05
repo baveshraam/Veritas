@@ -93,12 +93,12 @@ def _reindex_with_progress() -> dict:
     # actually stuck in, rather than "vector_index" and nothing more.
     _report("loading embedding model (File Store fetch + ONNX load)")
     _embedder()
-    _report(f"computing embeddings for {len(firs) + len(profiles)} documents")
-    # `build_index` embeds AND writes the blob in one call — no hook point inside
-    # it — so this is the last observable phase boundary before either the next
-    # step's own "current_step" write or the final "complete" write (whichever
-    # this run reaches) shows this one finished.
-    n = build_index(firs + profiles)
+
+    def _on_batch(done: int, total: int) -> None:
+        _report(f"computing embeddings: {done}/{total} documents")
+
+    _report(f"computing embeddings: 0/{len(firs) + len(profiles)} documents")
+    n = build_index(firs + profiles, on_progress=_on_batch)
     return {"fir_narrative": len(firs), "criminal_profile": len(profiles), "written": n}
 
 

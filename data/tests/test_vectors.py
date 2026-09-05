@@ -79,3 +79,38 @@ def test_an_empty_index_returns_nothing_rather_than_raising():
     finally:
         vectors._bucket = original
         load_index.cache_clear()
+
+
+def test_build_index_embeds_in_bounded_batches_not_one_giant_call(monkeypatch, tmp_path):
+    """Live verification (2026-09-05): a single embed() call over ~13,729 documents
+    reliably preceded the container itself resetting mid-computation on AppSail
+    (/health's model_weights reverted to fresh-boot values while the job never
+    advanced past this step) -- consistent with an unbounded batch's peak memory
+    (fastembed pads to the corpus's longest sequence, times the FULL row count, in
+    one call) exceeding a container already documented as memory-constrained.
+    Batching bounds that peak and makes progress observable; the final matrix must
+    still be exactly equivalent to one big call would have produced."""
+    import numpy as np
+
+    from data.vectors import EMBED_BATCH, build_index
+
+    rows = [{"collection": "fir_narrative", "source_id": str(i), "content": f"doc {i}"}
+            for i in range(EMBED_BATCH + 3)]      # forces exactly two batches
+
+    seen_calls = []
+
+    def fake_embed(texts):
+        seen_calls.append(len(texts))
+        return np.ones((len(texts), 4), dtype=np.float32)
+
+    monkeypatch.setattr("data.vectors.embed", fake_embed)
+    monkeypatch.setattr("data.vectors._bucket", lambda: None)
+    monkeypatch.setenv("VERITAS_VECTOR_INDEX", str(tmp_path / "idx.npz"))
+    load_index.cache_clear()
+
+    progress = []
+    n = build_index(rows, on_progress=lambda done, total: progress.append((done, total)))
+
+    assert seen_calls == [EMBED_BATCH, 3], "must embed in EMBED_BATCH-sized chunks, not all at once"
+    assert progress == [(EMBED_BATCH, EMBED_BATCH + 3), (EMBED_BATCH + 3, EMBED_BATCH + 3)]
+    assert n == EMBED_BATCH + 3

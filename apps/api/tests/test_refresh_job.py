@@ -239,7 +239,7 @@ def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
     def fake_embedder():
         seen_during_load.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
 
-    def fake_build_index(rows):
+    def fake_build_index(rows, on_progress=None):
         seen_during_embed.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
         return len(rows)
 
@@ -252,7 +252,7 @@ def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
 
     assert seen_during_load["vector_index_stage"] == \
         "loading embedding model (File Store fetch + ONNX load)"
-    assert seen_during_embed["vector_index_stage"] == "computing embeddings for 2 documents"
+    assert seen_during_embed["vector_index_stage"] == "computing embeddings: 0/2 documents"
     assert "vector_index_stage_at" in seen_during_embed
     assert out == {"fir_narrative": 1, "criminal_profile": 1, "written": 2}
 
