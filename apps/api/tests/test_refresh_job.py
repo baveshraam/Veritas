@@ -39,8 +39,7 @@ def steps(monkeypatch):
 
     monkeypatch.setattr("data.gds.run_all", ok("gds"), raising=False)
     monkeypatch.setattr("data.graph.publish_graph", boom, raising=False)
-    monkeypatch.setattr("data.embeddings.index_job.run_all", ok("vector_index"),
-                        raising=False)
+    monkeypatch.setattr(jobs, "_reindex_with_progress", ok("vector_index"))
     monkeypatch.setattr(jobs, "_rerun_detectors", ok("aml"))
     monkeypatch.setattr(jobs, "_scan_series", ok("series_scan"))
     monkeypatch.setattr(jobs, "_run_fairness", ok("fairness"))
@@ -226,6 +225,29 @@ def test_progress_is_visible_before_the_job_finishes(monkeypatch):
     final = cache.get(jobs.LAST_REFRESH_CACHE_KEY)
     assert final["status"] == "complete"
     assert final["gds"] == "gds-done"
+
+
+def test_reindex_reports_which_phase_is_in_flight(monkeypatch):
+    """Live verification (2026-09-05): the job always parked on "vector_index" until
+    the container itself reset, with no way to tell querying apart from the CPU-bound
+    embedding pass over ~13,835 documents. Each phase must be independently visible."""
+    from data import cache
+
+    seen_during_embed = {}
+
+    def fake_build_index(rows):
+        seen_during_embed.update(cache.get(jobs.LAST_REFRESH_CACHE_KEY) or {})
+        return len(rows)
+
+    monkeypatch.setattr("data.embeddings.index_job.fir_documents", lambda: [{"a": 1}])
+    monkeypatch.setattr("data.embeddings.index_job.profile_documents", lambda: [{"b": 2}])
+    monkeypatch.setattr("data.vectors.build_index", fake_build_index)
+
+    out = jobs._reindex_with_progress()
+
+    assert seen_during_embed["vector_index_stage"] == "embedding 2 documents"
+    assert "vector_index_stage_at" in seen_during_embed
+    assert out == {"fir_narrative": 1, "criminal_profile": 1, "written": 2}
 
 
 def test_a_failed_step_s_message_is_cached_not_just_its_type(steps):

@@ -53,9 +53,48 @@ def _authorise(token: str | None) -> None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Bad job token")
 
 
+def _reindex_with_progress() -> dict:
+    """Same work as `data.embeddings.index_job.run_all`, but reports which of its
+    two phases (query / embed-and-write) is in flight, by merging into whatever
+    `LAST_REFRESH_CACHE_KEY` already holds rather than closing over `_run_refresh`'s
+    local state — so this stays a standalone, independently testable step function
+    like every other one in `steps` below.
+
+    Live verification (2026-09-05): the async refresh reliably parked on
+    "vector_index" with no forward motion until the container itself reset (its
+    `model_weights`/`nllb_backend` health fields went back to fresh-boot values
+    between two checks, with zero other requests in between) — this step, and only
+    this step, is where it happens, every time it was tried. Embedding ~13,835
+    documents through the ONNX model is CPU-bound and was previously untimed
+    (this module's own docstring already flagged it as "the untimed remainder").
+    Splitting "querying" from "embedding N documents" turns one opaque multi-minute
+    step into two, so the next live run shows which phase a container reset
+    actually happens in, rather than "vector_index" and nothing more.
+    """
+    from data import cache
+    from data.embeddings.index_job import fir_documents, profile_documents
+    from data.vectors import build_index
+
+    def _report(stage: str) -> None:
+        current = cache.get(LAST_REFRESH_CACHE_KEY) or {}
+        cache.put(LAST_REFRESH_CACHE_KEY,
+                 {**current, "vector_index_stage": stage,
+                  "vector_index_stage_at": datetime.now(timezone.utc).isoformat()},
+                 expiry_hours=SERIES_CACHE_TTL_HOURS)
+
+    _report("querying records")
+    firs, profiles = fir_documents(), profile_documents()
+    # `build_index` embeds AND writes the blob in one call — no hook point inside
+    # it — so this is the last observable phase boundary before either the next
+    # step's own "current_step" write or the final "complete" write (whichever
+    # this run reaches) shows this one finished.
+    _report(f"embedding {len(firs) + len(profiles)} documents")
+    n = build_index(firs + profiles)
+    return {"fir_narrative": len(firs), "criminal_profile": len(profiles), "written": n}
+
+
 def _run_refresh() -> dict:
     global _refresh_running
-    from data.embeddings.index_job import run_all as reindex
     from data.gds import run_all as run_gds
     from data.graph import publish_graph
 
@@ -79,7 +118,7 @@ def _run_refresh() -> dict:
         # what makes the deployment self-healing: an index that is missing or stale is
         # the one failure a citation-grounded system hides rather than reports —
         # retrieval simply returns nothing, confidently.
-        ("vector_index", reindex),
+        ("vector_index", _reindex_with_progress),
         # The AML detectors. `vx_txn.FlaggedSuspicious` is a detector OUTPUT, never
         # written by the generator (data/generator/financial.py asserts that), so on a
         # freshly seeded dataset it is false on every row until something runs the

@@ -401,7 +401,7 @@ def test_refresh_returns_immediately_instead_of_blocking_on_the_recompute(
 
     monkeypatch.setattr("data.gds.run_all", slow_gds)
     monkeypatch.setattr("data.graph.publish_graph", lambda: started.__setitem__("graph", True) or True)
-    monkeypatch.setattr("data.embeddings.index_job.run_all",
+    monkeypatch.setattr(jobs_router, "_reindex_with_progress",
                         lambda: started.__setitem__("reindex", True) or {"docs": 1})
     monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
     monkeypatch.setattr(jobs_router, "_refresh_running", False)
@@ -434,7 +434,7 @@ def test_refresh_refuses_to_overlap_a_run_already_in_flight(client, officers, mo
     gate = threading.Event()
     monkeypatch.setattr("data.gds.run_all", lambda: gate.wait(timeout=2) and {})
     monkeypatch.setattr("data.graph.publish_graph", lambda: True)
-    monkeypatch.setattr("data.embeddings.index_job.run_all", lambda: {})
+    monkeypatch.setattr(jobs_router, "_reindex_with_progress", lambda: {})
     monkeypatch.setenv("VERITAS_JOB_TOKEN", "test-token")
     monkeypatch.setattr(jobs_router, "_refresh_running", False)
 
