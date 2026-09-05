@@ -39,6 +39,13 @@ log = logging.getLogger(__name__)
 
 _LOCK = threading.Lock()
 _DONE = False
+# The last fetch failure, verbatim, for /health. A fetch that fails is swallowed by
+# design (a query must not die because weights are missing) — which made it invisible:
+# /health said "configured, not yet fetched" whether the fetch had never been tried,
+# was in flight, or had failed eight times for a nameable reason. Naming it is the
+# difference between a five-minute diagnosis and a redeploy to add a print.
+_LAST_ERROR: str | None = None
+_ATTEMPTS = 0
 
 
 class _ChunkStream(io.RawIOBase):
@@ -89,6 +96,8 @@ def status() -> str:
         return "fetched from Catalyst File Store this cold start"
     if not os.getenv("VERITAS_MODELS_FOLDER_ID"):
         return "not configured (VERITAS_MODELS_FOLDER_ID unset — local dev, or weights baked into the image)"
+    if _LAST_ERROR:
+        return f"FETCH FAILED after {_ATTEMPTS} attempt(s): {_LAST_ERROR}"
     return "configured, not yet fetched"
 
 
@@ -99,7 +108,7 @@ def ensure_models() -> bool:
     once from the API's startup hook so the download happens while the container
     warms rather than on an officer's first query.
     """
-    global _DONE
+    global _DONE, _LAST_ERROR, _ATTEMPTS
     if _DONE:
         return True
     with _LOCK:
@@ -130,9 +139,12 @@ def ensure_models() -> bool:
                 tf.extractall(parent)          # the tar's top-level dir is models/
             open(marker, "w").close()
             _DONE = True
+            _LAST_ERROR = None
             log.info("model weights ready at %s", target)
             return True
-        except Exception:
+        except Exception as e:                         # noqa: BLE001
+            _ATTEMPTS += 1
+            _LAST_ERROR = f"{type(e).__name__}: {e}"[:300]
             log.exception("model fetch from File Store failed — model-backed "
                           "features will report unavailable")
             return False

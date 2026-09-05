@@ -56,6 +56,9 @@ self_client.json
 
 .playwright-mcp/
 
+# Throwaway UI direction demos (local scratch, never committed)
+ui-demos/
+
 # Docs stay local only — never committed. Only the root README.md is tracked.
 docs/
 *.md

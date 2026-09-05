@@ -59,6 +59,15 @@ class _NoEvidenceInContext(Exception):
 # that says "FIR" but names no number is not a record lookup, and used to become one.
 FIR_NUMBER_RE = intents.FIR_NUMBER_RE
 
+# A question that genuinely asks for a NUMBER, as opposed to one that asks for cases
+# and happens to route through the counting branch. The difference matters only in
+# the unfiltered case: "how many cases are there?" wants the corpus total and should
+# get it; "find cases involving chain snatching near a bus stand" wants the cases and
+# must not be handed that same total dressed up as an answer (see CRIME_SEARCH).
+_COUNTING_QUESTION = re.compile(
+    r"\bhow\s+many\b|\bhow\s+much\b|\bcount\s+(?:of|the)\b|\bnumber\s+of\b"
+    r"|\btotal\s+(?:number|cases|firs)\b|\bcase\s+count\b", re.I)
+
 TOG_CONFIDENCE_FLOOR = 0.55      # below this, HippoRAG alone isn't trusted
 _RELATIONAL_INTENTS = {"PERSON_NETWORK", "FINANCIAL", "ALIAS_CHECK"}
 
@@ -751,58 +760,73 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         ) if x]
         scope_desc = (" · ".join(applied) if applied
                       else "of every kind, in every district")
-        # The id has to distinguish two different searches, because it is what a board
-        # pin, a citation click and an explanation all address. It used to carry only
-        # crime type and district, so "cases from PS 2201" and "cases filed in June
-        # 2026" both landed on `crime_count:any:any` — two unrelated counts under one
-        # identity.
-        count_id = "crime_count:" + ":".join(
-            (ct or "any", district_name or "any",
-             *(p for p in (status, f"s{section}" if section else None,
-                           f"ps{station}" if station else None,
-                           f"{date_from:%Y%m%d}" if date_from else None) if p)))
-        out.append(EvidenceItem(
-            evidence_id=count_id,
-            source_type="FIR_RECORD", source_id="count",
-            source_query="COUNT over CaseMaster, scoped by role/station",
-            # "…{scope} are recorded within your access scope" printed the scope
-            # phrase twice when nothing was filtered on: "10000 cases within your
-            # access scope are recorded within your access scope."
-            content=f"{count} case(s) match: {scope_desc}. Counted within your "
-                    f"access scope.",
-            confidence=0.95, authoritative=True))
-        if section:
-            # A section filter selects the offence GROUP that carries the section, not
-            # only the offence type that names it — a real limit of the ER's own
-            # section-to-head mapping, and one the officer must not have to discover
-            # by noticing a burglary in a list of thefts.
-            note = sql_agent.section_scope_note(section)
-            if note:
-                out.append(EvidenceItem(
-                    evidence_id=f"crime_count:section:{section}",
-                    source_type="FIR_RECORD", source_id="scope",
-                    source_query="CrimeHeadActSection -> CrimeMajorHeadID",
-                    content=note, confidence=0.9, authoritative=True))
-        samples: list[dict] = []
-        if count:
-            samples = sql_agent.search_firs(role, ps, limit=5, **filters)
-            state.sql_query_results += samples
-            out += [EvidenceItem(
-                evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
-                source_id=r["fir_id"], source_query="SELECT ... matching the count above",
-                content=_fir_content(r), confidence=0.9) for r in samples]
-        # Recorded so a follow-up ("only these?", "same thing for Mysuru") can read
-        # a real fact instead of the interpreter re-guessing — see
-        # semantic_interpreter._AMBIGUOUS_MORE_RE / _REPEAT_CUE_RE.
-        state.result_context = {
-            "operation": "CRIME_SEARCH", "total_matched": count, "shown": len(samples),
-            "is_sample": count > len(samples), "shown_ids": [str(r["fir_id"]) for r in samples],
-            "constraints": {"crime_type": ct, "district": district_name,
-                            "case_status": status, "section": section,
-                            "ps_code": station},
-        }
-        _trace(state, "SQL Agent (crime count)",
-               f"{count} matching case(s) — {scope_desc}", t0)
+        # A description this branch cannot express as a filter must not be answered
+        # with a count of the whole corpus. "Find cases involving chain snatching
+        # near a bus stand" understood no crime type, district, status, section,
+        # station or date — and answered "2500 cases match: of every kind, in every
+        # district", cited and confident, followed by five arbitrary FIRs (found live
+        # 2026-09-06). The words the officer typed carry real meaning; they are just
+        # narrative meaning, which is what the semantic retriever below exists for.
+        # A genuine counting question ("how many …", "total") still wants the number,
+        # even unfiltered — that IS what was asked.
+        wants_count = bool(_COUNTING_QUESTION.search(q))
+        if not applied and not wants_count:
+            _trace(state, "SQL Agent (crime count)",
+                   "no expressible filter in the question — deferring to semantic "
+                   "retrieval rather than counting the whole corpus", t0)
+        else:
+            # The id has to distinguish two different searches, because it is what a board
+            # pin, a citation click and an explanation all address. It used to carry only
+            # crime type and district, so "cases from PS 2201" and "cases filed in June
+            # 2026" both landed on `crime_count:any:any` — two unrelated counts under one
+            # identity.
+            count_id = "crime_count:" + ":".join(
+                (ct or "any", district_name or "any",
+                 *(p for p in (status, f"s{section}" if section else None,
+                               f"ps{station}" if station else None,
+                               f"{date_from:%Y%m%d}" if date_from else None) if p)))
+            out.append(EvidenceItem(
+                evidence_id=count_id,
+                source_type="FIR_RECORD", source_id="count",
+                source_query="COUNT over CaseMaster, scoped by role/station",
+                # "…{scope} are recorded within your access scope" printed the scope
+                # phrase twice when nothing was filtered on: "10000 cases within your
+                # access scope are recorded within your access scope."
+                content=f"{count} case(s) match: {scope_desc}. Counted within your "
+                        f"access scope.",
+                confidence=0.95, authoritative=True))
+            if section:
+                # A section filter selects the offence GROUP that carries the section, not
+                # only the offence type that names it — a real limit of the ER's own
+                # section-to-head mapping, and one the officer must not have to discover
+                # by noticing a burglary in a list of thefts.
+                note = sql_agent.section_scope_note(section)
+                if note:
+                    out.append(EvidenceItem(
+                        evidence_id=f"crime_count:section:{section}",
+                        source_type="FIR_RECORD", source_id="scope",
+                        source_query="CrimeHeadActSection -> CrimeMajorHeadID",
+                        content=note, confidence=0.9, authoritative=True))
+            samples: list[dict] = []
+            if count:
+                samples = sql_agent.search_firs(role, ps, limit=5, **filters)
+                state.sql_query_results += samples
+                out += [EvidenceItem(
+                    evidence_id=f"fir:{r['fir_id']}", source_type="FIR_RECORD",
+                    source_id=r["fir_id"], source_query="SELECT ... matching the count above",
+                    content=_fir_content(r), confidence=0.9) for r in samples]
+            # Recorded so a follow-up ("only these?", "same thing for Mysuru") can read
+            # a real fact instead of the interpreter re-guessing — see
+            # semantic_interpreter._AMBIGUOUS_MORE_RE / _REPEAT_CUE_RE.
+            state.result_context = {
+                "operation": "CRIME_SEARCH", "total_matched": count, "shown": len(samples),
+                "is_sample": count > len(samples), "shown_ids": [str(r["fir_id"]) for r in samples],
+                "constraints": {"crime_type": ct, "district": district_name,
+                                "case_status": status, "section": section,
+                                "ps_code": station},
+            }
+            _trace(state, "SQL Agent (crime count)",
+                   f"{count} matching case(s) — {scope_desc}", t0)
 
     elif intent == "OFFENDER_RANKING":
         _handle_offender_ranking(state, out, role, ps, t0)
@@ -827,6 +851,28 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         if dc:
             polys, ev = prediction_agent.hotspots(dc)
             state.prediction_results["detect_hotspots"] = polys
+            # DBSCAN(eps=500m, min_samples=10) finding nothing is a RESULT — the
+            # district's incidents are dispersed, not clustered — and it is one an
+            # officer needs told. Without this the branch contributed no evidence at
+            # all and the turn fell through to the unscoped semantic search at the
+            # bottom of _run_specialists, which answered "show me hotspots in Kolar"
+            # with five ordinary Kolar FIRs formatted exactly like a finding (found
+            # live 2026-09-06). A checked absence, stated, is the whole point of the
+            # CRAG evaluator; silently substituting a different answer is its opposite.
+            if not polys:
+                from data.districts import canonical_name as _cn
+                ev = [EvidenceItem(
+                    evidence_id=f"hotspot:{dc}:none",
+                    source_type="GEOSPATIAL_ANALYSIS",
+                    source_id=dc,
+                    source_query="KDE (Scott) + DBSCAN(eps=500m, min_samples=10)",
+                    content=(f"No statistically significant crime cluster was found in "
+                             f"{_cn(dc) or dc} over the last two years — the recorded "
+                             f"incidents there are dispersed rather than concentrated. "
+                             f"This is a checked absence, not a failed search."),
+                    confidence=0.7,
+                    confidence_kind="model_estimate",
+                )]
             out += ev
             # the incident scatter under the polygons — a hull with no points beneath
             # it is an assertion, not a hotspot

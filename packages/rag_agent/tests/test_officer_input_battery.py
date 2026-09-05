@@ -218,9 +218,22 @@ def test_a_named_month_or_year_becomes_a_half_open_window():
         date(2025, 12, 1), date(2026, 1, 1))
     assert date_window_from_query("how many cases in 2024") == (
         date(2024, 1, 1), date(2025, 1, 1))
-    # Relative windows belong to the model path, which owns the clock. Two readings of
-    # "last year" is how two halves of one answer describe different windows.
-    assert date_window_from_query("cases from last year") == (None, None)
+    # Relative windows are read here too, deterministically. They used to be left to
+    # the model path on the reasoning that two readings of "last year" is worse than
+    # none — but with QuickML unavailable (a state the architecture is built to
+    # survive) that meant "cases filed in the last 30 days" silently answered over the
+    # WHOLE corpus, which is the failure this system exists to prevent. Precedence
+    # answers the two-readings worry: the orchestrator reads state.constraints first
+    # and only falls back here, so the model's reading still wins when it has one.
+    from datetime import timedelta
+    start, end = date_window_from_query("cases from last year")
+    assert end is None and start == date.today() - timedelta(days=365)
+    assert date_window_from_query("cases in the last 30 days") == (
+        date.today() - timedelta(days=30), None)
+    assert date_window_from_query("cases over the past six months") == (
+        date.today() - timedelta(days=180), None)
+    # No relative phrase, no window — an ordinary search must stay unfiltered.
+    assert date_window_from_query("show me theft cases in Mysuru") == (None, None)
 
 
 # --------------------------------------------------------------------------- #

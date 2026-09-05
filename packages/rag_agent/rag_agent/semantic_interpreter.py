@@ -9,7 +9,7 @@ The 30 current intents become the values `operation` is allowed to take —
 an implementation compatibility layer, not something removed.
 """
 import re
-from datetime import date
+from datetime import date, timedelta
 from typing import Any, Callable, Literal, Optional
 
 from data import SessionFocus
@@ -721,8 +721,49 @@ def crime_type_from_query(query: str) -> Optional[str]:
     it without a circular import — orchestrator already imports this module."""
     from data.generator.refdata import crime_type_names
     q = (query or "").lower()
-    matches = [ct for ct in crime_type_names() if ct.lower() in q]
-    return max(matches, key=len) if matches else None
+    # Longest MATCHED TEXT wins, across both the canonical names and the everyday
+    # synonyms below — not canonical-first. "List vehicle theft cases" matched the
+    # bare canonical "Theft" and answered about ordinary theft; the longer phrase the
+    # officer actually typed says Motor Vehicle Theft. Symmetrically, "theft cases
+    # involving threats" must stay Theft rather than being pulled to Criminal
+    # Intimidation by the shorter "threats", which is why this is a length contest
+    # and not a precedence order.
+    best: Optional[tuple[int, str]] = None
+    for ct in crime_type_names():
+        if ct.lower() in q:
+            best = max(best or (0, ""), (len(ct), ct))
+    for pattern, canonical in _CRIME_SYNONYMS:
+        m = pattern.search(q)
+        if m:
+            best = max(best or (0, ""), (len(m.group(0)), canonical))
+    if best:
+        return best[1]
+    return None
+
+
+# The canonical name is the ER's spelling, not the word an officer uses. Nobody types
+# "House Burglary" or "Assault on Woman"; they type "burglary" and "molestation", and
+# a literal substring match found neither — so "How many burglary cases in Belagavi?"
+# silently dropped the offence and answered with every case in the district (found
+# live 2026-09-06). Everyday equivalents only: each entry is a word that means exactly
+# one canonical type, never a broader category that would quietly narrow the question.
+_CRIME_SYNONYMS: tuple[tuple[re.Pattern, str], ...] = tuple(
+    (re.compile(p, re.I), v) for p, v in (
+        (r"\bburglar(?:y|ies)\b|\bhouse ?break(?:ing|-in)?\b|\bbreak-?ins?\b", "House Burglary"),
+        (r"\bvehicle theft\b|\bbike theft\b|\bcar theft\b|\bauto theft\b", "Motor Vehicle Theft"),
+        (r"\bchain snatch\w*\b|\bsnatching\b|\bmugging\b", "Robbery"),
+        (r"\bmolestation\b|\boutraging (?:the )?modesty\b|\beve.?teasing\b", "Assault on Woman"),
+        (r"\bcyber ?(?:fraud|crime|criminal)\w*\b|\bonline fraud\b|\bphishing\b", "Cyber Crime"),
+        (r"\bdrugs?\b|\bganja\b|\bndps\b|\bnarcotic\w*\b", "Narcotics"),
+        (r"\bfraud\b|\bcheat(?:ing|ed)?\b|\bswindl\w+\b", "Cheating"),
+        (r"\bkidnap\w*\b|\babduct\w*\b", "Kidnapping"),
+        (r"\bgrievous hurt\b|\bassault\b(?!\s+on\s+woman)|\bbeating\b", "Hurt"),
+        (r"\brash driving\b|\bdrunk driving\b|\bhit.and.run\b", "Rash Driving"),
+        (r"\bthreat(?:s|ened|ening)?\b|\bintimidat\w+\b", "Criminal Intimidation"),
+        (r"\bmisappropriat\w+\b|\bembezzl\w+\b|\bbreach of trust\b", "Criminal Breach of Trust"),
+        (r"\briot(?:s|ing)?\b|\bunlawful assembly\b|\bmob violence\b", "Riot"),
+        (r"\bextort\w+\b|\bblackmail\w*\b", "Extortion"),
+    ))
 
 
 # --- the qualifiers a case search is actually asked with ------------------------
@@ -765,6 +806,51 @@ _MONTH_YEAR_RE = re.compile(
     r"\b(" + "|".join(_MONTHS) + r")\s+(\d{4})\b", re.I)
 _YEAR_RE = re.compile(r"\b(?:in|during|of|for)\s+(20\d{2})\b", re.I)
 
+# "in the last 30 days", "over the past six months", "this week".
+#
+# These used to be left entirely to the model path, on the reasoning that a relative
+# window is read against a clock this module does not own and two readings of one
+# phrase is worse than none. The consequence was worse than the risk: with QuickML
+# unavailable — a state the whole architecture is built to survive (CLAUDE.md §5,
+# "the LLM makes them fluent; it never makes them true") — "show me cases filed in
+# the last 30 days" silently dropped the window and answered over the entire corpus.
+# A truth-bearing FILTER must not depend on the LLM being up. The two-readings worry
+# is answered by precedence instead: the orchestrator reads `state.constraints`
+# first and only falls back here, so the model's reading still wins when it has one.
+_RELATIVE_WINDOW_RE = re.compile(
+    r"\b(?:last|past|previous|recent)\s+"
+    r"(\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|twelve|"
+    r"couple\s+of|few)?\s*"
+    r"(day|days|week|weeks|month|months|quarter|quarters|year|years)\b"
+    r"|\b(?:this|current)\s+(week|month|quarter|year)\b", re.I)
+_WORD_NUMBERS = {"a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                 "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "twelve": 12,
+                 "couple of": 2, "few": 3}
+_UNIT_DAYS = {"day": 1, "week": 7, "month": 30, "quarter": 91, "year": 365}
+
+
+def _relative_window(query: str) -> tuple[Optional[date], Optional[date]]:
+    """(from, to) for a relative phrase, or (None, None). `to` is left open — a
+    window ending "now" must not exclude a case filed today."""
+    m = _RELATIVE_WINDOW_RE.search(query or "")
+    if not m:
+        return None, None
+    if m.group(3):                                   # "this week" / "this month" / …
+        unit, n = m.group(3).lower(), 1
+    else:
+        raw = (m.group(1) or "1").strip().lower()
+        n = _WORD_NUMBERS.get(raw, None)
+        if n is None:
+            try:
+                n = int(raw)
+            except ValueError:
+                n = 1
+        unit = m.group(2).lower().rstrip("s")
+    days = _UNIT_DAYS.get(unit)
+    if not days:
+        return None, None
+    return date.today() - timedelta(days=n * days), None
+
 
 def case_status_from_query(query: str) -> Optional[str]:
     """The CaseStatusMaster value a question turns on, if it names one."""
@@ -804,7 +890,7 @@ def date_window_from_query(query: str) -> tuple[Optional[date], Optional[date]]:
     if m:
         year = int(m.group(1))
         return date(year, 1, 1), date(year + 1, 1, 1)
-    return None, None
+    return _relative_window(q)
 
 
 def _interpret_deterministic(

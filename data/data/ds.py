@@ -178,6 +178,17 @@ def catalyst_app():
     return app
 
 
+def catalyst_app_or_none():
+    """The calling thread's bound SDK app, or None — never initializes one.
+
+    For handing a request thread's binding to a background thread (see
+    api.main's warm-up and jobs.refresh): `catalyst_app()` would happily mint a
+    bare, header-less app on a thread that has none, which is exactly the object
+    that must not be handed on.
+    """
+    return getattr(_ctx, "app", None)
+
+
 def _catalyst_app():
     return catalyst_app()
 

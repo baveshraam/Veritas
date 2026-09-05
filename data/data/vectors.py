@@ -237,9 +237,21 @@ def hybrid_search(query: str, collection: str | None = None, k: int = 5,
     if not mask.any():
         return []
 
-    dense = idx["matrix"][mask] @ embed_one(query)          # both sides L2-normalised
     lexical = _lexical_scores(query, idx["content"][mask], idx["idf"])
-    score = alpha * dense + (1 - alpha) * lexical
+    # The embedder is a model, and a model failing must degrade the answer, never
+    # delete it — the same rule llm.py already keeps for QuickML. Live (2026-09-06):
+    # the File Store weight fetch failed on a cold container and every hotspot,
+    # trend and search question 500'd with "Could not load model BAAI/bge-small-
+    # en-v1.5", because this one line had no floor under it. Lexical-only retrieval
+    # is worse at paraphrase and exactly as good at the identifiers investigators
+    # actually type, so it is a real answer, not a placebo.
+    try:
+        dense = idx["matrix"][mask] @ embed_one(query)      # both sides L2-normalised
+        score = alpha * dense + (1 - alpha) * lexical
+    except Exception:                                       # noqa: BLE001
+        log.warning("embedder unavailable — hybrid search degraded to lexical-only",
+                    exc_info=True)
+        score = lexical
 
     order = np.argsort(-score)[:k]
     sid, coll, content = idx["source_id"][mask], idx["collection"][mask], idx["content"][mask]

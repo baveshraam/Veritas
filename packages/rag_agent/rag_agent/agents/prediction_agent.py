@@ -15,6 +15,22 @@ from ..state import EvidenceItem
 HORIZON_DAYS = 30
 
 
+def _place(district_code: str) -> str:
+    """The district's NAME for anything an officer reads.
+
+    `district_code` is the join key ml_models works in ("KA05"); it is not a word
+    any officer uses, and it was being printed verbatim into the two most-demoed
+    evidence lines in the system ("a hotspot in KA05", "18 FIRs in KA05"). The
+    code stays the identity everywhere internal — evidence_id, source_id — so
+    nothing downstream that keys off it changes.
+    """
+    try:
+        from data.districts import canonical_name
+        return canonical_name(district_code) or district_code
+    except Exception:                                    # noqa: BLE001
+        return district_code
+
+
 def _ml():
     from ml_models import serving
     return serving
@@ -30,7 +46,7 @@ def hotspots(district_code: str) -> tuple[object, list[EvidenceItem]]:
             source_type="GEOSPATIAL_ANALYSIS",
             source_id=f"{district_code}:{i}",
             source_query="KDE (Scott) + DBSCAN(eps=500m, min_samples=10)",
-            content=(f"The model identifies a hotspot in {district_code} containing "
+            content=(f"The model identifies a hotspot in {_place(district_code)} containing "
                      f"{p.crime_count} incidents (relative density {p.intensity:.2f})."),
             # Relative KDE density of THIS cluster — a real per-cluster measurement,
             # not a placeholder weight, so it keeps the default "support" kind.
@@ -53,7 +69,7 @@ def forecast(district_code: str, horizon_days: int = HORIZON_DAYS):
         source_id=district_code,
         source_query=f"Prophet + MinT reconciliation, horizon={horizon_days}d",
         content=(f"The model forecasts approximately {total:.0f} FIRs in "
-                 f"{district_code} over the next {horizon_days} days "
+                 f"{_place(district_code)} over the next {horizon_days} days "
                  f"({'MinT-reconciled' if fc.reconciled else 'unreconciled'}). "
                  f"This is a projection, not a record."),
         confidence=0.7 if fc.reconciled else 0.5,
@@ -288,5 +304,18 @@ def causal(factor: str, district_code: str):
         # are in `claim`. Same reasoning as risk/forecast below.
         confidence=confidence,
         confidence_kind="model_estimate",
+        # ALL THREE verdicts are authoritative, including — especially — the two
+        # negative ones. This number measures the STRENGTH OF THE CAUSAL CLAIM; the
+        # CRAG evaluator's RELEVANCE_FLOOR measures whether an item is about the
+        # question at all. Without this flag the two were conflated, so "not
+        # established" (0.3) and "failed refutation" (0.1) both fell under the floor,
+        # the batch scored as context-only, and the entire causal layer answered
+        # "I could not find this in the available records" to every question it was
+        # built for (found live 2026-09-06 — every phrasing of the §9 socio-economic
+        # question refused). A rigorously-established absence of effect IS the
+        # finding; reporting it as a retrieval failure states something weaker AND
+        # less honest than the analysis actually supports. Exactly the distinction
+        # the "cannot estimate" branch above already makes for the same reason.
+        authoritative=True,
     )]
     return est, ev

@@ -673,10 +673,25 @@ _EVIDENCE_FOR = re.compile(
     r"|\bshow\s+(?:me\s+)?(?:the\s+)?(?:evidence|sources?|citations?|"
     r"supporting\s+records?|source\s+records?|underlying\s+records?|"
     r"records?\s+behind\s+(?:this|that|it))\b"
-    # "which record / file / case / FIR says this"
+    # "which record / file / case / FIR says this" — TWO verb sets, not one. The
+    # meta verbs (say/state/support/back) are unambiguous: "which record says this"
+    # is only ever a provenance question. The ordinary ones (is/are/did/do/comes/
+    # shows/used/read/look) are the verbs every SEARCH question uses too, so they
+    # only count when what follows is anaphoric — pointing back at the answer on
+    # screen. Found live (2026-09-06): "Which cases are pending in my station?"
+    # matched the old single set on "cases … are" and came back "there is nothing
+    # earlier in this session to explain" — a plain backlog search hijacked into a
+    # provenance meta-turn.
     r"|\bwhich\s+(?:record|records|file|files|case|cases|firs?|document|documents)\b"
-    r"[^?.]{0,30}\b(?:say|says|said|state|states|show|shows|support|supports|"
-    r"come|comes|is|are|did|do|used|read|look)\b"
+    r"[^?.]{0,30}\b(?:say|says|said|state|states|support|supports|backs?)\b"
+    # The anaphor can sit on either side of the verb — "which record does THIS come
+    # from" and "which record is THIS based on" are the same question.
+    r"|\bwhich\s+(?:record|records|file|files|case|cases|firs?|document|documents)\b"
+    r"[^?.]{0,30}\b(?:show|shows|is|are|was|were|did|do|does|comes?|used|read|look)\s+"
+    r"(?:this|that|it|these|those|you|your)\b"
+    r"|\bwhich\s+(?:record|records|file|files|case|cases|firs?|document|documents)\b"
+    r"[^?.]{0,30}\b(?:this|that|it|these|those)\s+"
+    r"(?:show|shows|is|are|was|were|did|do|comes?|came|used|read|look)\b"
     r"|\bwhich\s+records?\s+did\s+you\b"
     r"|\bwhat\s+records?\s+did\s+you\b"
     r"|\bhow\s+many\s+(?:records?|cases?)\s+(?:is\s+this\s+based\s+on|support|back)\b"
@@ -921,7 +936,17 @@ def community_id_from_query(query: str) -> Optional[int]:
 
 _WORKLOAD_SHAPE = re.compile(
     r"\bstation\s+workload\b|\bworkload\s+by\s+station\b|\bfalling\s+behind\b"
-    r"|\bstalled\s+cases?\b|\bcases?\s+(?:going|gone)\s+cold\b|\bbacklog\b"
+    r"|\bstalled\s+cases?\b|\bbacklog\b"
+    # "cases HAVE gone cold" / "cases that have gone cold": the auxiliary sits
+    # between the noun and the participle in the way this is actually said, and the
+    # old adjacent-only form matched none of them — "Which cases have gone cold?"
+    # fell through to CRIME_SEARCH and answered "2500 cases match: of every kind,
+    # in every district" (found live 2026-09-06).
+    r"|\bcases?\s+(?:\w+\s+){0,2}(?:going|gone)\s+cold\b"
+    # A station's caseload IS its workload. The word was simply absent, so
+    # "What is my station's caseload?" scored FORECAST and answered with a
+    # 30-day projection for the district.
+    r"|\bcase.?load\b"
     r"|\buntouched\s+cases?\b|\bwhich\s+stations?\s+need", re.I)
 
 # "Who else should know about this?" — checked as a shape rather than added to

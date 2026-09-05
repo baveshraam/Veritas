@@ -51,7 +51,17 @@ async def _catalyst_context(request: Request, call_next):
         _warm_kicked = True
         import threading
 
+        # The SDK app is THREAD-LOCAL (ds._ctx). Capture the binding this request
+        # just made, on this request's own thread, and re-pin it inside the warm
+        # thread — the same handoff /jobs/refresh already does. Without it the warm
+        # thread falls through to a bare `zcatalyst_sdk.initialize()`, which has no
+        # headers in AppSail, so the File Store model fetch failed silently on every
+        # cold start and every embedding-backed question 500'd (2026-09-06).
+        warm_app = ds.catalyst_app_or_none()
+
         def _warm() -> None:
+            if warm_app is not None:
+                ds.bind_app(warm_app)
             # Mirror first (the Data Store reads every endpoint needs), models second.
             # Both are idempotent and both block their lazy loaders while running, so
             # a query that beats the warm-up waits instead of failing.
