@@ -742,6 +742,15 @@ def _run_specialists(state: InvestigationState, widen: bool) -> list[EvidenceIte
         ct = state.constraints.get("crime_type") or semantic_interpreter.crime_type_from_query(
             state.original_query or "")
         district_name = state.constraints.get("district") or state.active_entities.active_location
+        if district_name:
+            # Say it the way the records say it. The filter canonicalises anyway
+            # (sql_agent._filters), so an un-canonicalised caption only means the
+            # count reads "in Bangalore" over a list of cases that all say
+            # "Bengaluru Urban" — the officer's own word, disagreeing with every
+            # record under it.
+            from data.districts import canonical_code, canonical_name
+            _code = canonical_code(district_name)
+            district_name = canonical_name(_code) or district_name if _code else district_name
         # date_before/date_after: a relative-time constraint the model can propose
         # when a query reads as a corrected/narrowed repeat of a previous search
         # ("same thing but earlier") — see semantic_interpreter._interpret_llm's

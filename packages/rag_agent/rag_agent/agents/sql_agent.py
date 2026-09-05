@@ -137,8 +137,19 @@ def _filters(crime_type: Optional[str], district: Optional[str],
         clauses.append('AND "CrimeSubHead"."CrimeHeadName" LIKE :ct')
         params["ct"] = f"%{crime_type}%"
     if district:
+        # Canonicalised through data.districts, never matched as raw text. Karnataka
+        # renamed most of its districts and both spellings are in daily use — an
+        # officer types "Bangalore", "Belgaum", "Gulbarga"; the ER holds "Bengaluru
+        # Urban", "Belagavi", "Kalaburagi". A LIKE against the typed string matches
+        # none of them and the answer is a confident "0 cases match". This is not a
+        # Kannada-only problem, but Kannada is where it is unavoidable: NLLB
+        # translates ಮೈಸೂರು to "Mysore", so every Kannada district question answered
+        # zero (found live 2026-09-06). districts.py already owns every alias — it
+        # simply was not being asked.
+        from data.districts import canonical_code, canonical_name
+        code = canonical_code(district)
         clauses.append('AND "District"."DistrictName" LIKE :d')
-        params["d"] = f"%{district}%"
+        params["d"] = f"%{(canonical_name(code) if code else district)}%"
     if date_from:
         clauses.append('AND "CaseMaster"."CrimeRegisteredDate" >= :d0')
         params["d0"] = date_from

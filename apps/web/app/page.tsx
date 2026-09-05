@@ -52,6 +52,20 @@ export default function Console() {
   // replaces both the id and the turns it resolves against.
   const [sessionId, setSessionId] = useState(() => crypto.randomUUID());
 
+  /** Start over. The current conversation is not lost — every turn was already
+   *  written to vx_conversation_turn as it happened, so it is in Previous chats
+   *  the moment this runs. Everything downstream of the session is cleared too:
+   *  a stale focus chip, a selected evidence card and an open workspace tab all
+   *  belong to a conversation that is no longer on screen. */
+  const newChat = useCallback(() => {
+    setSessionId(crypto.randomUUID());
+    setTurns([]);
+    setActiveEvidence(null);
+    setInspecting(false);
+    setCopilotFir(null);
+    setView("overview");
+  }, []);
+
   const loadHistorySession = useCallback((loaded: Turn[], sid: string) => {
     setSessionId(sid);
     setTurns(loaded);
@@ -247,6 +261,7 @@ export default function Console() {
           activeEvidence={activeEvidence}
           onInspect={() => openInspector(activeEvidence ?? evidence[0]?.evidence_id ?? "")}
           onLoadSession={loadHistorySession}
+          onNewChat={newChat}
         />
 
         <Workspace

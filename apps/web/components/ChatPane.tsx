@@ -12,11 +12,71 @@ import { readNetwork } from "@/lib/network";
 import type { SessionFocusView, Turn } from "@/lib/types";
 import VoiceRecorder from "./VoiceRecorder";
 
-const OPENERS: { label: string; q: string }[] = [
-  { label: "Interrogation prep", q: "What should I ask Usha Naika?" },
-  { label: "Criminal network", q: "Who are the associates of Usha Naika?" },
-  { label: "Geography", q: "Show me crime hotspots" },
-  { label: "Forecast", q: "What are the crime trends?" },
+/* ============================================================================
+ * START HERE — twenty openers, one per capability
+ *
+ * Four rules, each of which the previous four-item list broke:
+ *
+ *  1. ONE CAPABILITY EACH. Not four phrasings of "show me cases". Each opener
+ *     below reaches a different branch of the engine — a different model, a
+ *     different table, a different published method — so the list is a map of
+ *     what this platform does, not a sampler of one thing it does.
+ *  2. EVERY ONE ANSWERS. Each string here was run against the engine and
+ *     produces a cited answer from a cold session. An opener whose first click
+ *     refuses teaches the officer the system is broken, and they are right to
+ *     conclude that. If a capability cannot be started cold — a person's
+ *     priors, their associates, their money trail — it belongs in the
+ *     follow-ups or in CASE_OPENERS, not here.
+ *  3. NO NAMES. An opener naming a specific accused reads as a system that
+ *     already has a suspect in mind, which is precisely the posture a police
+ *     tool must not adopt on its own first screen.
+ *  4. NO SUBJECT REQUIRED. Everything here works on the whole record layer,
+ *     at whatever scope the officer's rank allows.
+ * ========================================================================== */
+const OPENERS: { group: string; items: { label: string; q: string }[] }[] = [
+  {
+    group: "Where crime is, and where it is going",
+    items: [
+      { label: "Crime hotspots", q: "Where are the crime hotspots right now?" },
+      { label: "Volume forecast", q: "Forecast case volume for the next 30 days" },
+      { label: "District ranking", q: "Which districts have the highest crime rates?" },
+      { label: "Offence mix", q: "What are the most common offences in the state?" },
+      { label: "Case outcomes", q: "How are cases split by status?" },
+    ],
+  },
+  {
+    // These three are the identity-resolution layer made visible: the ER has no
+    // person, so none of them is answerable from the raw records at all.
+    group: "Who, reconstructed across cases",
+    items: [
+      { label: "Repeat offenders", q: "Who are the most prolific repeat offenders?" },
+      { label: "Offenders by district", q: "Top offenders in Mysuru" },
+      { label: "Criminal network", q: "Who is in community 1?" },
+    ],
+  },
+  {
+    group: "The analytical layers",
+    items: [
+      { label: "District profile", q: "Give me a district profile of Kolar" },
+      { label: "Causal analysis", q: "Is there a link between poverty and crime rates?" },
+      { label: "Station workload", q: "Which stations need help with their backlog?" },
+      { label: "Stalled cases", q: "Which cases have gone cold?" },
+      { label: "Financial watchlist", q: "Show me the AML watchlist" },
+    ],
+  },
+  {
+    group: "The record layer, searched the way it is searched",
+    items: [
+      { label: "Filtered search", q: "List theft cases in Mysuru that are still under investigation" },
+      { label: "Search by section", q: "Show me cases under section 379" },
+      { label: "Search by method", q: "Find cases involving chain snatching near a bus stand" },
+      { label: "Recent filings", q: "Show me cases filed in the last 6 months" },
+      { label: "Search by station", q: "Show me cases from police station 2304" },
+      { label: "Search by outcome", q: "Show me murder cases that ended in acquittal" },
+      // Same engine, same records, asked in the other official language.
+      { label: "Ask in Kannada", q: "ಮೈಸೂರಿನಲ್ಲಿ ಕಳ್ಳತನ ಪ್ರಕರಣಗಳನ್ನು ತೋರಿಸಿ" },
+    ],
+  },
 ];
 
 /** The case-scoped conversational operations (intents.NEEDS_CASE). Offered only
@@ -57,6 +117,7 @@ function followUps(focus: SessionFocusView | undefined, t: Turn): string[] {
 
 export default function ChatPane({
   turns, busy, focus, onSend, onSendAudio, onCite, activeEvidence, onInspect, onLoadSession,
+  onNewChat,
 }: {
   turns: Turn[];
   busy: boolean;
@@ -67,6 +128,7 @@ export default function ChatPane({
   activeEvidence: string | null;
   onInspect: () => void;
   onLoadSession: (turns: Turn[], sessionId: string) => void;
+  onNewChat: () => void;
 }) {
   const t = useT();
   const lang = useLang();
@@ -118,6 +180,18 @@ export default function ChatPane({
           {turns.length > 0 && (
             <span className="meta">{turns.length} {t(turns.length === 1 ? "question" : "questions")}</span>
           )}
+          {/* There was a way back into a previous conversation and no way to start
+              a fresh one — so the only route to an empty session was reloading the
+              page, which also drops the officer back through the login gate. It
+              sits next to Previous chats because that is where someone looks for
+              it, and only appears once there is something to clear. */}
+          {turns.length > 0 && (
+            <button className="btn btn-sm" onClick={onNewChat}
+              title={t("Start a new conversation — the current one stays in Previous chats")}>
+              <span aria-hidden style={{ fontSize: 13, lineHeight: 1 }}>＋</span>
+              {t("New chat")}
+            </button>
+          )}
           <SessionHistory onLoad={onLoadSession} />
         </div>
       </div>
@@ -129,13 +203,35 @@ export default function ChatPane({
             <p>
               {t("Answers are drawn from the case records you are cleared to see, and every claim carries the record it came from. Where the records don't support a claim, Veritas says so rather than guessing.")}
             </p>
-            <div className="label" style={{ marginBottom: 7 }}>{t("Start here")}</div>
-            {(focus?.case ? CASE_OPENERS : OPENERS).map((o) => (
-              <button key={o.q} className="opening-q" onClick={() => send(o.q)}>
-                <b>{t(o.label)}</b>
-                {t(o.q)}
-              </button>
-            ))}
+            {focus?.case ? (
+              <>
+                <div className="label" style={{ marginBottom: 7 }}>{t("Start here")}</div>
+                {CASE_OPENERS.map((o) => (
+                  <button key={o.q} className="opening-q" onClick={() => send(o.q)}>
+                    <b>{t(o.label)}</b>
+                    {t(o.q)}
+                  </button>
+                ))}
+              </>
+            ) : (
+              /* Grouped, not a flat list of twenty. The groups ARE the answer to
+                 "what can this thing do" — four kinds of question, not twenty
+                 variations of one — and a heading every few rows is what keeps a
+                 long menu readable instead of turning it into a wall. */
+              OPENERS.map((g, i) => (
+                <div key={g.group} className="opening-group">
+                  <div className="label" style={{ marginBottom: 7 }}>
+                    {i === 0 ? `${t("Start here")} — ${t(g.group)}` : t(g.group)}
+                  </div>
+                  {g.items.map((o) => (
+                    <button key={o.q} className="opening-q" onClick={() => send(o.q)}>
+                      <b>{t(o.label)}</b>
+                      {t(o.q)}
+                    </button>
+                  ))}
+                </div>
+              ))
+            )}
           </div>
         )}
 

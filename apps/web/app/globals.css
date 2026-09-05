@@ -1174,8 +1174,8 @@ body {
      390px column and pushed Ask past the edge of the panel. */
   flex: 1 1 100%;
   order: -1;
-  display: flex; align-items: center; gap: 7px;
-  padding: 3px 4px 3px 8px;
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 6px 6px 10px;
   border: 1px solid var(--red-dim);
   border-radius: var(--r-sm);
   background: var(--red-dim);
@@ -1189,7 +1189,7 @@ body {
  * which is the failure a bare "Stop" button could not show. */
 .rec-dot {
   flex: 0 0 auto;
-  width: 8px; height: 8px; border-radius: 50%;
+  width: 10px; height: 10px; border-radius: 50%;
   background: var(--red);
   opacity: 0.45;
   transition: opacity 120ms linear;
@@ -1200,11 +1200,19 @@ body {
   50%      { transform: scale(1.35); }
 }
 
-.rec-wave { flex: 1 1 auto; min-width: 60px; height: 26px; }
+.rec-wave {
+  /* Taller and wider than it was (26px). Push-to-talk in Kannada is one of this
+     platform's two documented reasons for running its own models, and the live
+     level trace is the only thing on screen that says the microphone is actually
+     hearing something — at 26px it read as a decorative hairline. The drawing
+     buffer is sized from this box at device-pixel-ratio in VoiceRecorder.tsx, so
+     changing the height here is enough; nothing needs re-tuning in the canvas. */
+  flex: 1 1 auto; min-width: 90px; height: 44px;
+}
 .rec-time {
-  font-size: 11px; color: var(--t-3);
+  font-size: 12.5px; font-weight: 600; color: var(--t-2);
   font-variant-numeric: tabular-nums;
-  min-width: 30px; text-align: right;
+  min-width: 36px; text-align: right;
 }
 .rec-time.is-near { color: var(--red); font-weight: 600; }
 
@@ -1239,6 +1247,9 @@ body {
 .opening-q:hover { border-color: var(--pri-line); background: var(--n-3); color: var(--t-1); }
 .opening-q b { display: block; color: var(--t-4); font-family: var(--font-label);
   font-size: 9.5px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 2px; }
+/* Twenty openers grouped into four kinds of question. The rule between groups is
+   what makes a long menu scan as a menu rather than as a wall. */
+.opening-group + .opening-group { margin-top: 15px; padding-top: 13px; border-top: 1px solid var(--line); }
 
 /* ============================================================================
  * EVIDENCE COLUMN + INSPECTOR

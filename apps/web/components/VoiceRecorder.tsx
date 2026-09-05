@@ -131,20 +131,50 @@ export default function VoiceRecorder({
       const canvas = canvasRef.current;
       const ctx = canvas?.getContext("2d");
       if (canvas && ctx) {
+        // Size the drawing buffer to the element's ACTUAL rendered size, times the
+        // device pixel ratio. The canvas is `flex: 1 1 auto`, so CSS stretches it
+        // to the column width while the buffer stayed at the fixed 180x26 in the
+        // attributes — every bar was drawn into a small buffer and then scaled up,
+        // which is exactly why the trace read thin and soft. Recomputed per frame
+        // because the column is resizable and this is a couple of reads.
+        const dpr = window.devicePixelRatio || 1;
+        const cssW = canvas.clientWidth || 180;
+        const cssH = canvas.clientHeight || 44;
+        if (canvas.width !== Math.round(cssW * dpr) ||
+            canvas.height !== Math.round(cssH * dpr)) {
+          canvas.width = Math.round(cssW * dpr);
+          canvas.height = Math.round(cssH * dpr);
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
         analyser.getByteTimeDomainData(data);
-        const bars = 32;
+        // Fewer, fatter bars with rounded caps. 32 hairlines across a wide column
+        // read as noise; 22 rounded bars read as a voice.
+        const bars = 22;
         const step = Math.floor(data.length / bars);
-        const w = canvas.width / bars;
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        const slot = cssW / bars;
+        const barW = Math.max(3, slot - 3);
+        const mid = cssH / 2;
+        ctx.clearRect(0, 0, cssW, cssH);
+        ctx.fillStyle = barColor;
         let peak = 0;
         for (let i = 0; i < bars; i++) {
           const v = Math.abs(data[i * step] - 128) / 128;
           peak = Math.max(peak, v);
-          const h = Math.max(2, v * canvas.height * 0.85);
-          ctx.fillStyle = barColor;
-          ctx.globalAlpha = 0.35 + v * 0.65;
-          ctx.fillRect(i * w, (canvas.height - h) / 2, Math.max(1, w - 2), h);
+          // A floor of barW keeps a silent bar a visible dot rather than a hairline,
+          // so the trace never looks like it has stopped working.
+          const h = Math.max(barW, v * cssH * 0.92);
+          ctx.globalAlpha = 0.5 + v * 0.5;
+          const x = i * slot + (slot - barW) / 2;
+          if (typeof ctx.roundRect === "function") {
+            ctx.beginPath();
+            ctx.roundRect(x, mid - h / 2, barW, h, barW / 2);
+            ctx.fill();
+          } else {
+            ctx.fillRect(x, mid - h / 2, barW, h);
+          }
         }
+        ctx.globalAlpha = 1;
         setLevel(peak);
       }
       rafRef.current = requestAnimationFrame(loop);
@@ -189,7 +219,7 @@ export default function VoiceRecorder({
     return (
       <div className="rec" role="group" aria-label={t("Recording a question")}>
         <span className={`rec-dot${level > 0.06 ? " is-live" : ""}`} aria-hidden />
-        <canvas ref={canvasRef} width={180} height={26} className="rec-wave" />
+        <canvas ref={canvasRef} width={360} height={88} className="rec-wave" />
         <span className={`rec-time mono${near ? " is-near" : ""}`}>
           {mmss(seconds)}
         </span>
