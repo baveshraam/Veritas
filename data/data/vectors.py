@@ -63,7 +63,16 @@ def _embedder():
     from fastembed import TextEmbedding
     cache_dir = os.getenv("VERITAS_FASTEMBED_CACHE")
     kwargs = {"cache_dir": cache_dir} if cache_dir else {}
-    return TextEmbedding(model_name=EMBED_MODEL, **kwargs)
+    # `threads`: onnxruntime otherwise sizes its intra-op thread pool off the HOST's
+    # full CPU count, not the container's actual cgroup-limited allocation -- a
+    # well-known Docker/onnxruntime interaction. Live verification (2026-09-05): RSS
+    # jumped ~1000MB on the very first 512-document batch (438MB -> 1430MB) for a
+    # ~130MB ONNX model on short text, wildly disproportionate to the workload and
+    # consistent with an oversized thread pool each allocating its own scratch
+    # buffers, on a container documented as memory-constrained (whisper + NLLB +
+    # the Data Store mirror already resident, "2048MB = FLOOR not ceiling").
+    threads = int(os.getenv("VERITAS_FASTEMBED_THREADS", "1"))
+    return TextEmbedding(model_name=EMBED_MODEL, threads=threads, **kwargs)
 
 
 def embed(texts: list[str]) -> np.ndarray:
