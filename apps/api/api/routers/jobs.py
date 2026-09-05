@@ -318,7 +318,7 @@ async def refresh(sync: bool = False,
 
     def _work() -> None:
         if app is not None:
-            ds._sdk_app = app          # noqa: SLF001 — same pattern main.py's warm-up thread uses
+            ds.bind_app(app)
         _run_refresh()
 
     threading.Thread(target=_work, name="jobs-refresh", daemon=True).start()
@@ -381,7 +381,7 @@ async def regenerate_narratives(x_veritas_job_token: str | None = Header(default
 
     def _work() -> None:
         if app is not None:
-            ds._sdk_app = app          # noqa: SLF001 — same pattern as /jobs/refresh
+            ds.bind_app(app)
         _run_narrative_backfill()
 
     threading.Thread(target=_work, name="jobs-regenerate-narratives", daemon=True).start()
@@ -449,7 +449,7 @@ async def audit_verify(x_veritas_job_token: str | None = Header(default=None),
 
     def _work() -> None:
         if app is not None:
-            ds._sdk_app = app          # noqa: SLF001 — same pattern as /jobs/refresh
+            ds.bind_app(app)
         _run_audit_verify()
 
     threading.Thread(target=_work, name="jobs-audit-verify", daemon=True).start()

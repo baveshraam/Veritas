@@ -202,3 +202,92 @@ def test_mirror_hydration_is_lazy_per_table_not_the_whole_schema(monkeypatch, tm
 
     ds.query('SELECT "EmployeeID" FROM "Employee" WHERE "KGID" = \'K1\'')
     assert fetched == ["Employee"]                 # already hydrated: no second fetch
+
+
+# --- the Catalyst SDK app context is thread-local, not one shared global -----------
+#
+# Real live failure (2026-09-05): `_sdk_app` used to be one process-global, rebound by
+# ANY thread — including `main.py`'s middleware, which calls `bind_catalyst_request()`
+# on literally every incoming request, even a passive `GET /health` poll. `/jobs/refresh`
+# explicitly pins its own captured app at thread-start so a multi-minute background job
+# keeps a STABLE Catalyst identity for its whole run — but with one shared global, any
+# concurrent request arriving mid-job silently swapped that pin out from under it for the
+# rest of the run. Live evidence: `data.nlp.model_fetch.ensure_models()` (which every
+# `_embedder()` call runs through) hung indefinitely mid-fetch while holding its own lock,
+# blocking every other consumer of that lock (the NLLB/whisper warm-up thread included)
+# forever — consistent with its Catalyst File Store client losing a valid context
+# partway through a multi-chunk download because a concurrent `/health` request rebound
+# the one shared global first.
+
+def test_bind_app_is_thread_local_not_shared():
+    """A pin on one thread must be invisible to another thread's own context."""
+    import threading
+
+    results = {}
+    barrier = threading.Barrier(2)
+
+    def worker(name: str, app: str) -> None:
+        ds.bind_app(app)
+        barrier.wait(timeout=2)          # let both threads bind before either reads back
+        results[name] = ds.catalyst_app()
+
+    t1 = threading.Thread(target=worker, args=("t1", "app-one"))
+    t2 = threading.Thread(target=worker, args=("t2", "app-two"))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    assert results == {"t1": "app-one", "t2": "app-two"}, (
+        "each thread must see only its OWN binding — a shared global would let one "
+        "thread's bind leak into (or be overwritten by) the other's")
+
+
+def test_a_background_jobs_pin_survives_concurrent_foreground_rebinding():
+    """The exact live race: a background job pins its app, a concurrent 'request'
+    (a different thread) rebinds its OWN context in the meantime, and the job's pin
+    must be completely unaffected — and vice versa."""
+    import threading
+    import time
+
+    ds.bind_app("main-thread-original")
+
+    seen_by_job = []
+
+    def background_job() -> None:
+        ds.bind_app("job-pinned-app")
+        time.sleep(0.05)                 # the "foreground" rebind below happens meanwhile
+        seen_by_job.append(ds.catalyst_app())
+
+    t = threading.Thread(target=background_job)
+    t.start()
+    time.sleep(0.02)
+    ds.bind_app("foreground-rebound-app")   # simulates main.py's middleware on another request
+    t.join()
+
+    assert seen_by_job == ["job-pinned-app"], (
+        "a concurrent foreground rebind must not be visible inside the job's own thread")
+    assert ds.catalyst_app() == "foreground-rebound-app", (
+        "the foreground thread's own rebind must still take effect for ITSELF")
+
+
+def test_catalyst_app_falls_back_when_the_calling_thread_was_never_bound():
+    """A thread that never called bind_app/bind_catalyst_request (e.g. the warm-up
+    thread on its very first run) must still get a usable app via the bare fallback,
+    unaffected by any OTHER thread's binding."""
+    import threading
+
+    ds.bind_app("main-thread-app")           # bind the test's own (main) thread
+
+    seen = {}
+
+    def unbound_thread() -> None:
+        # No bind_app() call here at all -- must NOT see the main thread's binding.
+        seen["app_before_fallback"] = getattr(ds._ctx, "app", "NOT_SET")
+
+    t = threading.Thread(target=unbound_thread)
+    t.start()
+    t.join()
+
+    assert seen["app_before_fallback"] == "NOT_SET"
+    assert ds.catalyst_app() == "main-thread-app"    # the main thread's own binding, untouched

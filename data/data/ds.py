@@ -118,32 +118,64 @@ def unquote_identifiers(sql: str) -> str:
 # In AppSail the SDK's whole context — project id, key, domain, admin credential — arrives
 # as X-ZC-* HEADERS on each gateway request, not as env vars, so `initialize()` with no
 # request raises "Catalyst headers are empty". The API middleware calls
-# bind_catalyst_request() on every request; the resulting app object is kept module-global
-# so work that runs outside any request (the background model fetch, warm caches) can use
-# the most recent context.
-_sdk_app = None
+# bind_catalyst_request() on every request.
+#
+# This used to be one module-global (`_sdk_app`), rebindable by ANY thread. Live
+# verification (2026-09-05) found `/jobs/refresh`'s background thread — which explicitly
+# pins its own captured app at thread-start specifically so a multi-minute job keeps a
+# STABLE identity for its whole run — got that pin silently overwritten by `main.py`'s
+# `_catalyst_context` middleware, which calls `bind_catalyst_request()` on *every* incoming
+# request, including a passive `GET /health` poll, on the event-loop thread. A background
+# job and normal request traffic run concurrently (real OS threads, not serialized by the
+# GIL for I/O-bound SDK calls), so any request arriving mid-job could silently swap the
+# job's Catalyst context out from under it for the rest of its run — plausibly the actual
+# cause of `ensure_models()`'s multi-chunk File Store fetch (data.nlp.model_fetch) hanging
+# indefinitely while holding its own lock, which blocks every OTHER consumer of that lock
+# (the NLLB/whisper warm-up thread, and any later `_embedder()` call) forever too.
+#
+# So this is now thread-local: each OS thread gets its own slot, rebound only by requests
+# actually running ON that thread (the event-loop thread) or explicitly pinned by a
+# background thread via bind_app() — never touched by the other.
+_ctx = threading.local()
 
 
 def bind_catalyst_request(request) -> None:
-    """Capture the current request's Catalyst headers into an SDK app instance."""
-    global _sdk_app
+    """Capture the current request's Catalyst headers into an SDK app instance,
+    scoped to the CALLING thread only (see bind_app())."""
     if backend() != "catalyst":
         return
     try:
         import zcatalyst_sdk
-        _sdk_app = zcatalyst_sdk.initialize(req=request)
+        _ctx.app = zcatalyst_sdk.initialize(req=request)
     except Exception:                              # never let context capture kill a request
         pass
 
 
+def bind_app(app) -> None:
+    """Pin a specific SDK app instance to the CALLING thread's context.
+
+    Must be called FROM the thread that will use it — a `threading.Thread` target
+    function, not its caller. `/jobs/refresh` and friends capture the triggering
+    request's `catalyst_app()` on the request's own thread, then call this from
+    inside their background thread so a multi-minute job keeps a stable identity
+    for its whole run, immune to concurrent foreground requests rebinding THEIR
+    OWN (different) thread-local slot.
+    """
+    _ctx.app = app
+
+
 def catalyst_app():
-    """The SDK app for the current context. Public so model_fetch can share it."""
-    global _sdk_app
-    if _sdk_app is not None:
-        return _sdk_app
+    """The SDK app for the CALLING thread's context. Public so model_fetch can share
+    it. Falls back to a bare `initialize()` (no request) for a thread that was never
+    explicitly bound — e.g. the warm-up thread's own path — unaffected by this being
+    thread-local, since every thread starts with an empty slot regardless."""
+    app = getattr(_ctx, "app", None)
+    if app is not None:
+        return app
     import zcatalyst_sdk
-    _sdk_app = zcatalyst_sdk.initialize()          # functions-style runtime: thread-local set
-    return _sdk_app
+    app = zcatalyst_sdk.initialize()               # functions-style runtime: thread-local set
+    _ctx.app = app
+    return app
 
 
 def _catalyst_app():
