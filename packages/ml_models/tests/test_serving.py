@@ -169,6 +169,27 @@ def test_risk_scores_are_calibrated_not_a_raw_saturated_margin(dataset):
             "every calibrated score rounded to the same value — suspicious saturation")
 
 
+# ------------------------------------------------------------------------------ fairness
+
+def test_the_aequitas_audit_runs_against_both_real_models(dataset):
+    """Real live failure (2026-09-05): /jobs/refresh's fairness step raised
+    "ValueError: too many values to unpack (expected 2)" on its very first successful
+    end-to-end run in production — `run_fairness_audit` had never actually been
+    exercised by any test before, only by a fully mocked one (test_refresh_job.py).
+    Root cause: `_risk_model()` returns a 3-tuple (model, explainer, calibrated), and
+    the audit only unpacked 2. This drives the real pipeline end to end for both
+    models, the same way the live Cron job does."""
+    from ml_models.fairness.audit import run_fairness_audit
+
+    for model_name in ("score_risk", "predict_recidivism"):
+        report = run_fairness_audit(model_name)
+        assert report.model_name == model_name
+        assert isinstance(report.disparate_impact_flagged, bool)
+        # No caste/religion axis, ever (CLAUDE.md §6/§9) — only what's actually audited.
+        assert all(k.startswith("gender=") or k.startswith("district=")
+                  for k in report.metrics_by_subgroup)
+
+
 # ------------------------------------------------------------------------------- causal
 def test_the_causal_layer_reports_its_unmeasured_confounder(dataset):
     """The intellectually honest part, and the one a panel will look for. Police strength is

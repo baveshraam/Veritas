@@ -74,7 +74,7 @@ def run_fairness_audit(model_name: str) -> AequitasReport:
         raise ValueError(f"unknown model {model_name!r}")
 
     if model_name == "score_risk":
-        model, _ = _risk_model()
+        model, _, _ = _risk_model()
         X, y_true, rows, _cutoff = _training_set(None, _RISK_HOLDOUT_DAYS)
     else:
         model = _recidivism_model()
